@@ -1,6 +1,6 @@
 # Overlay Filesystem — Design Document
 
-> **Status**: In Review  
+> **Status**: Approved  
 > **Author**: Cloud-Native Distributed Systems Architect  
 > **Reviewers**: Cloud-Native Security SME, Cloud-Native Systems Engineer, Cloud-Native SRE  
 > **Last Updated**: 2026-03-22  
@@ -396,7 +396,6 @@ Error classification:
 | `fs.ErrPermission` (EACCES) | Return error immediately | Permission misconfiguration — must surface to operator |
 | I/O errors (EIO, ETIMEDOUT) | Return error immediately | Infrastructure failure — must not be masked |
 | Any other OS error | Return error immediately | Unknown failure — fail safe, don't degrade silently |
-```
 
 ### 2.6 Dependencies
 
@@ -754,10 +753,10 @@ Spans are only created if an active trace context exists in the calling goroutin
 |------------|-----------|----------|----------|
 | `OverlayHighRejectRate` | `blogflow_overlay_path_rejected_total` rate > 10/min for 5 min | 🟠 High | Investigate potential path traversal attack; review HTTP access logs |
 | `OverlayLayerUnavailable` | Layer initialization failure logged at ERROR level | 🔴 Critical | Check volume mounts; verify git-sync sidecar is running; check PVC status |
-| `OverlayHighLatency` | `blogflow_overlay_resolve_duration_seconds` p99 > 5 ms for 10 min | 🟡 Warning | Check disk I/O; verify OS page cache is warm; check for inode exhaustion |
+| `OverlayHighLatency` | `blogflow_overlay_resolve_duration_seconds` p99 > 5 ms for 10 min | 🟡 Warning | Check disk I/O; verify OS page cache is warm; check for inode exhaustion. **NFS note**: For NFS-backed volumes (EFS, GCP Filestore), adjust threshold to > 250 ms — cold stat() calls on NFS take 10–50ms per layer (see §4.2 NFS caveat). |
 | `OverlayDefaultsOnly` | `blogflow_overlay_layer_configured{layer="theme"} == 1 AND blogflow_overlay_layer_hit_total{layer="theme"}` rate = 0 for 30 min | 🟡 Warning | Theme layer may be missing or empty; verify volume mount. Only fires when a theme layer is explicitly configured. Zero-config deployments (no theme path) do not trigger this alert. |
 | `OverlayNegCacheHighWatermark` | `blogflow_overlay_negcache_size` > 75K entries for 5 min | 🟡 Warning | Investigate path diversity; consider increasing limit or adding HTTP rate limiting |
-| `OverlayContentLayerUnavailable` | `blogflow_overlay_layer_hit_total{layer="content"}` rate = 0 for 10 min | 🔴 Critical | Content layer missing — blog posts not serving; check git-sync, PVC status |
+| `OverlayContentLayerUnavailable` | `blogflow_overlay_layer_configured{layer="content"} == 1 AND blogflow_overlay_layer_hit_total{layer="content"}` rate = 0 for 10 min AND `blogflow_overlay_resolve_duration_seconds_count` rate > 0 | 🔴 Critical | Content layer missing while requests are being served — blog posts not serving; check git-sync, PVC status. Only fires when content layer is configured AND traffic is present. |
 | `OverlayLayerIOErrors` | `blogflow_overlay_layer_error_total` rate > 0 for 5 min | 🟠 High | Infrastructure errors on a layer; check disk, NFS, permissions |
 | `OverlayInvalidationRateAnomaly` | rate(blogflow_overlay_invalidation_total[5m]) > 1/sec sustained for 5 min | 🟡 Warning | Investigate fsnotify watcher or git-sync poll configuration; possible watcher runaway loop |
 
@@ -839,7 +838,7 @@ graph LR
 - [ ] Alert rules deployed and smoke-tested in staging
 - [ ] Dashboard deployed and functional in staging
 - [ ] Graceful degradation tested: all disk layers unavailable, only embed.FS serves
-- [ ] Open questions §9 Q2, Q3, Q4 resolved
+- [ ] All open questions §9 Q1–Q6 resolved
 - [ ] Volume mount health verified in K8s integration test
 - [ ] Hot-reload tested under concurrent read load (race detector enabled)
 - [ ] Negative cache size monitored; stays within configured bounds under load
