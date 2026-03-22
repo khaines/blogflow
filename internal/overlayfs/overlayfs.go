@@ -187,7 +187,7 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 			// S1: Check symlink escape for disk layers
 			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
 				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
-					f.Close()
+					_ = f.Close()
 					return nil, symlinkErr
 				}
 			}
@@ -262,12 +262,12 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 				// S1: Check symlink escape for disk layers
 				if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
 					if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
-						f.Close()
+						_ = f.Close()
 						return nil, symlinkErr
 					}
 				}
 				data, readErr := readAll(f)
-				f.Close()
+				_ = f.Close()
 				if readErr != nil {
 					return nil, readErr
 				}
@@ -377,12 +377,12 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 				// S1: Check symlink escape for disk layers
 				if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
 					if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
-						f.Close()
+						_ = f.Close()
 						return nil, symlinkErr
 					}
 				}
 				info, statErr := f.Stat()
-				f.Close()
+				_ = f.Close()
 				if statErr == nil {
 					return info, nil
 				}
@@ -407,7 +407,7 @@ func (o *OverlayFS) OpenFile(name string) (fs.File, fs.FileInfo, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, err
 	}
 	return f, info, nil
@@ -489,11 +489,11 @@ func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
 			// S1: Check symlink escape for disk layers
 			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
 				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
-					f.Close()
+					_ = f.Close()
 					return nil, symlinkErr
 				}
 			}
-			f.Close()
+			_ = f.Close()
 			layerName := fmt.Sprintf("layer-%d", i)
 			if i < len(names) {
 				layerName = names[i]
@@ -560,8 +560,12 @@ func goVersionAtLeast(major, minor int) bool {
 		return false
 	}
 	var maj, min int
-	fmt.Sscan(parts[0], &maj)
-	fmt.Sscan(parts[1], &min)
+	if _, err := fmt.Sscan(parts[0], &maj); err != nil {
+		return false
+	}
+	if _, err := fmt.Sscan(parts[1], &min); err != nil {
+		return false
+	}
 	return maj > major || (maj == major && min >= minor)
 }
 
