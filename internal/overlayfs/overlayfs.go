@@ -232,6 +232,12 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 
 	for i := startLayer; i < len(layers); i++ {
 		if rfs, ok := layers[i].(fs.ReadFileFS); ok {
+			// S1: Check symlink escape for disk layers before reading
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+					return nil, symlinkErr
+				}
+			}
 			data, err := rfs.ReadFile(name)
 			if err == nil {
 				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
@@ -250,8 +256,26 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			// Fallback: open and read
 			f, err := layers[i].Open(name)
 			if err == nil {
-				defer f.Close()
-				return readAll(f)
+				// S1: Check symlink escape for disk layers
+				if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+					if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+						f.Close()
+						return nil, symlinkErr
+					}
+				}
+				data, readErr := readAll(f)
+				f.Close()
+				if readErr != nil {
+					return nil, readErr
+				}
+				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
+					if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
+						firstCandidateLayer: i,
+					}); !loaded {
+						o.negCacheCount.Add(1)
+					}
+				}
+				return data, nil
 			}
 			if !isNotExist(err) {
 				return nil, err
@@ -330,6 +354,12 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 
 	for i := startLayer; i < len(layers); i++ {
 		if sfs, ok := layers[i].(fs.StatFS); ok {
+			// S1: Check symlink escape for disk layers before stat
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+					return nil, symlinkErr
+				}
+			}
 			info, err := sfs.Stat(name)
 			if err == nil {
 				return info, nil
@@ -379,8 +409,9 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 	o.negCache.Range(func(key, value any) bool {
 		entry := value.(negCacheEntry)
 		if entry.firstCandidateLayer >= layerIndex {
-			o.negCache.Delete(key)
-			o.negCacheCount.Add(-1)
+			if _, deleted := o.negCache.LoadAndDelete(key); deleted {
+				o.negCacheCount.Add(-1)
+			}
 		}
 		return true
 	})
@@ -389,8 +420,9 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 // InvalidateAll clears the entire negative cache.
 func (o *OverlayFS) InvalidateAll() {
 	o.negCache.Range(func(key, _ any) bool {
-		o.negCache.Delete(key)
-		o.negCacheCount.Add(-1)
+		if _, deleted := o.negCache.LoadAndDelete(key); deleted {
+			o.negCacheCount.Add(-1)
+		}
 		return true
 	})
 }
@@ -410,8 +442,9 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 	o.negCache.Range(func(key, value any) bool {
 		entry := value.(negCacheEntry)
 		if entry.firstCandidateLayer >= layerIndex {
-			o.negCache.Delete(key)
-			o.negCacheCount.Add(-1)
+			if _, deleted := o.negCache.LoadAndDelete(key); deleted {
+				o.negCacheCount.Add(-1)
+			}
 		}
 		return true
 	})
@@ -466,9 +499,20 @@ func isNotExist(err error) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// readAll reads all bytes from an fs.File.
+// maxReadSize is the maximum file size readAll will read.
+// Files exceeding this limit return an error.
+const maxReadSize = 64 * 1024 * 1024 // 64 MiB
+
+// readAll reads all bytes from an fs.File, bounded by maxReadSize.
 func readAll(f fs.File) ([]byte, error) {
-	return io.ReadAll(f)
+	data, err := io.ReadAll(io.LimitReader(f, maxReadSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxReadSize {
+		return nil, fmt.Errorf("overlayfs: file exceeds maximum read size of %d bytes", maxReadSize)
+	}
+	return data, nil
 }
 
 // checkSymlinkSafe verifies the opened path hasn't escaped the layer root
