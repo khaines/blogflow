@@ -1,6 +1,6 @@
 # Embedded Default Assets — Design Document
 
-> **Status**: Draft  
+> **Status**: In Review  
 > **Author**: Cloud-Native Front-End Engineer  
 > **Reviewers**: Cloud-Native Distributed Systems Architect, Cloud-Native Security SME, Cloud-Native Systems Engineer, Cloud-Native SRE  
 > **Last Updated**: 2026-03-22  
@@ -78,6 +78,9 @@ graph TB
     L1 -->|"Layer 1 (highest)"| OFS
     L2 -->|"Layer 2"| OFS
     L3 -->|"Layer 3"| OFS
+
+    %% L3: Layer numbering note — diagrams use 1-based labels; code LayerIndex is 0-based (0–3).
+    %% Layer 4 in diagrams = LayerIndex 3 in code.
 
     OFS --> Theme
     OFS --> Content
@@ -211,11 +214,16 @@ package defaults
 
 import (
     "embed"
+    "fmt"
     "io/fs"
 )
 
 // DefaultsFS embeds the entire defaults/ directory tree into the binary.
 // The //go:embed directive includes all files recursively.
+//
+// Note: The //go:embed defaults/* glob excludes files and directories whose names
+// begin with '.' or '_'. No embedded asset names may begin with '.' or '_' unless
+// the directive is changed to //go:embed all:defaults.
 //go:embed defaults/*
 var DefaultsFS embed.FS
 
@@ -225,8 +233,18 @@ var DefaultsFS embed.FS
 //
 // This is a critical correctness requirement — path mismatch causes complete
 // template rendering failure with no graceful degradation.
-var Defaults, _ = fs.Sub(DefaultsFS, "defaults")
+var Defaults fs.FS
+
+func init() {
+    var err error
+    Defaults, err = fs.Sub(DefaultsFS, "defaults")
+    if err != nil {
+        panic(fmt.Sprintf("blogflow: failed to create defaults sub-filesystem: %v", err))
+    }
+}
 ```
+
+> **Why `init()` panic?** The `init()` panic is intentional — if the embedded defaults cannot be loaded, the binary is fundamentally broken and must not start. This surfaces build errors immediately rather than producing confusing runtime failures.
 
 > **Why `fs.Sub`?** Go's `embed.FS` preserves the directory prefix from the `//go:embed` directive. The overlay FS expects paths like `templates/base.html`, not `defaults/templates/base.html`. Using `fs.Sub(DefaultsFS, "defaults")` strips the prefix so the embedded filesystem's path namespace aligns with all other layers. This was resolved in the overlay FS design (§9, Q6).
 
@@ -240,7 +258,7 @@ site:
   title: "My Blog"
   description: "A blog powered by BlogFlow"
   language: "en"
-  base_url: "http://localhost:8080"
+  base_url: "https://localhost:8080"   # Default uses HTTPS. In development mode (--dev flag), the server binds to HTTP.
 
 author:
   name: ""
@@ -279,6 +297,11 @@ import "io/fs"
 // Usage by the overlay FS:
 //   ofs := overlayfs.NewOverlayFS(themeFS, contentFS, configFS, defaults.Defaults)
 //
+// Note: Callers should use NewOverlayFS with the already prefix-stripped
+// defaults.Defaults (fs.FS), NOT NewFromPaths which performs its own fs.Sub
+// internally. Using NewFromPaths with defaults.Defaults would double-strip
+// the prefix and break path resolution.
+//
 // Usage by the config system (direct read, bypassing overlay):
 //   data, err := fs.ReadFile(defaults.Defaults, "config/defaults.yaml")
 //
@@ -312,6 +335,8 @@ var Defaults fs.FS
 ### 2.7 Content Integrity & Isolation
 
 **Embedded assets are fully trusted.** The `defaults/` directory is part of the BlogFlow source code repository. Every file is reviewed through the standard PR process, compiled into the binary at build time, and immutable at runtime. There is no mechanism — intentional or accidental — for an external actor to modify embedded assets without rebuilding the binary.
+
+**Supply chain trust boundary:** Embedded default assets occupy a unique trust position: they are compiled into the binary and reviewed as source code, making them as trusted as the Go code itself. This is fundamentally different from user-provided theme/content layers (semi-trusted). Changes to files in `defaults/` require the same code review process as changes to Go source files. The CI pipeline verifies that embedded assets have not been tampered with via checksum validation.
 
 **Template safety:**
 - All templates use `html/template` (not `text/template`), which provides automatic contextual escaping for XSS prevention.
@@ -437,6 +462,18 @@ No scaling needed. Embedded assets are compiled into every replica of the BlogFl
 | Storage | 0 (in binary) | Assets are compiled into the binary; no runtime storage |
 | Binary size impact | < 100 KB | Acceptable for a 15 MB binary (< 1% increase) |
 
+**Binary size CI enforcement:** CI validates that the compiled binary with embedded defaults does not exceed 15 MB. The embedded assets budget is < 100 KB. A CI step runs `du -sh defaults/` and fails if it exceeds 500 KB (generous headroom for future additions like more themes). Additionally, the following test enforces the budget:
+
+```go
+func TestEmbeddedTotalSize(t *testing.T) {
+    const maxBytes = 100 * 1024
+    total := countEmbeddedBytes(t, DefaultsFS, "defaults")
+    if total > maxBytes {
+        t.Errorf("embedded defaults size %d bytes exceeds budget %d bytes", total, maxBytes)
+    }
+}
+```
+
 ### 4.6 Performance Test Plan
 
 **Benchmark suite** (`defaults_bench_test.go`):
@@ -481,6 +518,7 @@ Embedded assets are **outputs**, not inputs — they are authored by the BlogFlo
 - `defaults.yaml` is validated against the config schema in a CI test.
 - `main.css` is checked for valid CSS syntax.
 - `favicon.svg` is validated to contain no `<script>` elements, `on*` event handlers, or `<foreignObject>` elements.
+- Embedded SVG files (e.g., `favicon.svg`) are hand-authored and reviewed as source code. They must not contain `<script>` elements, event handler attributes (`onclick`, etc.), external references (`xlink:href` to remote URIs), `<use>` or `<image>` with external `href`/`xlink:href`, or `<style>` with `@import` or external `url()`. A CI check validates embedded SVGs against these rules.
 - `about.md` is parsed by goldmark to verify valid markdown.
 
 **At runtime:**
@@ -497,15 +535,23 @@ The `base.html` template includes a Content Security Policy that locks down reso
 
 ```html
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'">
+      content="default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'">
 ```
 
+> **Explicit directives:** `script-src 'none'`, `object-src 'none'`, and `connect-src 'none'` are stated explicitly rather than relying on `default-src 'none'` inheritance. This avoids accidental inheritance bugs if `default-src` is ever changed and makes the policy self-documenting for reviewers.
+
 This CSP:
-- Blocks all inline JavaScript (`script-src` not listed, inherits `default-src 'none'`)
+- Explicitly blocks all JavaScript execution (`script-src 'none'`)
+- Explicitly blocks plugins/embeds (`object-src 'none'`)
+- Explicitly blocks fetch/XHR (`connect-src 'none'`)
 - Allows stylesheets only from the same origin (`style-src 'self'`)
 - Allows images only from the same origin (`img-src 'self'`)
 - Blocks all external resource loading (no CDN, analytics, or web fonts)
 - Blocks form submissions to external origins
+
+**HTTP-level CSP enforcement:** The default theme sets CSP via `<meta http-equiv="Content-Security-Policy">` in `base.html` as a baseline. However, the HTTP server **MUST** also send a `Content-Security-Policy` response header — this takes precedence over the meta tag and covers non-HTML responses. The HTTP middleware (defined in `internal/server`) is responsible for the response header. The `base.html` meta tag provides defense-in-depth for cases where the middleware is bypassed or misconfigured. This is a cross-component security contract: the server enforces the CSP floor, and users can extend but not eliminate it.
+
+**CSP reporting:** The default CSP does not include `report-uri` or `report-to` directives, as these require a reporting endpoint that may not exist in all deployments. Operators can add CSP reporting by overriding `base.html` or configuring the HTTP middleware. See §9 Open Questions for recommended enhancement.
 
 **No inline JavaScript:** The default theme relies entirely on CSS for interactivity (dark mode via `prefers-color-scheme`, responsive layout via media queries). No `<script>` tags appear in any default template. This eliminates an entire class of XSS vectors.
 
@@ -559,11 +605,11 @@ graph LR
 | Threat Category | Applicable? | Threat Description | Mitigation |
 |----------------|:-----------:|--------------------|------------|
 | **S**poofing | ❌ | Embedded defaults have no identity or auth context | N/A |
-| **T**ampering | ✅ | Attacker modifies `defaults/` in source repo to inject malicious templates | PR review required; CI validates all templates parse cleanly; binary checksums for distribution integrity |
+| **T**ampering | ✅ | Attacker modifies `defaults/` in source repo to inject malicious templates | PR review required; CI validates all templates parse cleanly; binary checksums for distribution integrity; HTTP-level CSP header provides tamper-resistant security floor |
 | **R**epudiation | ❌ | All changes to `defaults/` are tracked in git history | Git history provides full audit trail |
 | **I**nformation Disclosure | ❌ | Embedded defaults contain no secrets, credentials, or internal paths | Defaults are public by design |
 | **D**enial of Service | ✅ | Extremely large file embedded in `defaults/` bloats binary and memory usage | CI check: total embedded size must be < 100 KB; PR review for any new file in `defaults/` |
-| **E**levation of Privilege | ✅ | User overrides `base.html` to remove CSP header, enabling XSS in user-controlled content | Layer priority is explicit; operators control which volumes are mounted; monitoring alerts on template changes in theme layer |
+| **E**levation of Privilege | ✅ | User overrides `base.html` to remove CSP header, enabling XSS in user-controlled content | Server sets CSP response header — user can extend but not eliminate the security floor; layer priority is explicit; operators control which volumes are mounted; monitoring alerts on template changes in theme layer |
 
 ### 6.4 Mitigations & Residual Risks
 
@@ -571,7 +617,7 @@ graph LR
 |--------|-----------|---------------|
 | Supply chain attack on `defaults/` | PR review, CI template validation, signed releases, binary checksums | **Low** — relies on GitHub branch protection and reviewer diligence |
 | Malicious template contribution | `html/template` auto-escaping, CSP `<meta>` tag, no inline JS policy, CI SVG validation | **Low** — multiple layers of defense |
-| CSP removal via theme override | Documented security contract; operator controls mounts; monitoring for CSP header absence | **Medium** — user has legitimate reasons to customize CSP; monitoring is advisory |
+| CSP removal via theme override | Server enforces CSP via HTTP response header (cannot be removed by theme override); `base.html` meta tag provides defense-in-depth; documented security contract; operator controls mounts; monitoring for CSP header absence | **Low** — HTTP-level CSP header provides a server-enforced floor that theme overrides cannot bypass |
 | Binary tampering | Distribute via signed container images pinned by SHA256 digest; distroless base minimizes attack surface | **Low** — standard supply chain best practice |
 | Oversized embedded asset | CI enforces total `defaults/` size < 100 KB | **Low** — automated enforcement |
 
@@ -637,6 +683,8 @@ No additional spans are created by the defaults component itself — it relies o
 | `UnexpectedDefaultsUsage` | `blogflow_defaults_used{resource_type="template"}` rate > 0 for 30 min when theme layer is configured | 🟡 Warning | Theme layer may be incomplete — verify all expected templates are present in theme repo |
 | `DefaultsOnlyDeployment` | `blogflow_defaults_overridden` rate = 0 for 24 hours in production | 🟡 Warning | No customization detected — may be intentional (zero-config) or may indicate volume mount failure |
 
+> **Alert overlap note:** The `blogflow_defaults_used` metric complements the overlay FS `blogflow_overlay_layer_hit_total{layer='defaults'}` counter. The overlay metric counts all default-layer hits (including config lookups); the EDA metric specifically tracks template/static/content defaults usage. Alerts should reference the EDA metric for "is the default theme being used?" and the overlay metric for "is the defaults layer being hit at all?" `DefaultsOnlyDeployment` fires for intentional zero-config deployments after 24h to remind operators to verify no volume mount is silently missing. The overlay FS `OverlayDefaultsOnly` fires faster (30 min) when a theme layer IS configured but not being hit — indicating a mount failure.
+
 ---
 
 ## 8 · Rollout & Risk
@@ -651,6 +699,8 @@ The embedded defaults are rolled out as part of the BlogFlow binary. They follow
 4. **Phase 4 — Zero-config smoke test**: Build the binary and run it with no external files. Verify every page renders, CSS loads, and configuration defaults apply.
 
 Since the defaults are a library component compiled into the binary, there is no canary or blue-green deployment. Quality is ensured by CI validation and integration testing.
+
+**Kubernetes probes:** Template parse failure causes process exit (exit code 1). The Kubernetes readiness probe verifies embedded defaults are accessible via the overlay FS. The liveness probe is a simple HTTP `/healthz` that returns 200 only after successful startup validation. Failed startup → pod does not reach Running state → alert fires on `PodCrashLoopBackOff` after 3 restarts.
 
 ### 8.2 Rollback Plan
 
@@ -715,10 +765,11 @@ graph LR
 
 **Security:**
 - [ ] CSP `<meta>` tag present in `base.html`
+- [ ] `Content-Security-Policy` HTTP response header configured in `internal/server` middleware
 - [ ] No inline JavaScript in any template
 - [ ] No external resource loading (no CDN, analytics, fonts)
 - [ ] Security SME review completed (§5 and §6)
-- [ ] SVG favicon validated for malicious content
+- [ ] SVG favicon validated for malicious content — no `<script>`, `on*` handlers, `<foreignObject>`, external `<use>`/`<image>` refs, `<style>` with `@import` or external `url()`
 
 **Integration:**
 - [ ] Zero-config smoke test: binary starts and serves all pages with no external files
@@ -729,6 +780,7 @@ graph LR
 **Operational Readiness:**
 - [ ] Observability: metrics registered, dashboards deployed
 - [ ] Alert rules deployed and tested
+- [ ] Runbook created for: `DefaultTemplateParseFailure`, `DefaultsSubFSFailure`, `UnexpectedDefaultsUsage`
 - [ ] Documentation updated (user guide for customizing defaults)
 
 ---
@@ -745,6 +797,7 @@ graph LR
 | 6 | Should the default CSS use a CSS reset or normalize? | ✅ Resolved | Minimal custom reset (box-sizing, margin reset on body) — not a full reset library. Keeps the CSS self-contained with no external dependencies. |
 | 7 | Should `defaults/` include a `robots.txt` or `sitemap.xml` template? | 🟡 Open | These are useful for SEO but add complexity. Leaning toward including `robots.txt` as a static default and generating `sitemap.xml` in the content pipeline. Decision deferred to content pipeline design. |
 | 8 | Should embedded defaults include an RSS/Atom feed template? | 🟡 Open | Feed generation is a content pipeline concern. The `defaults/` directory may include a `feed.xml` template, but the rendering logic belongs in `internal/content`. Decision deferred to content pipeline design. |
+| 9 | Should the default CSP include `report-uri` / `report-to` directives? | 🟡 Open | CSP violation reporting requires an endpoint that may not exist in all deployments. Recommended enhancement: add `report-to` directive pointing to a configurable reporting endpoint, or expose a built-in `/csp-report` handler that emits `blogflow_csp_violations_total` metrics. Decision deferred until the HTTP server design is finalized. |
 
 ---
 
