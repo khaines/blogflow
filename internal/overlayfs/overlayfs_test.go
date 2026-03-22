@@ -108,9 +108,9 @@ func TestReadDir_Union(t *testing.T) {
 // §3.1 #6: ReadDir returns sorted entries
 func TestReadDir_Sorted(t *testing.T) {
 	layer := fstest.MapFS{
-		"dir/zebra.html":   {Data: []byte("z")},
-		"dir/alpha.html":   {Data: []byte("a")},
-		"dir/middle.html":  {Data: []byte("m")},
+		"dir/zebra.html":  {Data: []byte("z")},
+		"dir/alpha.html":  {Data: []byte("a")},
+		"dir/middle.html": {Data: []byte("m")},
 	}
 
 	ofs := newTestOverlay(layer)
@@ -394,11 +394,11 @@ func TestInvalidateLayer(t *testing.T) {
 	ofs := newTestOverlay(theme, defaults)
 
 	// First read caches that theme layer misses
-	fs.ReadFile(ofs, "file.txt")
+	_, _ = fs.ReadFile(ofs, "file.txt")
 
 	// Now add file to theme layer via replace
 	newTheme := fstest.MapFS{"file.txt": {Data: []byte("theme")}}
-	ofs.ReplaceLayer(0, newTheme)
+	_ = ofs.ReplaceLayer(0, newTheme)
 
 	// Should now read from theme layer
 	data, _ := fs.ReadFile(ofs, "file.txt")
@@ -410,8 +410,8 @@ func TestInvalidateLayer(t *testing.T) {
 // fs.WalkDir works with overlay FS
 func TestWalkDir(t *testing.T) {
 	layer := fstest.MapFS{
-		"posts/a.md":  {Data: []byte("a")},
-		"posts/b.md":  {Data: []byte("b")},
+		"posts/a.md":   {Data: []byte("a")},
+		"posts/b.md":   {Data: []byte("b")},
 		"static/c.css": {Data: []byte("c")},
 	}
 	ofs := newTestOverlay(layer)
@@ -500,7 +500,7 @@ func TestReplaceLayer_ConcurrentWithOpen(t *testing.T) {
 		defer wg.Done()
 		for j := 0; j < 100; j++ {
 			newLayer := fstest.MapFS{"file.txt": {Data: []byte("v2")}}
-			ofs.ReplaceLayer(0, newLayer)
+			_ = ofs.ReplaceLayer(0, newLayer)
 		}
 	}()
 	wg.Wait()

@@ -567,7 +567,7 @@ func goVersionAtLeast(major, minor int) bool {
 
 // Compile-time interface checks.
 var (
-	_ fs.FS        = (*OverlayFS)(nil)
+	_ fs.FS         = (*OverlayFS)(nil)
 	_ fs.ReadFileFS = (*OverlayFS)(nil)
 	_ fs.ReadDirFS  = (*OverlayFS)(nil)
 	_ fs.StatFS     = (*OverlayFS)(nil)
