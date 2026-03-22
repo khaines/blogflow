@@ -1,7 +1,9 @@
 package overlayfs
 
 import (
+	"errors"
 	"io/fs"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -428,4 +430,78 @@ func TestWalkDir(t *testing.T) {
 	if len(paths) < 4 { // ., posts, posts/a.md, posts/b.md, static, static/c.css
 		t.Errorf("WalkDir found %d paths, expected at least 4: %v", len(paths), paths)
 	}
+}
+
+// §3.2 #4: Null byte in path
+func TestOpen_NullByte(t *testing.T) {
+	ofs := newTestOverlay(fstest.MapFS{})
+	_, err := ofs.Open("templates/post\x00.html")
+	if err == nil {
+		t.Fatal("expected error for null byte path")
+	}
+}
+
+// §3.2 #8: ReadDir on nonexistent directory
+func TestReadDir_AllMiss(t *testing.T) {
+	ofs := newTestOverlay(fstest.MapFS{}, fstest.MapFS{})
+	_, err := fs.ReadDir(ofs, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent directory")
+	}
+}
+
+// §3.2 #14: Permission error does not fall through
+func TestOpen_PermissionError(t *testing.T) {
+	permFS := &errFS{err: fs.ErrPermission}
+	defaults := fstest.MapFS{"file.txt": {Data: []byte("default")}}
+	ofs := newTestOverlay(permFS, defaults)
+
+	_, err := ofs.Open("file.txt")
+	if err == nil {
+		t.Fatal("expected permission error, not fallthrough to defaults")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("expected fs.ErrPermission, got %v", err)
+	}
+}
+
+// errFS is a test helper that returns a fixed error for all operations.
+type errFS struct {
+	err error
+}
+
+func (e *errFS) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+	return nil, e.err
+}
+
+// Concurrent ReplaceLayer + Open (detects A1 race)
+func TestReplaceLayer_ConcurrentWithOpen(t *testing.T) {
+	old := fstest.MapFS{"file.txt": {Data: []byte("v1")}}
+	ofs := newTestOverlay(old)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				f, err := ofs.Open("file.txt")
+				if err == nil {
+					f.Close()
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 100; j++ {
+			newLayer := fstest.MapFS{"file.txt": {Data: []byte("v2")}}
+			ofs.ReplaceLayer(0, newLayer)
+		}
+	}()
+	wg.Wait()
 }

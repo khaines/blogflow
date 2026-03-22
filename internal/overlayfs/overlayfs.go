@@ -15,16 +15,25 @@ package overlayfs
 
 import (
 	"embed"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
+
+// layerMeta stores resolved root paths for disk-backed layers.
+// Used for symlink escape detection on non-Linux platforms.
+type layerMeta struct {
+	rootPath string // empty for non-disk layers (embed.FS, MapFS)
+	isDisk   bool
+}
 
 // OverlayFS is a layered filesystem where higher-priority layers
 // shadow lower ones. It implements fs.FS, fs.StatFS, fs.ReadFileFS,
@@ -32,6 +41,7 @@ import (
 type OverlayFS struct {
 	layers     []fs.FS
 	layerNames []string
+	layerMeta  []layerMeta
 
 	mu sync.RWMutex // protects layers slice during hot-reload
 
@@ -49,7 +59,6 @@ type negCacheEntry struct {
 	// contain this path. Layers [0, firstCandidateLayer) are known
 	// misses and skipped on subsequent lookups.
 	firstCandidateLayer int
-	cachedAt            time.Time
 }
 
 // resolution describes which layer served a file.
@@ -78,6 +87,7 @@ func NewOverlayFS(layers []fs.FS, names []string) *OverlayFS {
 	return &OverlayFS{
 		layers:             filtered,
 		layerNames:         filteredNames,
+		layerMeta:          make([]layerMeta, len(filtered)),
 		maxNegCacheEntries: 100_000,
 	}
 }
@@ -87,12 +97,13 @@ func NewOverlayFS(layers []fs.FS, names []string) *OverlayFS {
 // The defaults embed.FS is always included as the lowest layer.
 // The defaults parameter should already have its prefix stripped via fs.Sub.
 func NewFromPaths(themePath, contentPath, configPath string, defaults fs.FS) (*OverlayFS, error) {
-	if v := runtime.Version(); v < "go1.22" {
-		panic(fmt.Sprintf("blogflow: Go 1.22+ required for os.DirFS symlink hardening, got %s", v))
+	if !goVersionAtLeast(1, 22) {
+		panic(fmt.Sprintf("blogflow: Go 1.22+ required for os.DirFS symlink hardening, got %s", runtime.Version()))
 	}
 
 	var layers []fs.FS
 	var names []string
+	var resolvedPaths []string
 
 	paths := []struct {
 		path string
@@ -120,6 +131,7 @@ func NewFromPaths(themePath, contentPath, configPath string, defaults fs.FS) (*O
 		}
 		layers = append(layers, os.DirFS(resolved))
 		names = append(names, p.name)
+		resolvedPaths = append(resolvedPaths, resolved)
 	}
 
 	if defaults != nil {
@@ -127,7 +139,13 @@ func NewFromPaths(themePath, contentPath, configPath string, defaults fs.FS) (*O
 		names = append(names, "defaults")
 	}
 
-	return NewOverlayFS(layers, names), nil
+	ofs := NewOverlayFS(layers, names)
+	for i, rp := range resolvedPaths {
+		if i < len(ofs.layerMeta) {
+			ofs.layerMeta[i] = layerMeta{rootPath: rp, isDisk: true}
+		}
+	}
+	return ofs, nil
 }
 
 // NewFromEmbed is a convenience constructor for embedding defaults from an embed.FS.
@@ -145,12 +163,14 @@ func NewFromEmbed(defaults embed.FS, prefix string) (*OverlayFS, error) {
 // Only fs.ErrNotExist triggers fallthrough; other errors (EACCES, EIO)
 // are returned immediately.
 func (o *OverlayFS) Open(name string) (fs.File, error) {
+	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
 
 	o.mu.RLock()
-	layers := o.layers
+	layers := make([]fs.FS, len(o.layers))
+	copy(layers, o.layers)
 	o.mu.RUnlock()
 
 	startLayer := 0
@@ -164,13 +184,20 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 	for i := startLayer; i < len(layers); i++ {
 		f, err := layers[i].Open(name)
 		if err == nil {
+			// S1: Check symlink escape for disk layers
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+					f.Close()
+					return nil, symlinkErr
+				}
+			}
 			// Cache: record that layers [0, i) don't have this path
 			if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
-				o.negCache.Store(name, negCacheEntry{
+				if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
 					firstCandidateLayer: i,
-					cachedAt:            time.Now(),
-				})
-				o.negCacheCount.Add(1)
+				}); !loaded {
+					o.negCacheCount.Add(1)
+				}
 			}
 			return f, nil
 		}
@@ -185,12 +212,14 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 // ReadFile implements fs.ReadFileFS. Reads the entire file from the
 // highest-priority layer that contains it.
 func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
+	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrInvalid}
 	}
 
 	o.mu.RLock()
-	layers := o.layers
+	layers := make([]fs.FS, len(o.layers))
+	copy(layers, o.layers)
 	o.mu.RUnlock()
 
 	startLayer := 0
@@ -206,11 +235,11 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			data, err := rfs.ReadFile(name)
 			if err == nil {
 				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
-					o.negCache.Store(name, negCacheEntry{
+					if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
 						firstCandidateLayer: i,
-						cachedAt:            time.Now(),
-					})
-					o.negCacheCount.Add(1)
+					}); !loaded {
+						o.negCacheCount.Add(1)
+					}
 				}
 				return data, nil
 			}
@@ -237,30 +266,30 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 // entries across all layers. For duplicate names, the entry from the
 // highest-priority layer wins. Entries are sorted by name.
 func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 	}
 
 	o.mu.RLock()
-	layers := o.layers
+	layers := make([]fs.FS, len(o.layers))
+	copy(layers, o.layers)
 	o.mu.RUnlock()
 
 	merged := make(map[string]fs.DirEntry)
 	found := false
 
 	for i := len(layers) - 1; i >= 0; i-- {
-		if rdfs, ok := layers[i].(fs.ReadDirFS); ok {
-			entries, err := rdfs.ReadDir(name)
-			if err != nil {
-				if isNotExist(err) {
-					continue
-				}
-				return nil, err // EACCES, EIO — propagate
+		entries, err := fs.ReadDir(layers[i], name)
+		if err != nil {
+			if isNotExist(err) {
+				continue
 			}
-			found = true
-			for _, e := range entries {
-				merged[e.Name()] = e // higher-priority layers overwrite
-			}
+			return nil, err // EACCES, EIO — propagate
+		}
+		found = true
+		for _, e := range entries {
+			merged[e.Name()] = e // higher-priority layers overwrite
 		}
 	}
 
@@ -281,12 +310,14 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // Stat implements fs.StatFS. Returns file info from the highest-priority
 // layer that contains the path.
 func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
+	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
 	}
 
 	o.mu.RLock()
-	layers := o.layers
+	layers := make([]fs.FS, len(o.layers))
+	copy(layers, o.layers)
 	o.mu.RUnlock()
 
 	startLayer := 0
@@ -397,13 +428,16 @@ func (o *OverlayFS) LayerCount() int {
 // resolveInfo returns metadata about where a path resolves to.
 // Internal only — must NOT appear in HTTP responses.
 func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
+	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrInvalid}
 	}
 
 	o.mu.RLock()
-	layers := o.layers
-	names := o.layerNames
+	layers := make([]fs.FS, len(o.layers))
+	copy(layers, o.layers)
+	names := make([]string, len(o.layerNames))
+	copy(names, o.layerNames)
 	o.mu.RUnlock()
 
 	for i := 0; i < len(layers); i++ {
@@ -429,21 +463,45 @@ func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
 
 // isNotExist checks if an error indicates the file does not exist.
 func isNotExist(err error) bool {
-	return err != nil && (err == fs.ErrNotExist || os.IsNotExist(err))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // readAll reads all bytes from an fs.File.
 func readAll(f fs.File) ([]byte, error) {
-	info, err := f.Stat()
+	return io.ReadAll(f)
+}
+
+// checkSymlinkSafe verifies the opened path hasn't escaped the layer root
+// via symlink. This is defense-in-depth for platforms without openat2/RESOLVE_BENEATH.
+func checkSymlinkSafe(root, name string) error {
+	if root == "" {
+		return nil // non-disk layer, skip check
+	}
+	fullPath := filepath.Join(root, filepath.FromSlash(name))
+	resolved, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	buf := make([]byte, info.Size())
-	n, err := f.Read(buf)
-	if err != nil && err.Error() != "EOF" {
-		return nil, err
+	// Verify resolved path is still under root
+	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) && resolved != root {
+		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
-	return buf[:n], nil
+	return nil
+}
+
+// goVersionAtLeast checks if the runtime Go version is at least major.minor.
+func goVersionAtLeast(major, minor int) bool {
+	v := runtime.Version()
+	v = strings.TrimPrefix(v, "go")
+	// Handle versions like "1.22.1" or "1.22"
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	var maj, min int
+	fmt.Sscan(parts[0], &maj)
+	fmt.Sscan(parts[1], &min)
+	return maj > major || (maj == major && min >= minor)
 }
 
 // Compile-time interface checks.
