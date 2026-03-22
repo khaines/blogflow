@@ -233,7 +233,7 @@ func TestOpen_DotPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 }
 
 // §3.2 #9: ReadDir when some layers lack directory
@@ -298,7 +298,7 @@ func TestOpen_Concurrent(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			f.Close()
+			_ = f.Close()
 		}()
 	}
 	for i := 0; i < 100; i++ {
@@ -319,7 +319,7 @@ func TestOpen_ConcurrentWithInvalidation(t *testing.T) {
 			for j := 0; j < 100; j++ {
 				f, err := ofs.Open("file.txt")
 				if err == nil {
-					f.Close()
+					_ = f.Close()
 				}
 			}
 		}()
@@ -347,7 +347,7 @@ func TestOpenFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if info.Name() != "file.txt" {
 		t.Errorf("Name = %q, want %q", info.Name(), "file.txt")
@@ -490,7 +490,7 @@ func TestReplaceLayer_ConcurrentWithOpen(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				f, err := ofs.Open("file.txt")
 				if err == nil {
-					f.Close()
+					_ = f.Close()
 				}
 			}
 		}()
