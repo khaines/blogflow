@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(*)",
+      "Edit(*)",
+      "Bash(go *)",
+      "Bash(make *)",
+      "Bash(git *)",
+      "Bash(docker *)",
+      "Bash(golangci-lint *)"
+    ]
+  }
+}

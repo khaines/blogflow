@@ -1,0 +1,45 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+/bin/
+/dist/
+/tmp/
+/public/
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Content (user-provided, not committed to engine repo)
+/data/

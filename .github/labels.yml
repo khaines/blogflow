@@ -1,0 +1,204 @@
+# =============================================================================
+# BlogFlow — GitHub Label Taxonomy
+# Format: github-label-sync compatible YAML
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Component Labels — Engine (green shades)
+# -----------------------------------------------------------------------------
+- name: "component:server"
+  color: "0e8a16"
+  description: "HTTP server, routing, middleware, and handlers"
+
+- name: "component:content-pipeline"
+  color: "1a5e20"
+  description: "Content scanning, front matter parsing, and markdown rendering"
+
+- name: "component:theme-engine"
+  color: "1b7a2b"
+  description: "Template loading, overlay FS, theme resolution"
+
+- name: "component:config"
+  color: "2e7d32"
+  description: "Configuration system, YAML loading, embedded defaults"
+
+- name: "component:overlay-fs"
+  color: "84c484"
+  description: "Multi-layer io/fs.FS filesystem abstraction"
+
+- name: "component:cache"
+  color: "57a85a"
+  description: "Rendered HTML caching and invalidation"
+
+# -----------------------------------------------------------------------------
+# Component Labels — GitOps (teal shades)
+# -----------------------------------------------------------------------------
+- name: "component:webhook"
+  color: "16a085"
+  description: "Git webhook handler, HMAC validation, branch filtering"
+
+- name: "component:git-sync"
+  color: "009688"
+  description: "go-git operations, content sync, sidecar integration"
+
+- name: "component:git-auth"
+  color: "00897b"
+  description: "SSH deploy keys, PAT, GitHub App authentication"
+
+- name: "component:file-watcher"
+  color: "00695c"
+  description: "fsnotify file watching and hot-reload"
+
+# -----------------------------------------------------------------------------
+# Component Labels — Output (green shades)
+# -----------------------------------------------------------------------------
+- name: "component:feed"
+  color: "267326"
+  description: "RSS and Atom feed generation"
+
+- name: "component:sitemap"
+  color: "6db56d"
+  description: "Sitemap XML generation"
+
+- name: "component:default-theme"
+  color: "2d882d"
+  description: "Built-in default theme, templates, and CSS"
+
+- name: "component:cli"
+  color: "388e3c"
+  description: "Command-line interface and flags"
+
+# -----------------------------------------------------------------------------
+# Type Labels (blue shades)
+# -----------------------------------------------------------------------------
+- name: "type:feature"
+  color: "0052cc"
+  description: "New capability or enhancement"
+
+- name: "type:bug"
+  color: "0366d6"
+  description: "Defect in existing functionality"
+
+- name: "type:tech-debt"
+  color: "1d76db"
+  description: "Refactoring, cleanup, or performance improvement"
+
+- name: "type:spike"
+  color: "1976d2"
+  description: "Time-boxed research or exploration"
+
+- name: "type:experiment"
+  color: "2196f3"
+  description: "Prototype or proof of concept"
+
+- name: "type:adr"
+  color: "42a5f5"
+  description: "Architecture decision record"
+
+- name: "type:docs"
+  color: "64b5f6"
+  description: "Documentation only"
+
+- name: "type:infra"
+  color: "90caf9"
+  description: "Infrastructure, CI/CD, or tooling change"
+
+- name: "type:epic"
+  color: "5319E7"
+  description: "Tracking issue for a phase deliverable"
+
+- name: "type:feedback"
+  color: "BFDADC"
+  description: "User feedback requiring triage"
+
+# -----------------------------------------------------------------------------
+# Priority Labels (red → yellow spectrum)
+# -----------------------------------------------------------------------------
+- name: "priority:p0"
+  color: "d73a4a"
+  description: "Critical: drop everything"
+
+- name: "priority:p1"
+  color: "e65100"
+  description: "High: current sprint/week"
+
+- name: "priority:p2"
+  color: "fbca04"
+  description: "Medium: this phase"
+
+- name: "priority:p3"
+  color: "fef2c0"
+  description: "Low: backlog"
+
+# -----------------------------------------------------------------------------
+# Phase Labels (purple shades)
+# -----------------------------------------------------------------------------
+- name: "phase:1-scaffolding"
+  color: "5319e7"
+  description: "Phase 1: Scaffolding, agents, skills, CI/CD"
+
+- name: "phase:2-foundation"
+  color: "6f42c1"
+  description: "Phase 2: Config, overlay FS, embedded defaults"
+
+- name: "phase:3-content"
+  color: "7b1fa2"
+  description: "Phase 3: Content pipeline, markdown, indexing"
+
+- name: "phase:4-server-theme"
+  color: "9c27b0"
+  description: "Phase 4: HTTP server, routes, theme engine"
+
+- name: "phase:5-gitops"
+  color: "ab47bc"
+  description: "Phase 5: Git sync, webhook, authentication"
+
+- name: "phase:6-container"
+  color: "ce93d8"
+  description: "Phase 6: Container hardening, CI/CD, security"
+
+- name: "phase:7-content-repos"
+  color: "e1bee7"
+  description: "Phase 7: Content repos, default theme, docs"
+
+# -----------------------------------------------------------------------------
+# Status Labels (gray / teal shades)
+# -----------------------------------------------------------------------------
+- name: "status:needs-triage"
+  color: "546e7a"
+  description: "Not yet reviewed"
+
+- name: "status:blocked"
+  color: "78909c"
+  description: "Waiting on dependency"
+
+- name: "status:design-needed"
+  color: "26c6da"
+  description: "Needs design or ADR before implementation"
+
+- name: "status:stale"
+  color: "9e9e9e"
+  description: "Issue has been idle for more than 14 days"
+
+- name: "status:ready"
+  color: "00838f"
+  description: "Groomed and ready for pickup"
+
+# -----------------------------------------------------------------------------
+# Special Labels
+# -----------------------------------------------------------------------------
+- name: "good-first-issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help-wanted"
+  color: "008672"
+  description: "Community contribution welcome"
+
+- name: "breaking-change"
+  color: "b60205"
+  description: "Requires version bump"
+
+- name: "security"
+  color: "ee0701"
+  description: "Security-sensitive change"

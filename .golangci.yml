@@ -1,0 +1,40 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - misspell
+    - exhaustive
+
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+        - name: package-comments
+        - name: error-return
+        - name: error-naming
+        - name: increment-decrement
+        - name: indent-error-flow
+
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 3

@@ -1,0 +1,54 @@
+name: Research Spike
+description: Propose a time-boxed investigation or technical exploration
+title: "[Spike] "
+labels: ["type:spike", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Research Spike
+        Define a focused, time-boxed investigation to reduce uncertainty.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question to Answer
+      description: What specific question should this spike answer?
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: Background / Context
+      description: Why is this investigation needed? What do we already know?
+    validations:
+      required: true
+  - type: dropdown
+    id: time-box
+    attributes:
+      label: Time Box
+      description: Maximum time to spend on this investigation.
+      options:
+        - 2 hours
+        - 4 hours
+        - 1 day
+        - 2 days
+        - 3 days
+    validations:
+      required: true
+  - type: dropdown
+    id: expected-output
+    attributes:
+      label: Expected Output
+      description: What deliverable should come out of this spike?
+      options:
+        - ADR (Architecture Decision Record)
+        - Prototype
+        - Written analysis
+        - Proof of concept
+    validations:
+      required: true
+  - type: textarea
+    id: related-issues
+    attributes:
+      label: Related Issues
+      description: Link any related issues, ADRs, or discussions.

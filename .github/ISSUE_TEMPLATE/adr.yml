@@ -1,0 +1,66 @@
+name: ADR Proposal
+description: Propose an Architecture Decision Record for team review
+title: "[ADR] "
+labels: ["type:adr", "status:design-needed"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Architecture Decision Record
+        Propose a significant technical decision for the team to review and ratify.
+  - type: input
+    id: decision-title
+    attributes:
+      label: Decision Title
+      description: A short, descriptive title for the decision.
+      placeholder: "e.g., Use go-git for pure-Go git operations"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What problem are we solving? Why does this decision need to be made now?
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options Considered
+      description: List at least two options with brief pros and cons for each.
+      placeholder: |
+        ### Option A — [Name]
+        - **Pros:** ...
+        - **Cons:** ...
+
+        ### Option B — [Name]
+        - **Pros:** ...
+        - **Cons:** ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-decision
+    attributes:
+      label: Proposed Decision
+      description: Which option do you recommend and why?
+    validations:
+      required: true
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What are the positive and negative consequences of this decision?
+      placeholder: |
+        **Positive:**
+        - ...
+
+        **Negative:**
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: related-adrs
+    attributes:
+      label: Related ADRs
+      description: "List any related ADRs by number (e.g., ADR-001, ADR-005). See docs/engineering/adr/ for the full list."
+      placeholder: "e.g., ADR-001, ADR-009"
