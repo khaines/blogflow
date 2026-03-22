@@ -1,6 +1,6 @@
 # Configuration System — Design Document
 
-> **Status**: In Review  
+> **Status**: Approved  
 > **Author**: Cloud-Native Distributed Systems Architect  
 > **Reviewers**: Cloud-Native Security SME, Cloud-Native Systems Engineer, Cloud-Native SRE  
 > **Last Updated**: 2026-03-22  
@@ -267,6 +267,8 @@ type WebhookConfig struct {
     RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
 }
 
+// **Implementation note**: `required_if=Strategy webhook` cannot be resolved via struct tags alone because `Strategy` lives in the parent `SyncConfig`, not `WebhookConfig`. Implementation must use a custom cross-struct validator registered with `validate.RegisterStructValidation` (or equivalent), applying webhook-field requirements only when `SyncConfig.Strategy == "webhook"`. The struct tags shown above document the *intent*; the enforcement mechanism is a cross-struct validator.
+
 type FeedConfig struct {
     Enabled bool   `yaml:"enabled"`
     Type    string `yaml:"type"  validate:"oneof=atom rss"`
@@ -327,13 +329,13 @@ sync:
     ip_allowlist: true
     rate_limit: 10
 
-> **Webhook conditional validation**: Webhook-specific fields (`RateLimit`, `AllowedEvents`, `BranchFilter`) are only validated when `sync.strategy` is `webhook`. Non-webhook deployments can set these to zero/empty without validation errors.
-
 feed:
   enabled: true
   type: "atom"
   items: 20
 ```
+
+> **Webhook conditional validation**: Webhook-specific fields (`RateLimit`, `AllowedEvents`, `BranchFilter`) are only validated when `sync.strategy` is `webhook`. Non-webhook deployments can set these to zero/empty without validation errors.
 
 #### Embedded Defaults — `defaults/config/defaults.yaml`
 
@@ -863,7 +865,7 @@ Config spans are children of the startup trace (for `Load`) or the fsnotify even
 |------------|-----------|----------|----------|
 | `ConfigReloadFailure` | `blogflow_config_reload_total{status="failure"}` > 0 in 5 min | 🟠 High | Check config file validity; review recent git commits to config repo; validate YAML syntax |
 | `ConfigSecretInYAML` | `blogflow_config_secret_rejected_total` > 0 | 🔴 Critical | Secret committed to config file — rotate the secret immediately; remove from git history; review config repo access |
-| `ConfigLoadSlowStartup` | `blogflow_config_load_duration_seconds` p99 > 1s | 🟡 Warning | Check disk I/O; verify config volume mount; check for NFS latency |
+| `ConfigLoadSlowStartup` | `blogflow_config_load_duration_seconds` p99 > 200ms | 🟡 Warning | Check disk I/O; verify config volume mount; check for NFS latency |
 | `ConfigReloadRateAnomaly` | `rate(blogflow_config_reload_total[5m])` > 5/sec sustained for 5 min | 🟡 Warning | Investigate fsnotify watcher; possible config file write loop |
 
 ---
