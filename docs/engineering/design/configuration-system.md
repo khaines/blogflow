@@ -146,6 +146,8 @@ The config system uses a **two-phase unmarshal** to merge embedded defaults with
 
 This means a partial `site.yaml` (e.g., containing only `site.title`) is valid: the title comes from disk, and all other fields use embedded defaults. The overlay FS determines *which file* to read (disk wins if present); the two-phase unmarshal determines *how fields are merged*.
 
+> **Slice field semantics**: For slice fields (e.g., `allowed_events`), if the key is present in `site.yaml` it completely replaces the default — an explicit empty list `[]` clears the default, not inherits it. Operators who want defaults for slice fields must omit the key entirely. Validation: `AllowedEvents` must be non-empty when `Strategy` is `webhook`.
+
 > **Note**: This is NOT the overlay FS merge — the overlay FS returns a single file. The field-level merge happens within the config loader by unmarshalling twice into the same struct.
 
 #### Error Path — Validation Failure
@@ -235,13 +237,14 @@ type ContentConfig struct {
 
 type ThemeConfig struct {
     Name string `yaml:"name" validate:"required,min=1,max=100"`
-    Path string `yaml:"path"` // empty = use embedded defaults
+    Path string `yaml:"path" validate:"omitempty,relpath"` // empty = use embedded defaults
 }
 
 type ServerConfig struct {
     Port         int           `yaml:"port"          validate:"required,min=1,max=65535"`
     ReadTimeout  time.Duration `yaml:"read_timeout"  validate:"required,min=1s,max=60s"`
     WriteTimeout time.Duration `yaml:"write_timeout" validate:"required,min=1s,max=300s"`
+    IdleTimeout  time.Duration `yaml:"idle_timeout"  validate:"required,min=1s,max=600s"`
 }
 
 type CacheConfig struct {
@@ -258,10 +261,10 @@ type SyncConfig struct {
 type WebhookConfig struct {
     Path          string   `yaml:"path"           validate:"required_if=Strategy webhook,startswith=/"`
     Secret        string   `yaml:"-"` // NEVER from YAML — env var only
-    AllowedEvents []string `yaml:"allowed_events" validate:"dive,oneof=push ping"`
-    BranchFilter  string   `yaml:"branch_filter"  validate:"max=250"`
+    AllowedEvents []string `yaml:"allowed_events" validate:"required_if=Strategy webhook,dive,oneof=push ping"`
+    BranchFilter  string   `yaml:"branch_filter"  validate:"required_if=Strategy webhook,max=250"`
     IPAllowlist   bool     `yaml:"ip_allowlist"`
-    RateLimit     int      `yaml:"rate_limit"     validate:"min=1,max=100"` // requests per minute
+    RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
 }
 
 type FeedConfig struct {
@@ -271,11 +274,13 @@ type FeedConfig struct {
 }
 ```
 
+> **IdleTimeout**: `IdleTimeout` controls how long keepalive connections remain open. Set independently from `ReadTimeout`/`WriteTimeout` to prevent slow-loris-style resource exhaustion. Default 120s is appropriate for most deployments.
+
 > **Immutability convention**: The `Config` struct returned by `Get()` is treated as immutable by convention. Fields are exported for read access but consumers MUST NOT modify the returned struct. The `atomic.Pointer` swap ensures each `Get()` returns a consistent snapshot.
 
 > **Logging redaction**: The `Config` struct implements `slog.LogValuer` to redact sensitive fields (webhook secret, any field matching secret patterns). When logged via structured logging, secret values appear as `[REDACTED]`.
 
-> **Path validation**: Directory path fields (`PostsDir`, `PagesDir`, `MediaDir`) use a custom `relpath` validator that rejects absolute paths (no leading `/`) and paths containing `..` components. The overlay FS provides ultimate containment, but schema-level validation provides defense in depth.
+> **Path validation**: Directory path fields (`PostsDir`, `PagesDir`, `MediaDir`) and `ThemeConfig.Path` use a custom `relpath` validator that rejects absolute paths (no leading `/`) and paths containing `..` components. The overlay FS provides ultimate containment, but schema-level validation provides defense in depth.
 
 #### YAML Schema — `site.yaml`
 
@@ -305,6 +310,7 @@ server:
   port: 8080
   read_timeout: "5s"
   write_timeout: "10s"
+  idle_timeout: "120s"
 
 cache:
   enabled: true
@@ -320,6 +326,8 @@ sync:
     branch_filter: "main"
     ip_allowlist: true
     rate_limit: 10
+
+> **Webhook conditional validation**: Webhook-specific fields (`RateLimit`, `AllowedEvents`, `BranchFilter`) are only validated when `sync.strategy` is `webhook`. Non-webhook deployments can set these to zero/empty without validation errors.
 
 feed:
   enabled: true
@@ -357,6 +365,7 @@ server:
   port: 8080
   read_timeout: "5s"
   write_timeout: "10s"
+  idle_timeout: "120s"
 
 cache:
   enabled: true
@@ -449,9 +458,12 @@ type ConfigError struct {
 func (e *ConfigError) Error() string // "config validation failed: 3 errors"
 
 // FieldError describes a single validation failure.
+// When Field matches a secret-pattern path (e.g., sync.webhook.secret),
+// Value is automatically set to [REDACTED] by the validation logic.
+// The raw secret value is never stored in FieldError.
 type FieldError struct {
     Field   string // e.g., "server.port"
-    Value   any    // the invalid value
+    Value   any    // the invalid value (redacted for secret fields)
     Message string // e.g., "must be between 1 and 65535"
 }
 
@@ -473,6 +485,7 @@ Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths t
 | `site.base_url` | `BLOGFLOW_SITE_BASE_URL` | `BLOGFLOW_SITE_BASE_URL="https://blog.example.com"` |
 | `server.port` | `BLOGFLOW_SERVER_PORT` | `BLOGFLOW_SERVER_PORT=9090` |
 | `server.read_timeout` | `BLOGFLOW_SERVER_READ_TIMEOUT` | `BLOGFLOW_SERVER_READ_TIMEOUT=10s` |
+| `server.idle_timeout` | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | `BLOGFLOW_SERVER_IDLE_TIMEOUT=120s` |
 | `cache.enabled` | `BLOGFLOW_CACHE_ENABLED` | `BLOGFLOW_CACHE_ENABLED=false` |
 | `sync.strategy` | `BLOGFLOW_SYNC_STRATEGY` | `BLOGFLOW_SYNC_STRATEGY=webhook` |
 | `sync.webhook.secret` | `BLOGFLOW_WEBHOOK_SECRET` | `BLOGFLOW_WEBHOOK_SECRET=whsec_abc123` |
@@ -574,6 +587,8 @@ If any pattern is detected, config loading fails with a `SecretInYAMLError` dire
 | 21 | Invalid feed type | `feed.type: "json"` | Return `FieldError{Field: "feed.type", Message: "must be one of: atom, rss"}` |
 | 22 | Webhook secret too short | `BLOGFLOW_WEBHOOK_SECRET=abc` (< 32 bytes) | Return `FieldError{Field: "sync.webhook.secret", Message: "must be ≥ 32 bytes (256 bits)"}` — startup fails |
 | 23 | Logging Config does not expose secrets | Config loaded with webhook secret set | `slog.AnyValue(cfg)` output does not contain the literal webhook secret value |
+| 24 | Webhook secret too short — FieldError.Value redacted | `BLOGFLOW_WEBHOOK_SECRET` set to `"short"` | `FieldError` with `Value="[REDACTED]"`, not the actual secret |
+| 25 | Quoted glob in YAML not rejected | `branch_filter: "feature/*"` in `site.yaml` | Config loads successfully — quoted `*` is not treated as a YAML alias |
 
 ### 3.3 Integration Test Boundaries
 
@@ -709,7 +724,7 @@ The config system does not handle authentication or authorization. It is an inte
 
 **Config isolation from content/theme repos**: The most critical security property of the config system is that it reads ONLY from the config and defaults layers. A compromised content or theme repository cannot inject a `site.yaml` that changes the server port, disables webhook signature verification, or alters sync behavior. This is enforced architecturally — `NewLoader` constructs a 2-layer overlay, not a 4-layer overlay.
 
-**YAML anchor/alias rejection**: Config files containing YAML anchors (`&`) or aliases (`*`) are rejected during the pre-validation scan. Legitimate BlogFlow config files have no reason to use YAML anchors. This eliminates billion-laughs/alias expansion attacks entirely. The 1 MB file size limit provides an additional safeguard against oversized payloads.
+**YAML anchor/alias rejection**: Config files containing YAML anchors (`&`) or aliases (`*`) are rejected during the pre-validation scan. The scan tokenizes raw YAML bytes and flags `&` and `*` only when they appear as the first non-whitespace character of a bare (unquoted) YAML scalar value. Characters inside single- or double-quoted strings (e.g., `branch_filter: "feature/*"`) are not rejected. Legitimate BlogFlow config files have no reason to use YAML anchors. This eliminates billion-laughs/alias expansion attacks entirely. The 1 MB file size limit provides an additional safeguard against oversized payloads.
 
 **No template execution in config**: Config values are never passed through `text/template` or `html/template`. The `${BLOGFLOW_WEBHOOK_SECRET}` syntax in YAML is **not** variable interpolation — it is detected as a secret pattern and rejected. Env var values are applied programmatically, not via string substitution.
 
@@ -819,7 +834,7 @@ All log entries include `component="config"` for filtering. Secret values are **
 | `blogflow_config_load_duration_seconds` | Histogram | `source` (`disk`, `embedded`) | Time to load, parse, and validate config |
 | `blogflow_config_reload_total` | Counter | `status` (`success`, `failure`) | Config reload attempts and outcomes |
 | `blogflow_config_validation_errors_total` | Counter | `field` | Validation errors by field name |
-| `blogflow_config_env_overrides_total` | Counter | — | Number of env var overrides applied at load time |
+| `blogflow_config_env_overrides_total` | Counter | `field` | Number of env var overrides applied at load time |
 | `blogflow_config_secret_rejected_total` | Counter | `pattern` | Secret patterns detected and rejected in YAML |
 | `blogflow_config_file_size_bytes` | Gauge | `source` (`disk`, `embedded`) | Size of the loaded config file |
 
