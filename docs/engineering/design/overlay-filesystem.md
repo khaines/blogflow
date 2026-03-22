@@ -54,7 +54,7 @@ graph TB
         Theme["Theme Engine<br/>(internal/theme)"]
         Content["Content Pipeline<br/>(internal/content)"]
         Config["Config System<br/>(internal/config)"]
-        OFS["<strong>Overlay FS</strong><br/>(internal/theme/overlayfs)"]
+        OFS["<strong>Overlay FS</strong><br/>(internal/overlayfs)"]
     end
 
     subgraph "Filesystem Layers"
@@ -310,7 +310,65 @@ type Resolution struct {
 }
 ```
 
-#### Path Validation Contract
+#### ContextOverlayFS — Public API Surface
+
+`ContextOverlayFS` is the public wrapper that BlogFlow consumers (theme engine, content pipeline, config system) import. It delegates to the internal `OverlayFS` while adding context propagation, tracing spans, and security log enrichment.
+
+```go
+package overlayfs
+
+import (
+    "context"
+    "io/fs"
+)
+
+// ContextOverlayFS wraps OverlayFS with context.Context support for
+// cancellation, tracing, and security log correlation. This is the
+// public API surface — consumers should use this type, not OverlayFS directly.
+type ContextOverlayFS struct {
+    inner *OverlayFS
+}
+
+// NewContextOverlayFS creates a context-aware overlay wrapping the given OverlayFS.
+func NewContextOverlayFS(inner *OverlayFS) *ContextOverlayFS
+
+// Open opens a file with context support. Checks ctx.Done() before each
+// layer attempt. Creates an OTel span "overlayfs.open" with attributes
+// fs.path, fs.layer, fs.layer_index, fs.cached. Extracts request_id and
+// remote_addr from context for WARN-level security logs.
+func (c *ContextOverlayFS) Open(ctx context.Context, name string) (fs.File, error)
+
+// ReadFile reads a file with context support.
+func (c *ContextOverlayFS) ReadFile(ctx context.Context, name string) ([]byte, error)
+
+// ReadDir lists a directory with context support. Creates span "overlayfs.readdir".
+func (c *ContextOverlayFS) ReadDir(ctx context.Context, name string) ([]fs.DirEntry, error)
+
+// Stat returns file info with context support.
+func (c *ContextOverlayFS) Stat(ctx context.Context, name string) (fs.FileInfo, error)
+
+// OpenFile opens a file and returns both handle and FileInfo atomically
+// from a single layer resolution, with context support.
+func (c *ContextOverlayFS) OpenFile(ctx context.Context, name string) (fs.File, fs.FileInfo, error)
+
+// InvalidateLayer delegates to the inner OverlayFS.
+func (c *ContextOverlayFS) InvalidateLayer(layerIndex int)
+
+// InvalidateAll delegates to the inner OverlayFS.
+func (c *ContextOverlayFS) InvalidateAll()
+
+// ReplaceLayer delegates to the inner OverlayFS.
+func (c *ContextOverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error
+```
+
+**Context keys read:**
+| Key | Type | Source | Used For |
+|-----|------|--------|----------|
+| `request_id` | `string` | HTTP middleware | Log correlation, tracing |
+| `remote_addr` | `string` | HTTP middleware | Security WARN logs (path traversal attribution) |
+| `user_agent` | `string` | HTTP middleware | Security analysis |
+
+**Important**: `ContextOverlayFS` does NOT implement `io/fs.FS` (its methods require `context.Context`). For stdlib consumers that need `fs.FS` (e.g., `html/template.ParseFS`), use the inner `OverlayFS` directly — but only in controlled paths where context is not needed.
 
 All public methods enforce the following before touching any layer:
 
@@ -353,7 +411,7 @@ Error classification:
 
 ### 2.7 Content Integrity & Isolation
 
-**Go version requirement:** BlogFlow requires Go 1.22+ where `os.DirFS` is hardened against symlink escape via `openat2(2)` with `RESOLVE_BENEATH` on Linux. The `NewFromPaths` constructor asserts `runtime.Version() >= 1.22` at startup and panics if the requirement is not met. Defense-in-depth: before returning an `fs.File` from user-controlled layers (1–3), the implementation performs an `os.Lstat` on the resolved path; if the file is a symlink whose target is outside the layer root, `fs.ErrInvalid` is returned and a WARN is logged.
+**Go version requirement:** BlogFlow requires Go 1.22+ where `os.DirFS` is hardened against symlink escape via `openat2(2)` with `RESOLVE_BENEATH` on Linux. The `NewFromPaths` constructor asserts `runtime.Version() >= 1.22` at startup and panics if the requirement is not met. Note: `openat2`/`RESOLVE_BENEATH` is Linux-specific. On macOS and other platforms, symlink containment relies solely on the `os.Lstat`-based defense-in-depth check. This is an additional reason production deployments must target Linux. Defense-in-depth: before returning an `fs.File` from user-controlled layers (1–3), the implementation performs an `os.Lstat` on the resolved path; if the file is a symlink whose target is outside the layer root, `fs.ErrInvalid` is returned and a WARN is logged.
 
 **Overlay boundary confinement:**
 - Each disk-backed layer is constructed with `os.DirFS(basePath)`, which confines reads to the specified directory subtree. `os.DirFS` rejects absolute paths and `..` traversal at the OS level.
@@ -375,6 +433,8 @@ Error classification:
 
 **Template engine mandate**: All user-facing HTML output MUST use `html/template`, never `text/template`. Non-HTML outputs (RSS XML, sitemap XML, Atom feeds) use `encoding/xml` or `text/template` with explicit output escaping — these outputs contain no user-controlled template content.
 
+**Template function allowlist**: Custom template functions registered for use in themes are restricted to a safe set. The following types are PROHIBITED as return values from template functions: `template.HTML`, `template.JS`, `template.URL`, `template.CSS`, `template.HTMLAttr`, `template.Srcset`. The allowlist is enforced in `internal/theme/funcmap.go` and includes: string formatting (`printf`, `lower`, `upper`, `truncate`, `urlize`), date formatting (`formatDate`, `now`), content helpers (`readingTime`, `wordCount`, `summary`), collection helpers (`first`, `last`, `sort`, `where`, `len`, `index`), and comparison helpers (`eq`, `ne`, `lt`, `gt`). Any function that could bypass `html/template` auto-escaping is excluded. The complete, authoritative list is maintained in code with security review required for additions.
+
 **File type awareness**: The overlay FS does not enforce file type restrictions — it serves any syntactically valid path. However, downstream consumers MUST enforce extension-based restrictions: the HTTP static asset server only serves known-safe extensions (.html, .css, .js, .png, .jpg, .svg, .ico, .woff2, .xml, .json). The template loader only reads .html files. The content pipeline only reads .md files. This is documented as a security contract between the overlay FS and its consumers.
 
 ---
@@ -394,7 +454,7 @@ Error classification:
 | 7 | Stat returns info from highest layer | File exists in two layers with different sizes | `Stat("static/style.css")` | Returns `FileInfo` from highest-priority layer |
 | 8 | NewFromPaths with all layers | All four path arguments are valid directories | `NewFromPaths(theme, content, config, defaults)` | `OverlayFS` with 4 layers, `LayerCount() == 4` |
 | 9 | NewFromPaths with empty paths | Theme and content paths are empty strings | `NewFromPaths("", "", configPath, defaults)` | `OverlayFS` with 2 layers (config + defaults) |
-| 10 | ResolveInfo identifies layer | File exists in content layer | `ResolveInfo("posts/hello.md")` | `Resolution{LayerIndex: 1, LayerName: "content"}` |
+| 10 | ResolveInfo identifies layer | File exists in content layer | `resolveInfo("posts/hello.md")` | `Resolution{LayerIndex: 1, LayerName: "content"}` (tested via internal package tests or through ContextOverlayFS tracing span attributes) |
 | 11 | ReadDir root directory | All layers have files at root | `ReadDir(".")` | ReadDir(".") returns union of all root-level entries from all 4 layers |
 
 ### 3.2 Edge Cases & Error Scenarios
@@ -507,7 +567,7 @@ The overlay FS scales **vertically** within the BlogFlow process. It is a statel
 | `BenchmarkReadDir_Union` | ReadDir with entries in 3 of 4 layers | ≤ 500 µs/op |
 | `BenchmarkOpen_Parallel` | 8 goroutines calling Open concurrently | No race detector warnings |
 
-Benchmarks run on every PR via `go test -bench=. -benchmem -count=5 ./internal/theme/overlayfs/...`.
+Benchmarks run on every PR via `go test -bench=. -benchmem -count=5 ./internal/overlayfs/...`.
 
 **Regression detection**: CI runs `benchstat` comparing current results against `testdata/bench-baseline.txt`. Any regression > 2× on a named benchmark fails the PR. Baseline is updated when performance improvements are merged.
 
@@ -549,7 +609,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 
 **Size limits**: The overlay FS does not enforce file size limits. Downstream consumers (template parser, markdown parser, config loader) enforce their own limits. The content pipeline rejects markdown files > 10 MB; the config loader rejects YAML files > 1 MB.
 
-**Unicode normalization**: Path inputs are not Unicode-normalized. The overlay assumes paths are presented in NFC form by callers. A startup warning is logged on macOS (`runtime.GOOS == "darwin"`) in non-test builds advising against production use on macOS due to HFS+/APFS NFD normalization differences.
+**Unicode normalization**: Path inputs are not Unicode-normalized. The overlay assumes paths are presented in NFC form by callers. A startup warning is logged on macOS (`runtime.GOOS == "darwin"`) in non-test builds advising against production use on macOS due to HFS+/APFS NFD normalization differences. The startup warning also notes that macOS lacks `openat2`/`RESOLVE_BENEATH` symlink hardening available on Linux — the `lstat` defense-in-depth check is the sole symlink containment mechanism on macOS.
 
 ### 5.4 Content Integrity
 
@@ -564,7 +624,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 **TOCTOU mitigation**: Callers should prefer `Open()`-then-`Stat()` on the returned file handle (atomic, single layer resolution) over `Stat()`-then-`Open()` (two-phase, may resolve from different layers during concurrent invalidation). The API provides `OpenFile(name string) (fs.File, fs.FileInfo, error)` as a convenience that returns both atomically.
 
 **Git-sync symlink swap:**
-- git-sync updates content by atomically swapping a symlink (e.g., `/data/content` → `/data/content-rev1` becomes `/data/content` → `/data/content-rev2`). The overlay FS handles this by re-evaluating `os.DirFS` after an invalidation signal. The watcher detects the symlink change and calls `InvalidateLayer`.
+- git-sync updates content by atomically swapping a symlink (e.g., `/data/content` → `/data/content-rev1` becomes `/data/content` → `/data/content-rev2`). The overlay FS handles this by re-evaluating `os.DirFS` after an invalidation signal. The watcher detects the symlink change, re-evaluates the symlink via `filepath.EvalSymlinks`, and calls `ReplaceLayer(layerIndex, os.DirFS(resolvedPath))` to atomically swap the underlying `fs.FS`. `InvalidateLayer` alone is insufficient for symlink swaps because the old `os.DirFS` would still point to the previous directory.
 
 ---
 
@@ -669,6 +729,7 @@ All log entries include `component="overlayfs"` for filtering. Path traversal wa
 | `blogflow_overlay_invalidation_total` | Counter | `layer` | Layer cache invalidation events |
 | `blogflow_overlay_layer_error_total` | Counter | `layer`, `error_type` (`permission_denied`, `io_error`, `timeout`) | Non-ErrNotExist errors per layer |
 | `blogflow_overlay_readdir_entries_total` | Histogram | `layer` | Entries contributed per layer in ReadDir union merge |
+| `blogflow_overlay_layer_configured` | Gauge | `layer` | Set to 1 for each layer that was configured at startup (non-empty path) |
 
 **Dashboard: Overlay FS Health**
 - Layer hit distribution (stacked bar by layer) — shows how many files come from customization vs. defaults
@@ -694,10 +755,11 @@ Spans are only created if an active trace context exists in the calling goroutin
 | `OverlayHighRejectRate` | `blogflow_overlay_path_rejected_total` rate > 10/min for 5 min | 🟠 High | Investigate potential path traversal attack; review HTTP access logs |
 | `OverlayLayerUnavailable` | Layer initialization failure logged at ERROR level | 🔴 Critical | Check volume mounts; verify git-sync sidecar is running; check PVC status |
 | `OverlayHighLatency` | `blogflow_overlay_resolve_duration_seconds` p99 > 5 ms for 10 min | 🟡 Warning | Check disk I/O; verify OS page cache is warm; check for inode exhaustion |
-| `OverlayDefaultsOnly` | `blogflow_overlay_layer_hit_total{layer="theme"}` rate = 0 for 30 min | 🟡 Warning | Theme layer may be missing or empty; verify volume mount |
+| `OverlayDefaultsOnly` | `blogflow_overlay_layer_configured{layer="theme"} == 1 AND blogflow_overlay_layer_hit_total{layer="theme"}` rate = 0 for 30 min | 🟡 Warning | Theme layer may be missing or empty; verify volume mount. Only fires when a theme layer is explicitly configured. Zero-config deployments (no theme path) do not trigger this alert. |
 | `OverlayNegCacheHighWatermark` | `blogflow_overlay_negcache_size` > 75K entries for 5 min | 🟡 Warning | Investigate path diversity; consider increasing limit or adding HTTP rate limiting |
 | `OverlayContentLayerUnavailable` | `blogflow_overlay_layer_hit_total{layer="content"}` rate = 0 for 10 min | 🔴 Critical | Content layer missing — blog posts not serving; check git-sync, PVC status |
 | `OverlayLayerIOErrors` | `blogflow_overlay_layer_error_total` rate > 0 for 5 min | 🟠 High | Infrastructure errors on a layer; check disk, NFS, permissions |
+| `OverlayInvalidationRateAnomaly` | rate(blogflow_overlay_invalidation_total[5m]) > 1/sec sustained for 5 min | 🟡 Warning | Investigate fsnotify watcher or git-sync poll configuration; possible watcher runaway loop |
 
 ---
 
@@ -710,7 +772,7 @@ The overlay FS is a foundational library component — it is not deployed indepe
 1. **Phase 1 — Library implementation**: Implement `OverlayFS` with full test coverage. Merge to `main` via PR.
 2. **Phase 2 — Integration**: Wire overlay FS into config loader, theme engine, and content pipeline. Each integration is a separate PR. Pre-condition: embed.FS defaults directory must contain at minimum one template and one config default before Phase 2 integration PRs are merged.
 3. **Phase 3 — Default theme**: Populate `defaults/` with the embedded default theme and config. Verify the binary works with zero external files.
-4. **Phase 4 — Hot-reload**: Add `InvalidateLayer` integration with fsnotify and git-sync watcher.
+4. **Phase 4 — Hot-reload**: Add `ReplaceLayer` integration with git-sync symlink-swap detection and `InvalidateLayer` integration with fsnotify for in-place file edits.
 
 Since this is a library, there is no canary or blue-green deployment. Quality is ensured by test coverage, benchmarks, and integration testing in the CI pipeline.
 
@@ -759,7 +821,7 @@ graph LR
 ### 8.5 Launch Checklist
 
 - [ ] All acceptance criteria from §3.4 are met
-- [ ] Unit tests pass with `go test -race ./internal/theme/overlayfs/...`
+- [ ] Unit tests pass with `go test -race ./internal/overlayfs/...`
 - [ ] Benchmarks pass thresholds defined in §4.6
 - [ ] `go vet` and `staticcheck` report no issues
 - [ ] Integration test: binary starts with only `embed.FS` defaults (zero external files)
