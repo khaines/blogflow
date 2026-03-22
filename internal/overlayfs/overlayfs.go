@@ -240,6 +240,9 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			}
 			data, err := rfs.ReadFile(name)
 			if err == nil {
+				if len(data) > maxReadSize {
+					return nil, fmt.Errorf("overlayfs: file %q exceeds maximum read size of %d bytes", name, maxReadSize)
+				}
 				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
 					if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
 						firstCandidateLayer: i,
@@ -371,6 +374,13 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 			// Fallback: open and stat
 			f, err := layers[i].Open(name)
 			if err == nil {
+				// S1: Check symlink escape for disk layers
+				if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+					if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+						f.Close()
+						return nil, symlinkErr
+					}
+				}
 				info, statErr := f.Stat()
 				f.Close()
 				if statErr == nil {
@@ -476,6 +486,13 @@ func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
 	for i := 0; i < len(layers); i++ {
 		f, err := layers[i].Open(name)
 		if err == nil {
+			// S1: Check symlink escape for disk layers
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+					f.Close()
+					return nil, symlinkErr
+				}
+			}
 			f.Close()
 			layerName := fmt.Sprintf("layer-%d", i)
 			if i < len(names) {
