@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-BlogFlow is a compact, highly efficient blog engine written in Go. All configuration, content, themes, and templates are driven through a gitflow process. The engine binary ships with sensible defaults (theme, CSS, templates, sample pages) compiled in via `embed.FS` — users only need to provide markdown files to have a working blog. For teams, content and theme repos are managed separately with full gitflow branching (feature → develop → release → main).
+BlogFlow is a compact, highly efficient blog engine written in Go. All configuration, content, themes, and templates are driven through a git-based workflow. The engine binary ships with sensible defaults (theme, CSS, templates, sample pages) compiled in via `embed.FS` — users only need to provide markdown files to have a working blog. For teams, content and theme repos are managed separately with feature branches and PRs to `main`.
 
 ## Architecture Summary
 
@@ -122,7 +122,7 @@ theme-name/
 - **Immutable core**: Binary works standalone with zero external files
 - **Progressive customization**: Level 0 (just markdown) → Level 1 (add config) → Level 2 (custom theme dir) → Level 3 (full gitflow repos)
 - **Webhook-driven rebuild**: Push → HMAC validate → go-git pull → re-index → serve
-- **Environment promotion**: develop → staging → main (no branch-per-environment)
+- **Trunk-based development**: `main` is gold — always deployable. Feature branches + PRs for all changes.
 
 ### Security Principles
 

@@ -30,7 +30,7 @@ Coordinate BlogFlow's multi-phase development plan and cross-repo execution, ens
   8. **Repos** — Content repo template, theme repo template, documentation site, quick-start guides
 - **Phase dependencies**: Foundation before Content (overlay FS needed). Content before Server (content pipeline feeds HTTP routes). Server before Theme (templates need server-side rendering). Foundation before GitOps (config system needed). GitOps before Container (sync strategy needed for deployment). Theme before Repos (default theme needed for content repo template).
 - **Multi-repo coordination**: The engine repo is the primary codebase. Content and theme repos are seeded from templates in the engine repo. Changes to the template system in the engine repo may require corresponding changes to the theme repo. Webhook integration requires coordination between engine (handler) and content (GitHub webhook config).
-- **Gitflow branching**: All three repos use gitflow — `main` is production, `develop` is integration, feature branches for work-in-progress. Release branches for version cuts. This means cross-repo features may need coordinated branch merges.
+- **Trunk-based development**: All three repos use trunk-based development — `main` is always deployable. Feature branches for work-in-progress, PRs for review, merge to `main` for release. This means cross-repo features are coordinated via PR timing, not branch merges.
 
 ## Decision Heuristics
 
