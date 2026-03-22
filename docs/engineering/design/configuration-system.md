@@ -1,6 +1,6 @@
 # Configuration System — Design Document
 
-> **Status**: Draft  
+> **Status**: In Review  
 > **Author**: Cloud-Native Distributed Systems Architect  
 > **Reviewers**: Cloud-Native Security SME, Cloud-Native Systems Engineer, Cloud-Native SRE  
 > **Last Updated**: 2026-03-22  
@@ -137,6 +137,17 @@ sequenceDiagram
     Main->>Main: Pass Config to server, theme, content, gitops
 ```
 
+#### Merge Strategy
+
+The config system uses a **two-phase unmarshal** to merge embedded defaults with user-supplied configuration:
+
+1. **Phase 1 — Load defaults**: The embedded `defaults.yaml` is unmarshalled into a `Config` struct. This populates every field with sensible default values.
+2. **Phase 2 — Overlay user config**: If a disk `site.yaml` exists, it is unmarshalled **over the same `Config` struct**. Go's `yaml.v3` Decoder only overwrites fields present in the YAML document — fields absent from `site.yaml` retain their default values from Phase 1.
+
+This means a partial `site.yaml` (e.g., containing only `site.title`) is valid: the title comes from disk, and all other fields use embedded defaults. The overlay FS determines *which file* to read (disk wins if present); the two-phase unmarshal determines *how fields are merged*.
+
+> **Note**: This is NOT the overlay FS merge — the overlay FS returns a single file. The field-level merge happens within the config loader by unmarshalling twice into the same struct.
+
 #### Error Path — Validation Failure
 
 ```mermaid
@@ -214,9 +225,9 @@ type AuthorConfig struct {
 }
 
 type ContentConfig struct {
-    PostsDir      string `yaml:"posts_dir"       validate:"required,filepath"`
-    PagesDir      string `yaml:"pages_dir"       validate:"required,filepath"`
-    MediaDir      string `yaml:"media_dir"       validate:"required,filepath"`
+    PostsDir      string `yaml:"posts_dir"       validate:"required,relpath"`
+    PagesDir      string `yaml:"pages_dir"       validate:"required,relpath"`
+    MediaDir      string `yaml:"media_dir"       validate:"required,relpath"`
     PostsPerPage  int    `yaml:"posts_per_page"  validate:"required,min=1,max=100"`
     DateFormat    string `yaml:"date_format"     validate:"required"`
     SummaryLength int    `yaml:"summary_length"  validate:"required,min=50,max=1000"`
@@ -250,7 +261,7 @@ type WebhookConfig struct {
     AllowedEvents []string `yaml:"allowed_events" validate:"dive,oneof=push ping"`
     BranchFilter  string   `yaml:"branch_filter"  validate:"max=250"`
     IPAllowlist   bool     `yaml:"ip_allowlist"`
-    RateLimit     int      `yaml:"rate_limit"     validate:"min=1,max=100"`
+    RateLimit     int      `yaml:"rate_limit"     validate:"min=1,max=100"` // requests per minute
 }
 
 type FeedConfig struct {
@@ -259,6 +270,12 @@ type FeedConfig struct {
     Items   int    `yaml:"items" validate:"min=1,max=100"`
 }
 ```
+
+> **Immutability convention**: The `Config` struct returned by `Get()` is treated as immutable by convention. Fields are exported for read access but consumers MUST NOT modify the returned struct. The `atomic.Pointer` swap ensures each `Get()` returns a consistent snapshot.
+
+> **Logging redaction**: The `Config` struct implements `slog.LogValuer` to redact sensitive fields (webhook secret, any field matching secret patterns). When logged via structured logging, secret values appear as `[REDACTED]`.
+
+> **Path validation**: Directory path fields (`PostsDir`, `PagesDir`, `MediaDir`) use a custom `relpath` validator that rejects absolute paths (no leading `/`) and paths containing `..` components. The overlay FS provides ultimate containment, but schema-level validation provides defense in depth.
 
 #### YAML Schema — `site.yaml`
 
@@ -386,7 +403,9 @@ type Loader struct {
 
 // NewLoader creates a config loader with a 2-layer overlay FS
 // (config directory + embedded defaults). If configPath is empty,
-// only the embedded defaults layer is used.
+// only the embedded defaults layer is used. NewLoader eagerly loads
+// embedded defaults so that Get() always returns a non-nil Config,
+// even before Load() is called.
 func NewLoader(configPath string, defaults embed.FS, logger *slog.Logger) (*Loader, error)
 
 // Load reads site.yaml through the overlay FS, applies env var
@@ -400,12 +419,18 @@ func (l *Loader) Load(ctx context.Context) (*Config, error)
 func (l *Loader) Reload(ctx context.Context) (*Config, error)
 
 // Get returns the current immutable Config. Safe for concurrent use.
+// Get() never returns nil. Before external config is loaded via Load(),
+// it returns the embedded defaults populated by NewLoader.
 func (l *Loader) Get() *Config
 
 // OnChange registers a callback invoked after a successful reload.
 // Callbacks receive the new Config. Used by the HTTP server and
 // content pipeline to react to config changes.
-func (l *Loader) OnChange(fn func(*Config))
+// OnChange callbacks are invoked with panic recovery — a panicking
+// callback is logged at ERROR and automatically deregistered.
+// Callbacks have a 5-second timeout; slow callbacks are logged at WARN.
+// Returns a cancel function to deregister the callback.
+func (l *Loader) OnChange(fn func(*Config)) (cancel func())
 
 // Validate checks a Config for structural and semantic correctness.
 // Returns a ConfigError with all validation failures.
@@ -473,6 +498,10 @@ Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths t
 | `slog` (stdlib) | Library | In-process | N/A (logging) |
 | `internal/gitops` | Internal | Callback (reload trigger) | If watcher unavailable, reload disabled; log WARN |
 
+> **Go version**: Go 1.22+ required (inherited from `internal/overlayfs` — see REQ-OFS-008).
+
+> **Reload debounce contract**: `internal/gitops` must debounce file-change events to ≤ 1/second. Additionally, the config loader enforces a minimum reload interval of 100ms as self-protection. Reload requests within this window are coalesced — only the last one takes effect. This prevents reload flooding from rapid fsnotify events or misconfigured watchers.
+
 ### 2.7 Content Integrity & Isolation
 
 **Config layer isolation**: The config system constructs its own 2-layer overlay FS using only the config directory and embedded defaults. It deliberately excludes the theme and content layers. This prevents a compromised content or theme repository from injecting or overriding a `site.yaml` file that alters engine behavior. The isolation boundary is enforced in `NewLoader` — it calls `overlayfs.NewOverlayFS(configLayer, defaultsLayer)` directly, never `overlayfs.NewFromPaths` which constructs the full 4-layer stack.
@@ -481,9 +510,17 @@ Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths t
 
 **Secret pattern detection**: Before unmarshalling, the raw YAML bytes are scanned for patterns known to be secrets:
 - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`
+- GitHub fine-grained PATs: `github_pat_`
+- GitLab tokens: `glpat-`
+- Slack tokens: `xoxb-`, `xoxp-`
+- OpenAI / generic API keys: `sk-`
 - Generic secrets: strings matching `-----BEGIN.*PRIVATE KEY-----`
 - AWS keys: strings matching `AKIA[0-9A-Z]{16}`
+- Connection strings: `dsn://`, `postgres://`, `mysql://`, `redis://`
+- Keyword patterns: `password`, `secret`, `token`, `credential`, `apikey`, `api_key` appearing as YAML values
 - Webhook secret placeholders: `${BLOGFLOW_WEBHOOK_SECRET}` (operator mistake — meant to use env var, accidentally put in YAML)
+
+> **Note**: This list is intentionally non-exhaustive. It is supplemented by a recommended git pre-commit hook (e.g., gitleaks) for broader coverage.
 
 If any pattern is detected, config loading fails with a `SecretInYAMLError` directing the operator to use environment variables instead.
 
@@ -535,6 +572,8 @@ If any pattern is detected, config loading fails with a `SecretInYAMLError` dire
 | 19 | Concurrent Get during Reload | Multiple goroutines call `Get()` while `Reload()` runs | No race; `Get()` returns either old or new config atomically |
 | 20 | Empty config file | `site.yaml` exists but is 0 bytes | Falls through to embedded defaults (empty file yields zero-value struct, defaults fill in) |
 | 21 | Invalid feed type | `feed.type: "json"` | Return `FieldError{Field: "feed.type", Message: "must be one of: atom, rss"}` |
+| 22 | Webhook secret too short | `BLOGFLOW_WEBHOOK_SECRET=abc` (< 32 bytes) | Return `FieldError{Field: "sync.webhook.secret", Message: "must be ≥ 32 bytes (256 bits)"}` — startup fails |
+| 23 | Logging Config does not expose secrets | Config loaded with webhook secret set | `slog.AnyValue(cfg)` output does not contain the literal webhook secret value |
 
 ### 3.3 Integration Test Boundaries
 
@@ -664,12 +703,13 @@ The config system does not handle authentication or authorization. It is an inte
 | Type conversion | `strconv.Atoi`, `time.ParseDuration`, `strconv.ParseBool` | Type confusion from string env vars |
 | Same struct tag validation | Env-overridden fields pass through the same `Validate()` | Env vars bypassing YAML validation |
 | Prefix enforcement | Only `BLOGFLOW_*` vars are read | Namespace collision with other process env vars |
+| Webhook secret entropy | `BLOGFLOW_WEBHOOK_SECRET` must be ≥ 32 bytes (256 bits) | Trivially brute-forceable HMAC secret; startup fails with clear error if too short |
 
 ### 5.4 Content Integrity
 
 **Config isolation from content/theme repos**: The most critical security property of the config system is that it reads ONLY from the config and defaults layers. A compromised content or theme repository cannot inject a `site.yaml` that changes the server port, disables webhook signature verification, or alters sync behavior. This is enforced architecturally — `NewLoader` constructs a 2-layer overlay, not a 4-layer overlay.
 
-**YAML bomb protection**: The 1 MB file size limit is checked on the raw bytes before YAML parsing begins. This prevents YAML alias expansion bombs (billion laughs attack) from consuming unbounded memory during parsing.
+**YAML anchor/alias rejection**: Config files containing YAML anchors (`&`) or aliases (`*`) are rejected during the pre-validation scan. Legitimate BlogFlow config files have no reason to use YAML anchors. This eliminates billion-laughs/alias expansion attacks entirely. The 1 MB file size limit provides an additional safeguard against oversized payloads.
 
 **No template execution in config**: Config values are never passed through `text/template` or `html/template`. The `${BLOGFLOW_WEBHOOK_SECRET}` syntax in YAML is **not** variable interpolation — it is detected as a secret pattern and rejected. Env var values are applied programmatically, not via string substitution.
 
@@ -732,7 +772,7 @@ graph LR
 | **T**ampering | ✅ | Attacker modifies `site.yaml` to change server behavior (e.g., disable webhook signature verification, change port to expose an unmonitored port) | Config volume mounted read-only in production; git-backed config with PR review; validation rejects dangerous combinations; env var overrides for critical settings |
 | **R**epudiation | ✅ | Config change goes unnoticed — operator denies responsibility | Config loaded from git-tracked file (audit trail); reload events logged with source and diff summary; metrics track reload count |
 | **I**nformation Disclosure | ✅ | Secrets accidentally committed to `site.yaml` and pushed to git | Secret pattern detection rejects config at load time; `WebhookConfig.Secret` uses `yaml:"-"` tag (never read from YAML); secret fields excluded from config dump/log output |
-| **D**enial of Service | ✅ | YAML bomb (alias expansion) or oversized config file exhausts memory/CPU | 1 MB file size limit enforced before parsing; strict unmarshalling bounds field count; YAML alias depth is bounded by `yaml.v3` defaults |
+| **D**enial of Service | ✅ | YAML bomb (alias expansion) or oversized config file exhausts memory/CPU | 1 MB file size limit enforced before parsing; strict unmarshalling bounds field count; YAML anchors (`&`) and aliases (`*`) rejected during pre-validation scan — eliminates alias expansion attacks entirely |
 | **E**levation of Privilege | ✅ | Content repo places `site.yaml` in content directory to override operator config | Config reads ONLY from config + defaults layers (2-layer overlay); content and theme layers excluded; architectural enforcement in `NewLoader` |
 
 ### 6.4 Mitigations & Residual Risks
@@ -741,7 +781,7 @@ graph LR
 |--------|-----------|---------------|
 | Config tampering via volume | Read-only volume mount; git-backed config; PR review | **Low** — if K8s RBAC compromised, attacker can remount volume writable. Mitigated by cluster-level controls. |
 | Secret in YAML | Pattern detection; `yaml:"-"` struct tag; load-time rejection | **Low** — patterns may miss novel secret formats. Mitigated by operator education and git pre-commit hooks. |
-| YAML bomb | 1 MB size limit; `yaml.v3` bounded alias expansion | **Low** — `yaml.v3` does not have unbounded alias expansion like some parsers. Size limit is an additional safeguard. |
+| YAML bomb | 1 MB size limit; YAML anchors (`&`) and aliases (`*`) rejected during pre-validation scan | **Negligible** — anchor/alias rejection eliminates the alias expansion attack vector entirely. Size limit prevents oversized payloads. |
 | Layer shadowing (EoP) | 2-layer overlay (config + defaults only) | **Negligible** — content and theme layers architecturally excluded from config loading path. |
 | Env var injection | Requires container-level access (K8s RBAC) | **Accepted** — if attacker has container access, they have broader capabilities. Config validation still applies to env-overridden values. |
 | Config reload with malicious file | Validation on reload; old config preserved on failure | **Low** — validated config only; invalid config never activates. |
@@ -753,6 +793,10 @@ graph LR
 ### 7.1 Logging Strategy
 
 All log entries include `component="config"` for filtering. Secret values are **never** logged — the `WebhookConfig.Secret` field is redacted in all log output.
+
+> **Secret redaction in env override logs**: WARN logs for env var overrides redact values for secret-pattern fields. The log shows the field path and `value=REDACTED`, never the actual value. Secret-only env vars (`BLOGFLOW_WEBHOOK_SECRET`, `BLOGFLOW_GIT_TOKEN`, `BLOGFLOW_GIT_SSH_KEY`) are logged as: `"env var applied" var="BLOGFLOW_WEBHOOK_SECRET" field="sync.webhook.secret" value=REDACTED`.
+
+> **Changed-fields diff algorithm**: The changed-fields diff compares field paths (e.g., `server.port`, `feed.enabled`) without logging values. Only the field path and old≠new boolean are recorded, never the actual values. This prevents accidental secret leakage in structured logs.
 
 | Log Level | When Used | Example |
 |-----------|-----------|---------|
@@ -805,7 +849,7 @@ Config spans are children of the startup trace (for `Load`) or the fsnotify even
 | `ConfigReloadFailure` | `blogflow_config_reload_total{status="failure"}` > 0 in 5 min | 🟠 High | Check config file validity; review recent git commits to config repo; validate YAML syntax |
 | `ConfigSecretInYAML` | `blogflow_config_secret_rejected_total` > 0 | 🔴 Critical | Secret committed to config file — rotate the secret immediately; remove from git history; review config repo access |
 | `ConfigLoadSlowStartup` | `blogflow_config_load_duration_seconds` p99 > 1s | 🟡 Warning | Check disk I/O; verify config volume mount; check for NFS latency |
-| `ConfigReloadRateAnomaly` | `rate(blogflow_config_reload_total[5m])` > 1/sec sustained for 5 min | 🟡 Warning | Investigate fsnotify watcher; possible config file write loop |
+| `ConfigReloadRateAnomaly` | `rate(blogflow_config_reload_total[5m])` > 5/sec sustained for 5 min | 🟡 Warning | Investigate fsnotify watcher; possible config file write loop |
 
 ---
 
@@ -878,8 +922,12 @@ graph LR
 - [ ] Documentation: GoDoc comments on all exported types and functions
 - [ ] No TODO or FIXME comments left in production code
 
+> **Startup deadline**: `Load(ctx)` should be called with a 10-second context deadline. This prevents indefinite hangs on slow volumes (e.g., NFS). See overlay FS §4.2 for NFS latency considerations.
+
 **Operational Readiness:**
 - [ ] Runbook created for config failure scenarios (invalid YAML, secret in file, reload failure)
+
+> **Note**: Runbook to be created during operational readiness at `docs/runbooks/config-system.md` with sections for: invalid YAML at startup, secret-in-YAML detection, reload loop, and volume unavailable.
 - [ ] Alert rules deployed and smoke-tested in staging
 - [ ] Dashboard deployed and functional in staging
 - [ ] Graceful degradation tested: config volume missing, only embedded defaults serve
@@ -894,7 +942,7 @@ graph LR
 | 1 | Should config support multiple YAML files (e.g., `site.yaml` + `theme.yaml`) or a single file? | ✅ Resolved | Single file (`site.yaml`). Keeps the schema simple and avoids merge-order ambiguity. Theme-specific settings live under the `theme:` key. |
 | 2 | Should env var overrides use flat naming (`BLOGFLOW_SERVER_PORT`) or nested (`BLOGFLOW_SERVER__PORT`)? | ✅ Resolved | Flat underscore naming: `BLOGFLOW_SERVER_PORT`. Double-underscore is error-prone and unusual. Flat works because the YAML schema has no ambiguous paths. |
 | 3 | Should the config system support `.env` file loading? | ✅ Resolved | No. `.env` files are a development convenience handled by the shell or Docker Compose. The config system reads only `os.Getenv()`. Operators who want `.env` support use `direnv`, `dotenv`, or K8s `envFrom`. |
-| 4 | Should `Reload()` diff the old and new config and only notify subscribers of changed sections? | 🟡 Open | Under consideration. Current design notifies all subscribers with the full new Config. Granular notifications add complexity — may be needed if reload triggers expensive operations (e.g., template re-parse). Defer to implementation phase. |
+| 4 | Should `Reload()` diff the old and new config and only notify subscribers of changed sections? | ✅ Resolved | Yes — `Reload()` computes a changed-fields diff (field paths only, no values) and includes it in the INFO log and reload trace span. All subscribers still receive the full new Config (granular per-section notification deferred). See §7.1 for the diff algorithm. |
 | 5 | Should the config system validate that `content.posts_dir` and related paths actually exist at startup? | ✅ Resolved | No. The config system validates the config schema. Directory existence is validated by the content pipeline when it initializes. Separation of concerns — config validates structure, consumers validate runtime preconditions. |
 | 6 | Should `defaults.yaml` be a separate file in `embed.FS` or should defaults be defined as Go struct literal zero-values? | ✅ Resolved | Separate YAML file in `defaults/config/defaults.yaml`. This keeps defaults human-readable, inspectable, and consistent with the overlay FS architecture. Go struct zero-values are not meaningful defaults (e.g., `int` zero is not a valid port). |
 
