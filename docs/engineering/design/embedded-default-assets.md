@@ -1,6 +1,6 @@
 # Embedded Default Assets — Design Document
 
-> **Status**: In Review  
+> **Status**: Approved  
 > **Author**: Cloud-Native Front-End Engineer  
 > **Reviewers**: Cloud-Native Distributed Systems Architect, Cloud-Native Security SME, Cloud-Native Systems Engineer, Cloud-Native SRE  
 > **Last Updated**: 2026-03-22  
@@ -462,7 +462,7 @@ No scaling needed. Embedded assets are compiled into every replica of the BlogFl
 | Storage | 0 (in binary) | Assets are compiled into the binary; no runtime storage |
 | Binary size impact | < 100 KB | Acceptable for a 15 MB binary (< 1% increase) |
 
-**Binary size CI enforcement:** CI validates that the compiled binary with embedded defaults does not exceed 15 MB. The embedded assets budget is < 100 KB. A CI step runs `du -sh defaults/` and fails if it exceeds 500 KB (generous headroom for future additions like more themes). Additionally, the following test enforces the budget:
+**Binary size CI enforcement:** CI validates that the compiled binary with embedded defaults does not exceed 15 MB. The embedded assets budget is < 100 KB. A CI step runs `du -sh defaults/` and fails if it exceeds 500 KB (generous headroom for future additions like more themes). The 100 KB unit test enforces the current single-theme asset budget; the 500 KB CI check is the hard ceiling planned for future theme additions. Raising the unit test threshold requires a PR comment citing the architectural decision. Additionally, the following test enforces the budget:
 
 ```go
 func TestEmbeddedTotalSize(t *testing.T) {
