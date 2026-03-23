@@ -289,13 +289,13 @@ func TestReload_ConcurrentWithRender(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				e.RenderToString("templates/t.html", nil)
+				_, _ = e.RenderToString("templates/t.html", nil)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				e.Reload()
+				_ = e.Reload()
 			}
 		}()
 	}
