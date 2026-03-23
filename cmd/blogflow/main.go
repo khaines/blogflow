@@ -133,6 +133,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wire up content directory for file-watching sync
+	if ws, ok := syncStrategy.(*gitops.WatchStrategy); ok && *contentPath != "" {
+		ws.SetDirs(*contentPath)
+	}
+
 	// 10. Register routes
 	staticFS, fsErr := fs.Sub(contentOverlay, "static")
 	if fsErr != nil {
@@ -157,14 +162,14 @@ func main() {
 	}
 	srv.RegisterRoutes(routeOpts)
 
-	// 11. Start sync strategy
+	// 11. Start sync strategy (non-fatal: a blog with embedded defaults has nothing to watch)
 	syncCtx, syncCancel := context.WithCancel(context.Background())
 	if err := syncStrategy.Start(syncCtx); err != nil {
-		logger.Error("failed to start sync strategy", "error", err)
-		syncCancel()
-		os.Exit(1)
+		logger.Warn("sync strategy disabled — content will not auto-reload",
+			"strategy", syncStrategy.Name(), "reason", err)
+	} else {
+		logger.Info("sync strategy started", "strategy", syncStrategy.Name())
 	}
-	logger.Info("sync strategy started", "strategy", syncStrategy.Name())
 
 	// 12. Graceful shutdown on SIGINT/SIGTERM
 	go func() {

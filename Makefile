@@ -32,14 +32,15 @@ dev: build
 smoke-test: docker
 	@set -e; \
 	CONTAINER="blogflow-smoke-$$$$"; \
-	BASE="http://localhost:8080"; \
 	PASS=0; FAIL=0; \
 	cleanup() { docker rm -f "$$CONTAINER" >/dev/null 2>&1 || true; }; \
 	trap cleanup EXIT; \
-	docker run -d --name "$$CONTAINER" -p 8080:8080 blogflow; \
+	docker run -d --name "$$CONTAINER" -p 0:8080 blogflow; \
+	PORT=$$(docker port "$$CONTAINER" 8080 | head -1 | cut -d: -f2); \
+	BASE="http://localhost:$$PORT"; \
 	echo "⏳ Waiting for container to be healthy..."; \
 	for i in $$(seq 1 20); do \
-		if curl -sf "$$BASE/healthz" >/dev/null 2>&1; then \
+		if curl -sf --max-time 2 "$$BASE/healthz" >/dev/null 2>&1; then \
 			echo "✅ Container healthy"; break; \
 		fi; \
 		if [ "$$i" -eq 20 ]; then \
@@ -49,9 +50,10 @@ smoke-test: docker
 	done; \
 	check() { \
 		local url="$$1" expected_status="$$2" body_match="$$3" label="$$4"; \
-		local status body; \
-		status=$$(curl -s -o /dev/null -w '%{http_code}' "$$url"); \
-		body=$$(curl -sf "$$url" 2>/dev/null || true); \
+		local response status body; \
+		response=$$(curl -s -w '\n%{http_code}' --max-time 5 --connect-timeout 3 "$$url"); \
+		status=$$(echo "$$response" | tail -1); \
+		body=$$(echo "$$response" | sed '$$d'); \
 		if [ "$$status" != "$$expected_status" ]; then \
 			echo "❌ $$label — expected $$expected_status, got $$status"; \
 			FAIL=$$((FAIL + 1)); return; \
@@ -64,7 +66,7 @@ smoke-test: docker
 	}; \
 	echo ""; echo "🧪 Running smoke tests..."; \
 	check "$$BASE/healthz"     200 "ok"       "GET /healthz → 200"; \
-	check "$$BASE/readyz"      200 "ok"       "GET /readyz → 200"; \
+	check "$$BASE/readyz"      200 "ready"    "GET /readyz → 200"; \
 	check "$$BASE/"            200 "BlogFlow" "GET / → 200 (home page)"; \
 	check "$$BASE/feed.xml"    200 "xml"      "GET /feed.xml → 200 (feed)"; \
 	check "$$BASE/metrics"     200 "go_"      "GET /metrics → 200 (prometheus)"; \
