@@ -126,7 +126,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
 				rw.WriteHeader(http.StatusOK)
-				fmt.Fprint(rw, "accepted (no action)")
+				_, _ = fmt.Fprint(rw, "accepted (no action)")
 				return
 			}
 		}
@@ -140,7 +140,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 
 		w.logger.Info("content reloaded via webhook")
 		rw.WriteHeader(http.StatusOK)
-		fmt.Fprint(rw, "ok")
+		_, _ = fmt.Fprint(rw, "ok")
 	}
 }
 
@@ -164,7 +164,17 @@ func verifySignature(secret, payload []byte, sigHeader string) bool {
 }
 
 // remoteIP extracts the client IP from the request, stripping the port.
+// remoteIP extracts the client IP from the request.
+// Checks X-Forwarded-For first (for reverse-proxy deployments), falls back to RemoteAddr.
 func remoteIP(r *http.Request) string {
+	// Trust X-Forwarded-For if present (standard reverse proxy header).
+	// Takes the first (leftmost) IP — the original client.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if idx := strings.Index(xff, ","); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx != -1 {
 		return addr[:idx]
@@ -196,13 +206,17 @@ func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	// Prevent unbounded growth of the clients map.
-	if len(rl.clients) > 10_000 {
-		rl.clients = make(map[string][]time.Time)
-	}
-
 	now := time.Now()
 	cutoff := now.Add(-rl.window)
+
+	// Periodic eviction: sweep stale entries when map grows large.
+	if len(rl.clients) > 1000 {
+		for k, timestamps := range rl.clients {
+			if len(timestamps) == 0 || timestamps[len(timestamps)-1].Before(cutoff) {
+				delete(rl.clients, k)
+			}
+		}
+	}
 
 	timestamps := rl.clients[ip]
 	valid := timestamps[:0]

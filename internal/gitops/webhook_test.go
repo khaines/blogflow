@@ -317,3 +317,55 @@ func TestWebhookHandler_InvalidPath(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookHandler_XForwardedFor(t *testing.T) {
+	secret := []byte("test-secret-min-32-bytes-long!!!!")
+	called := 0
+	reloader := func() error { called++; return nil }
+
+	cfg := config.WebhookConfig{
+		Path:         "/api/webhook",
+		Secret:       string(secret),
+		BranchFilter: "main",
+		RateLimit:    1,
+	}
+
+	ws, err := gitops.NewWebhookStrategy(cfg, reloader, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := ws.Handler()
+	payload := []byte(`{"ref":"refs/heads/main"}`)
+	sig := signPayload(secret, payload)
+
+	// First request from "10.0.0.1" via XFF — should pass
+	req1 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
+	req1.Header.Set("X-Hub-Signature-256", sig)
+	req1.Header.Set("X-Forwarded-For", "10.0.0.1")
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first XFF request: expected 200, got %d", rec1.Code)
+	}
+
+	// Second from same XFF IP — rate limited
+	req2 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
+	req2.Header.Set("X-Hub-Signature-256", sig)
+	req2.Header.Set("X-Forwarded-For", "10.0.0.1")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("same XFF IP: expected 429, got %d", rec2.Code)
+	}
+
+	// Third from different XFF IP — should pass
+	req3 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
+	req3.Header.Set("X-Hub-Signature-256", sig)
+	req3.Header.Set("X-Forwarded-For", "10.0.0.2")
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("different XFF IP: expected 200, got %d", rec3.Code)
+	}
+}
