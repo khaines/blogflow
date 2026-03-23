@@ -1,8 +1,12 @@
-name: Release
+name: Publish
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -10,8 +14,8 @@ permissions:
   security-events: write
 
 jobs:
-  release:
-    name: Build & Push
+  publish:
+    name: Build & Publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +25,7 @@ jobs:
           go-version: '1.26'
 
       - name: Test
-        run: go test -v -count=1 -race ./...
+        run: go test -count=1 -race ./...
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -39,10 +43,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=main
+            type=sha,prefix=sha-,format=short
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -52,11 +54,13 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Scan image for critical/high vulnerabilities
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          image-ref: ghcr.io/${{ github.repository }}:main
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
@@ -65,7 +69,7 @@ jobs:
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         if: always()
         with:
-          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          image-ref: ghcr.io/${{ github.repository }}:main
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
