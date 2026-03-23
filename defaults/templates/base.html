@@ -4,13 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'">
+          content="default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self' https: data:; font-src 'self' https:; base-uri 'self'; form-action 'self'">
     <title>{{block "title" .}}{{.Site.Title}}{{end}}</title>
-    <meta name="description" content="{{.Site.Description}}">
+    <meta name="description" content="{{block "meta_description" .}}{{.Site.Description}}{{end}}">
     <meta property="og:title" content="{{block "og_title" .}}{{.Site.Title}}{{end}}">
     <meta property="og:description" content="{{block "og_description" .}}{{.Site.Description}}{{end}}">
     <meta property="og:type" content="{{block "og_type" .}}website{{end}}">
-    <meta property="og:url" content="{{.Site.BaseURL}}">
+    <meta property="og:url" content="{{block "og_url" .}}{{.Site.BaseURL}}{{end}}">
     <link rel="icon" href="/static/images/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/css/main.css">
 </head>

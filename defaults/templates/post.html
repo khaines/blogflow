@@ -2,6 +2,8 @@
 {{define "og_title"}}{{.Post.Title}}{{end}}
 {{define "og_description"}}{{.Post.Description}}{{end}}
 {{define "og_type"}}article{{end}}
+{{define "og_url"}}{{.Post.URL}}{{end}}
+{{define "meta_description"}}{{.Post.Description}}{{end}}
 
 {{define "content"}}
 {{/* .Content must be template.HTML — caller is responsible for sanitizing markdown output before wrapping. */}}
