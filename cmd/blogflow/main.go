@@ -121,11 +121,7 @@ func main() {
 	srv := server.New(cfg, logger)
 
 	// 7. Build handler dependencies
-	deps := &handlers.Deps{
-		Config: cfg,
-		Index:  idx,
-		Theme:  themeEngine,
-	}
+	deps := handlers.NewDeps(cfg, idx, themeEngine)
 
 	// 8. Content reloader for sync strategies
 	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, logger)

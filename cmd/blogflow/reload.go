@@ -11,8 +11,8 @@ import (
 )
 
 // newContentReloader builds a ContentReloader that re-scans content from fsys
-// and flushes the render cache (if non-nil). The deps.Index pointer is updated
-// in place so existing HTTP handlers see fresh content on subsequent requests.
+// and flushes the render cache (if non-nil). The deps index is swapped
+// atomically so existing HTTP handlers see fresh content on subsequent requests.
 func newContentReloader(
 	scanner *content.Scanner,
 	fsys fs.FS,
@@ -25,12 +25,12 @@ func newContentReloader(
 		if err != nil {
 			return fmt.Errorf("content reload: %w", err)
 		}
-		deps.Index = newIdx
+		deps.SetIndex(newIdx)
 		logger.Info("content reloaded", "posts", len(newIdx.Posts), "pages", len(newIdx.Pages))
 
 		if cache != nil {
 			cache.InvalidateAll()
-			slog.Info("render cache flushed after content reload")
+			logger.Info("render cache flushed after content reload")
 		}
 		return nil
 	}

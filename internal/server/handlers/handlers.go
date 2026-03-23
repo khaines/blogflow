@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/content"
@@ -15,11 +16,26 @@ import (
 )
 
 // Deps holds shared dependencies for all handlers.
+// The content index is stored as an atomic pointer so that background
+// sync-strategy reloaders can swap it without racing with HTTP handlers.
 type Deps struct {
 	Config *config.Config
-	Index  *content.Index
+	index  atomic.Pointer[content.Index]
 	Theme  *theme.Engine
 }
+
+// NewDeps creates a Deps with the given dependencies.
+func NewDeps(cfg *config.Config, idx *content.Index, themeEngine *theme.Engine) *Deps {
+	d := &Deps{Config: cfg, Theme: themeEngine}
+	d.index.Store(idx)
+	return d
+}
+
+// LoadIndex returns the current content index. Safe for concurrent use.
+func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
+
+// SetIndex atomically replaces the content index. Safe for concurrent use.
+func (d *Deps) SetIndex(idx *content.Index) { d.index.Store(idx) }
 
 // PageData is the top-level data passed to all templates.
 type PageData struct {
@@ -47,10 +63,11 @@ type Pagination struct {
 // Route: GET /{$}
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		idx := deps.LoadIndex()
 		page := queryInt(r, "page", 1)
 		perPage := deps.Config.Content.PostsPerPage
 
-		paged, pag := paginate(deps.Index.Posts, page, perPage)
+		paged, pag := paginate(idx.Posts, page, perPage)
 
 		data := &PageData{
 			Site:       deps.Config.Site,
@@ -70,7 +87,8 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 
-		post, ok := deps.Index.BySlug[slug]
+		idx := deps.LoadIndex()
+		post, ok := idx.BySlug[slug]
 		if !ok {
 			NotFoundHandler(deps)(w, r)
 			return
@@ -93,7 +111,8 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 
-		page, ok := deps.Index.PageBySlug[slug]
+		idx := deps.LoadIndex()
+		page, ok := idx.PageBySlug[slug]
 		if !ok {
 			NotFoundHandler(deps)(w, r)
 			return
@@ -116,7 +135,8 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tag := r.PathValue("tag")
 
-		posts, ok := deps.Index.ByTag[tag]
+		idx := deps.LoadIndex()
+		posts, ok := idx.ByTag[tag]
 		if !ok || len(posts) == 0 {
 			NotFoundHandler(deps)(w, r)
 			return

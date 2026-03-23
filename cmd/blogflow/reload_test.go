@@ -43,7 +43,7 @@ func TestContentReloaderFlushesCache(t *testing.T) {
 		t.Fatalf("initial scan: %v", err)
 	}
 
-	deps := &handlers.Deps{Index: idx}
+	deps := handlers.NewDeps(nil, idx, nil)
 	reloader := newContentReloader(scanner, fs, deps, cache, slog.Default())
 
 	if err := reloader(); err != nil {
@@ -67,7 +67,7 @@ func TestContentReloaderNilCache(t *testing.T) {
 		t.Fatalf("initial scan: %v", err)
 	}
 
-	deps := &handlers.Deps{Index: idx}
+	deps := handlers.NewDeps(nil, idx, nil)
 	reloader := newContentReloader(scanner, fs, deps, nil, slog.Default())
 
 	// Must not panic with nil cache.
@@ -88,19 +88,19 @@ func TestContentReloaderUpdatesIndex(t *testing.T) {
 		t.Fatalf("initial scan: %v", err)
 	}
 
-	deps := &handlers.Deps{Index: idx}
+	deps := handlers.NewDeps(nil, idx, nil)
 	reloader := newContentReloader(scanner, fs, deps, nil, slog.Default())
 
 	if err := reloader(); err != nil {
 		t.Fatalf("reloader returned error: %v", err)
 	}
 
-	// deps.Index should be a fresh index (different pointer).
-	if deps.Index == idx {
-		t.Error("expected deps.Index to be updated to a new pointer after reload")
+	// deps index should be a fresh index (different pointer).
+	if deps.LoadIndex() == idx {
+		t.Error("expected deps index to be updated to a new pointer after reload")
 	}
 
-	if len(deps.Index.Posts) != 1 {
-		t.Errorf("expected 1 post after reload, got %d", len(deps.Index.Posts))
+	if len(deps.LoadIndex().Posts) != 1 {
+		t.Errorf("expected 1 post after reload, got %d", len(deps.LoadIndex().Posts))
 	}
 }
