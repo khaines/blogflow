@@ -4,10 +4,10 @@
 site:
   title: "My Blog"
   description: "A blog powered by BlogFlow"
-  base_url: "http://localhost:8080"
+  base_url: "https://localhost:8080"
   language: "en"
   author:
-    name: "Blog Author"
+    name: ""
     email: ""
 
 content:

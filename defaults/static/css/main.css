@@ -15,7 +15,7 @@
     --accent-hover: #1d4ed8;
     --border: #e2e4e9;
     --code-bg: #f1f3f5;
-    --code-text: #d6336c;
+    --code-text: #c2255c;
     --blockquote-border: #2563eb;
     --blockquote-bg: #f0f4ff;
     --tag-bg: #e8edff;
@@ -478,7 +478,7 @@ main {
 .chroma .sx,
 .chroma .sr,
 .chroma .s1,
-.chroma .ss { color: #059669; }
+.chroma .ss { color: #047857; }
 
 /* Number */
 .chroma .m,
@@ -487,7 +487,7 @@ main {
 .chroma .mh,
 .chroma .mi,
 .chroma .il,
-.chroma .mo { color: #d97706; }
+.chroma .mo { color: #b45309; }
 
 /* Comment */
 .chroma .c,
@@ -553,7 +553,7 @@ main {
     .chroma .c1,
     .chroma .cs,
     .chroma .cp,
-    .chroma .cpf { color: #71717a; }
+    .chroma .cpf { color: #8e8e99; }
 
     .chroma .o,
     .chroma .ow { color: #f472b6; }

@@ -7,13 +7,7 @@
     <article class="post-summary">
         <header>
             <h2><a href="{{.URL}}">{{.Title}}</a></h2>
-            <div class="post-meta">
-                <time datetime="{{.Date.Format "2006-01-02"}}">{{.Date.Format $.Site.DateFormat}}</time>
-                {{if .ReadingTime}}
-                <span class="post-meta-sep" aria-hidden="true">·</span>
-                <span>{{.ReadingTime}} min read</span>
-                {{end}}
-            </div>
+            {{template "post-meta" .}}
         </header>
         {{if .Summary}}<p class="summary">{{.Summary}}</p>{{end}}
     </article>
@@ -21,14 +15,5 @@
     <p>No posts yet. Add markdown files to your posts directory to get started.</p>
     {{end}}
 </section>
-{{if or .Pagination.HasPrev .Pagination.HasNext}}
-<nav class="pagination" aria-label="Page navigation">
-    {{if .Pagination.HasPrev}}
-    <a href="{{.Pagination.PrevURL}}" class="pagination-prev" rel="prev">&larr; Newer posts</a>
-    {{end}}
-    {{if .Pagination.HasNext}}
-    <a href="{{.Pagination.NextURL}}" class="pagination-next" rel="next">Older posts &rarr;</a>
-    {{end}}
-</nav>
-{{end}}
+{{template "pagination" .}}
 {{end}}

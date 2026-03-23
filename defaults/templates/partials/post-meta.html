@@ -1,0 +1,16 @@
+{{define "post-meta"}}
+<div class="post-meta">
+    <time datetime="{{.Date.Format "2006-01-02"}}">{{.Date.Format $.Site.DateFormat}}</time>
+    {{if .ReadingTime}}
+    <span class="post-meta-sep" aria-hidden="true">·</span>
+    <span>{{.ReadingTime}} min read</span>
+    {{end}}
+</div>
+{{if .Tags}}
+<div class="post-tags" role="list" aria-label="Tags">
+    {{range .Tags}}
+    <a href="/tags/{{.}}" class="tag" role="listitem">{{.}}</a>
+    {{end}}
+</div>
+{{end}}
+{{end}}

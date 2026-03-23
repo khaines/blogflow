@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'none'; object-src 'none'; style-src 'self' 'unsafe-inline'">
+          content="default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'">
     <title>{{block "title" .}}{{.Site.Title}}{{end}}</title>
     <meta name="description" content="{{.Site.Description}}">
     <meta property="og:title" content="{{.Site.Title}}">
@@ -13,16 +13,6 @@
     <meta property="og:url" content="{{.Site.BaseURL}}">
     <link rel="icon" href="/static/images/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/css/main.css">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                         Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-        }
-        code, pre {
-            font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
-                         Menlo, Consolas, "DejaVu Sans Mono", monospace;
-        }
-    </style>
 </head>
 <body>
     <a href="#main" class="skip-link">Skip to content</a>
