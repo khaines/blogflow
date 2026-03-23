@@ -173,12 +173,12 @@ func TestLoad_SecretInYAML(t *testing.T) { //nolint:gosec // test data intention
 	}{
 		{
 			name:    "GitHub token",
-			content: "site:\n  title: \"ghp_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEE\"",
+			content: "site:\n  title: \"ghp_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEE\"", //nolint:gosec // test data
 			pattern: "ghp_",
 		},
 		{
 			name:    "Private key",
-			content: "site:\n  title: \"-----BEGIN RSA PRIVATE KEY-----\"",
+			content: "site:\n  title: \"-----BEGIN RSA PRIVATE KEY-----\"", //nolint:gosec // test data
 			pattern: "private key",
 		},
 		{
@@ -188,7 +188,7 @@ func TestLoad_SecretInYAML(t *testing.T) { //nolint:gosec // test data intention
 		},
 		{
 			name:    "AWS key",
-			content: "site:\n  title: \"AKIAIOSFODNN7EXAMPLE\"",
+			content: "site:\n  title: \"AKIAIOSFODNN7EXAMPLE\"", //nolint:gosec // test data
 			pattern: "AWS",
 		},
 	}

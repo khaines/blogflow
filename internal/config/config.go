@@ -29,11 +29,13 @@ type SiteConfig struct {
 	Author      AuthorConfig `yaml:"author"`
 }
 
+// AuthorConfig holds the site author details.
 type AuthorConfig struct {
 	Name  string `yaml:"name"`
 	Email string `yaml:"email"`
 }
 
+// ContentConfig holds content directory and display settings.
 type ContentConfig struct {
 	PostsDir      string `yaml:"posts_dir"`
 	PagesDir      string `yaml:"pages_dir"`
@@ -43,11 +45,13 @@ type ContentConfig struct {
 	SummaryLength int    `yaml:"summary_length"`
 }
 
+// ThemeConfig holds theme selection settings.
 type ThemeConfig struct {
 	Name string `yaml:"name"`
 	Path string `yaml:"path"`
 }
 
+// ServerConfig holds HTTP server settings.
 type ServerConfig struct {
 	Port         int           `yaml:"port"`
 	ReadTimeout  time.Duration `yaml:"read_timeout"`
@@ -55,18 +59,21 @@ type ServerConfig struct {
 	IdleTimeout  time.Duration `yaml:"idle_timeout"`
 }
 
+// CacheConfig holds rendered content cache settings.
 type CacheConfig struct {
 	Enabled    bool          `yaml:"enabled"`
 	TTL        time.Duration `yaml:"ttl"`
 	MaxEntries int           `yaml:"max_entries"`
 }
 
+// SyncConfig holds content sync strategy settings.
 type SyncConfig struct {
 	Strategy string        `yaml:"strategy"`
 	Webhook  WebhookConfig `yaml:"webhook"`
 }
 
-// IP allowlisting is handled at the infrastructure layer (reverse proxy, K8s NetworkPolicy), not in the application.
+// WebhookConfig holds webhook receiver settings.
+// IP allowlisting is handled at the infrastructure layer (reverse proxy, K8s NetworkPolicy).
 type WebhookConfig struct {
 	Path          string   `yaml:"path"`
 	Secret        string   `yaml:"-"` // never from YAML — env var only
@@ -75,6 +82,7 @@ type WebhookConfig struct {
 	RateLimit     int      `yaml:"rate_limit"`
 }
 
+// FeedConfig holds RSS/Atom feed settings.
 type FeedConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Type    string `yaml:"type"`

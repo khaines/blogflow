@@ -20,7 +20,7 @@ import (
 const maxConfigFileSize = 1 << 20 // 1 MB
 
 // ConfigError aggregates one or more validation failures.
-type ConfigError struct {
+type ConfigError struct { //nolint:revive // config.ConfigError is conventional for domain errors
 	Errors []FieldError
 }
 
