@@ -244,6 +244,54 @@ func TestWebhookHandler_EmptySecret(t *testing.T) {
 	}
 }
 
+func TestWebhookHandler_RateLimited(t *testing.T) {
+	t.Parallel()
+
+	secret := "test-secret"
+
+	var calls atomic.Int64
+	reloader := gitops.ContentReloader(func() error {
+		calls.Add(1)
+		return nil
+	})
+
+	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+		Path:      "/hook",
+		Secret:    secret,
+		RateLimit: 2,
+	}, reloader, webhookLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := makePayload("refs/heads/main")
+	sig := signPayload([]byte(secret), payload)
+
+	sendRequest := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", sig)
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// First two requests should succeed.
+	for i := range 2 {
+		if code := sendRequest(); code != http.StatusOK {
+			t.Fatalf("request %d: got %d, want %d", i+1, code, http.StatusOK)
+		}
+	}
+
+	// Third request should be rate-limited.
+	if code := sendRequest(); code != http.StatusTooManyRequests {
+		t.Fatalf("request 3: got %d, want %d", code, http.StatusTooManyRequests)
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("reloader called %d times, want 2", got)
+	}
+}
+
 func TestWebhookHandler_InvalidPath(t *testing.T) {
 	t.Parallel()
 

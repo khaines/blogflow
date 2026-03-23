@@ -196,6 +196,11 @@ func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	// Prevent unbounded growth of the clients map.
+	if len(rl.clients) > 10_000 {
+		rl.clients = make(map[string][]time.Time)
+	}
+
 	now := time.Now()
 	cutoff := now.Add(-rl.window)
 
