@@ -78,7 +78,10 @@ func main() {
 
 	// CLI flag overrides
 	if *port > 0 {
-		cfg.Server.Port = *port
+		// Copy to avoid mutating the atomic-pointer-backed config
+		cfgCopy := *cfg
+		cfgCopy.Server.Port = *port
+		cfg = &cfgCopy
 	}
 	logger.Info("configuration loaded", "port", cfg.Server.Port, "theme", cfg.Theme.Name)
 
@@ -109,7 +112,11 @@ func main() {
 	srv := server.New(cfg, logger)
 
 	// 6. Register routes (placeholder handlers until content-handlers PR)
-	staticFS, _ := fs.Sub(contentOverlay, "static")
+	staticFS, fsErr := fs.Sub(contentOverlay, "static")
+	if fsErr != nil {
+		logger.Warn("static directory not available — /static/ routes will 404", "error", fsErr)
+		staticFS = nil
+	}
 
 	srv.RegisterRoutes(server.RouteOptions{
 		ListHandler:    placeholderHandler("list", logger),
@@ -121,15 +128,14 @@ func main() {
 		StaticFS:       staticFS,
 	})
 
-	// 7. Mark ready and start
-	srv.SetReady(true)
-
-	// Graceful shutdown on SIGINT/SIGTERM
+	// 7. Graceful shutdown on SIGINT/SIGTERM
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
 		logger.Info("shutdown signal received", "signal", sig)
+
+		srv.SetReady(false)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -139,8 +145,26 @@ func main() {
 		}
 	}()
 
+	// 8. Start server and mark ready after bind confirmation
 	logger.Info("server starting", "addr", fmt.Sprintf(":%d", cfg.Server.Port))
-	if err := srv.Start(); err != nil {
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start()
+	}()
+
+	// Brief wait to detect immediate bind failures
+	select {
+	case err := <-errCh:
+		logger.Error("server failed to start", "error", err)
+		os.Exit(1)
+	case <-time.After(100 * time.Millisecond):
+		srv.SetReady(true)
+		logger.Info("server ready")
+	}
+
+	// Wait for server to finish (shutdown or error)
+	if err := <-errCh; err != nil {
 		logger.Error("server error", "error", err)
 		os.Exit(1)
 	}
