@@ -17,14 +17,15 @@ func NewWatchStrategy(reloader ContentReloader, logger *slog.Logger) *WatchStrat
 }
 
 // Start begins watching the filesystem for content changes.
+// It returns promptly; background work runs in a separate goroutine.
 // TODO: fsnotify integration
 func (w *WatchStrategy) Start(ctx context.Context) error {
-	w.logger.Info("watch strategy started")
+	w.logger.Warn("watch strategy started (stub)")
 	return nil
 }
 
 // Stop gracefully shuts down the filesystem watcher.
-func (w *WatchStrategy) Stop() error {
+func (w *WatchStrategy) Stop(ctx context.Context) error {
 	w.logger.Info("watch strategy stopped")
 	return nil
 }
