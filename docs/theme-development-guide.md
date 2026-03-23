@@ -108,9 +108,9 @@ The base template defines named blocks that child templates override:
   <title>{{ block "title" . }}{{ .Site.Title }}{{ end }}</title>
 </head>
 <body>
-  {{ template "partials/header.html" . }}
+  {{ template "header" . }}
   <main>{{ block "content" . }}{{ end }}</main>
-  {{ template "partials/footer.html" . }}
+  {{ template "footer" . }}
 </body>
 </html>
 ```
@@ -122,7 +122,7 @@ The base template defines named blocks that child templates override:
 {{ define "content" }}
 <article>
   <h1>{{ .Post.Title }}</h1>
-  {{ template "partials/post-meta.html" .Post }}
+  {{ template "post-meta" .Post }}
   <div class="post-content">{{ .Post.Content }}</div>
 </article>
 {{ end }}
@@ -131,10 +131,10 @@ The base template defines named blocks that child templates override:
 ### Including Partials
 
 ```html
-{{ template "partials/header.html" . }}
-{{ template "partials/footer.html" . }}
-{{ template "partials/post-meta.html" .Post }}
-{{ template "partials/pagination.html" . }}
+{{ template "header" . }}
+{{ template "footer" . }}
+{{ template "post-meta" .Post }}
+{{ template "pagination" . }}
 ```
 
 The dot (`.`) passes the current data context to the partial.
@@ -167,11 +167,9 @@ functions:
   {{ formatDate .Date "January 2, 2006" }}
 </time>
 
-<!-- Show reading time -->
+<!-- Show reading time (readingTime always returns at least 1) -->
 {{ $min := readingTime .Content }}
-{{ if gt $min 0 }}
-  <span>{{ $min }} min read</span>
-{{ end }}
+<span>{{ $min }} min read</span>
 
 <!-- Generate a tag URL -->
 <a href="/tags/{{ urlize .Tag }}">{{ .Tag }}</a>
@@ -182,9 +180,13 @@ functions:
 <!-- Pagination arithmetic -->
 <span>Page {{ .Pagination.CurrentPage }} of {{ .Pagination.TotalPages }}</span>
 
+<!-- Previous / Next links using PrevPage and NextPage (int fields) -->
+{{ if .Pagination.HasPrev }}<a href="?page={{ .Pagination.PrevPage }}">← Prev</a>{{ end }}
+{{ if .Pagination.HasNext }}<a href="?page={{ .Pagination.NextPage }}">Next →</a>{{ end }}
+
 <!-- Generate page number sequence -->
 {{ range seq 1 .Pagination.TotalPages }}
-  <a href="/page/{{ . }}">{{ . }}</a>
+  <a href="?page={{ . }}">{{ . }}</a>
 {{ end }}
 
 <!-- Copyright year -->
@@ -267,22 +269,27 @@ Posts and pages share the same structure:
 ## 5. Partial Templates
 
 Partials live in `templates/partials/` and are included with the `template`
-action:
+action. The template name is the `{{define "name"}}` identifier inside the
+file — **not** the file path:
 
 ```html
-{{ template "partials/header.html" . }}
+{{ template "header" . }}
 ```
 
 ### Default Partials
 
 BlogFlow ships these partials in the embedded defaults:
 
-| Partial              | Purpose                                              |
-|----------------------|------------------------------------------------------|
-| `partials/header.html`     | Site header with navigation and title link.    |
-| `partials/footer.html`     | Site footer with copyright and attribution.    |
-| `partials/post-meta.html`  | Post metadata: date, reading time, tag links.  |
-| `partials/pagination.html` | Previous / next page navigation with aria labels. |
+| `{{define}}` Name | File                         | Purpose                                              |
+|-------------------|------------------------------|------------------------------------------------------|
+| `header`          | `partials/header.html`       | Site header with navigation and title link.           |
+| `footer`          | `partials/footer.html`       | Site footer with copyright and attribution.           |
+| `post-meta`       | `partials/post-meta.html`    | Post metadata: date, reading time, tag links.         |
+| `pagination`      | `partials/pagination.html`   | Previous / next page navigation with aria labels.     |
+
+> **Naming convention**: Partial template names match the filename stem (e.g.,
+> `header.html` defines `"header"`). When creating custom partials, follow the
+> same pattern — define the template with a short name, not a file path.
 
 ### Creating Custom Partials
 
@@ -300,7 +307,7 @@ Add new partials to your theme's `templates/partials/` directory:
 Then include it in any template:
 
 ```html
-{{ template "partials/social-links.html" . }}
+{{ template "social-links" . }}
 ```
 
 ---
@@ -495,6 +502,27 @@ my-theme/
 
 ### Content-Security-Policy
 
-The default `base.html` template includes a Content-Security-Policy meta tag.
-If you add external resources (fonts, CDN scripts), you may need to adjust the
-CSP in your custom `base.html`.
+BlogFlow enforces a strict Content-Security-Policy via an **HTTP header** set
+in the server middleware (`internal/server/server.go`,
+`securityHeadersMiddleware`). The default policy is:
+
+```
+default-src 'none'; script-src 'none'; object-src 'none';
+connect-src 'none'; style-src 'self'; img-src 'self' https: data:;
+font-src 'self' https:; base-uri 'self'; form-action 'self';
+frame-ancestors 'self'
+```
+
+The `base.html` meta tag contains a similar CSP as **supplementary
+defense-in-depth**. However, when the HTTP header is present (which it always
+is when served by BlogFlow), browsers ignore the meta tag CSP entirely. The
+meta tag only matters if someone serves the HTML files through a different
+server that omits the header.
+
+**To allow external resources** (CDN fonts, analytics scripts, etc.), you must
+modify the `securityHeadersMiddleware` in `internal/server/server.go` — editing
+the `base.html` meta tag alone has no effect.
+
+> ⚠️ `frame-ancestors` **cannot** be set via a `<meta>` tag — the browser spec
+> forbids it. This directive is only effective in the HTTP header, which
+> BlogFlow already sets.

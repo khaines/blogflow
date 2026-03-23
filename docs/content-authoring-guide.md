@@ -218,6 +218,8 @@ but the defaults above are conventional.
 
 **Content scanning**:
 
+> ⚠️ **Fail-fast scanning**: A single malformed post (missing date, duplicate slug, invalid slug) aborts the entire content scan. Validate content locally with `blogflow --content ./content --dev` before pushing.
+
 - Only `.md` files are processed.
 - Posts require both `title` and `date` in front matter.
 - Pages require only `title`.
@@ -384,21 +386,17 @@ BlogFlow supports three sync strategies (configured via `sync.strategy`):
 | Strategy    | How it works                                           | Best for              |
 |-------------|-------------------------------------------------------|-----------------------|
 | `watch`     | Filesystem watcher (fsnotify) detects local changes.   | Local development     |
-| `webhook`   | GitHub webhook on push to `main` triggers a git pull.  | Production (single server) |
+| `webhook`   | GitHub webhook on push to `main` triggers a git pull.  | See warning below     |
 | `sidecar`   | Kubernetes git-sync sidecar pulls content on a loop.   | Production (Kubernetes) |
 
-**Webhook flow**:
+**Webhook sync**:
 
-```
-GitHub push → POST /api/webhook → HMAC-SHA256 verify → branch filter → git pull → reload content
-```
+> ⚠️ **Not yet implemented.** The webhook sync strategy is currently a stub. HMAC verification, git pull, and content reload are not functional. Use the `watch` strategy for local development. Webhook support is tracked in the project backlog.
 
-**Webhook configuration**:
-- Path: `/api/webhook` (configurable)
-- Secret: set via `BLOGFLOW_WEBHOOK_SECRET` environment variable (≥32 bytes)
-- Allowed events: `push` (default), also supports `ping`, `pull_request`, `release`, `workflow_dispatch`
-- Branch filter: `main` (default)
-- Rate limit: 10 requests/minute (configurable, 1–100)
+When complete, the webhook strategy will accept a GitHub `push` event at a
+configurable endpoint (default `/api/webhook`), verify the payload signature,
+and trigger a content reload. Configuration is accepted in `site.yaml` under
+`sync.webhook` but has no effect until the implementation is finished.
 
 ---
 
@@ -419,12 +417,13 @@ content/
 
 ### Referencing Images in Markdown
 
-Use standard Markdown image syntax with paths relative to the content root:
+All static assets — including media — are served under the `/static/` URL
+prefix by the HTTP server. Use that prefix when referencing images:
 
 ```markdown
-![Architecture diagram](/media/images/architecture-diagram.svg)
+![Architecture diagram](/static/media/images/architecture-diagram.svg)
 
-![Screenshot of the dashboard](/media/images/screenshot.jpg "Dashboard")
+![Screenshot of the dashboard](/static/media/images/screenshot.jpg "Dashboard")
 ```
 
 ### Image Path Resolution
@@ -437,9 +436,8 @@ Images are resolved through the overlay filesystem. The resolution order
 3. **Config layer** — configuration-level assets
 4. **Defaults layer** — embedded default assets (e.g., `favicon.svg`)
 
-Static assets (including media) are served under `/static/` by the HTTP
-server. The `media/` directory contents are accessible through the overlay FS
-at their relative paths.
+Files placed in `content/media/` are served at `/static/media/…` by the HTTP
+server via the overlay FS.
 
 ---
 
