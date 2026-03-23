@@ -36,7 +36,7 @@ func TestContentReloaderFlushesCache(t *testing.T) {
 
 	fs := testFS()
 	renderer := content.NewRenderer()
-	scanner := content.NewScanner(renderer, "posts", "pages", 200)
+	scanner := content.NewScanner(renderer, "posts", "pages", 200, nil)
 
 	idx, err := scanner.Scan(fs)
 	if err != nil {
@@ -60,7 +60,7 @@ func TestContentReloaderNilCache(t *testing.T) {
 
 	fs := testFS()
 	renderer := content.NewRenderer()
-	scanner := content.NewScanner(renderer, "posts", "pages", 200)
+	scanner := content.NewScanner(renderer, "posts", "pages", 200, nil)
 
 	idx, err := scanner.Scan(fs)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestContentReloaderUpdatesIndex(t *testing.T) {
 
 	fs := testFS()
 	renderer := content.NewRenderer()
-	scanner := content.NewScanner(renderer, "posts", "pages", 200)
+	scanner := content.NewScanner(renderer, "posts", "pages", 200, nil)
 
 	idx, err := scanner.Scan(fs)
 	if err != nil {

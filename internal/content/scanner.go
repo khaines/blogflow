@@ -1,14 +1,17 @@
 package content
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Post represents a fully processed blog post.
@@ -34,13 +37,23 @@ type Index struct {
 // Scanner walks a content filesystem and builds an Index.
 type Scanner struct {
 	renderer   *Renderer
+	logger     *slog.Logger
 	postsDir   string // default: "posts"
 	pagesDir   string // default: "pages"
 	summaryLen int    // default: 200
 }
 
+// discardHandler is a slog.Handler that discards all log records.
+type discardHandler struct{}
+
+func (discardHandler) Enabled(_ context.Context, _ slog.Level) bool  { return false }
+func (discardHandler) Handle(_ context.Context, _ slog.Record) error { return nil }
+func (discardHandler) WithAttrs(_ []slog.Attr) slog.Handler          { return discardHandler{} }
+func (discardHandler) WithGroup(_ string) slog.Handler               { return discardHandler{} }
+
 // NewScanner creates a content scanner.
-func NewScanner(renderer *Renderer, postsDir, pagesDir string, summaryLen int) *Scanner {
+// If logger is nil, a no-op logger is used.
+func NewScanner(renderer *Renderer, postsDir, pagesDir string, summaryLen int, logger *slog.Logger) *Scanner {
 	if postsDir == "" {
 		postsDir = "posts"
 	}
@@ -50,12 +63,22 @@ func NewScanner(renderer *Renderer, postsDir, pagesDir string, summaryLen int) *
 	if summaryLen <= 0 {
 		summaryLen = 200
 	}
-	return &Scanner{renderer: renderer, postsDir: postsDir, pagesDir: pagesDir, summaryLen: summaryLen}
+	if logger == nil {
+		logger = slog.New(discardHandler{})
+	}
+	return &Scanner{renderer: renderer, logger: logger, postsDir: postsDir, pagesDir: pagesDir, summaryLen: summaryLen}
 }
 
 // Scan walks the given fs.FS and builds a content Index.
 // Only processes .md files. Skips drafts. Skips files without front matter.
+// Individual file parse errors are logged at WARN level and skipped.
 func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
+	start := time.Now()
+	s.logger.Info("content scan started",
+		"posts_dir", s.postsDir,
+		"pages_dir", s.pagesDir,
+	)
+
 	idx := &Index{
 		BySlug:     make(map[string]*Post),
 		ByTag:      make(map[string][]*Post),
@@ -63,18 +86,24 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 		PageBySlug: make(map[string]*Post),
 	}
 
+	var errCount int
+
 	// Scan posts
-	if err := s.scanDir(contentFS, s.postsDir, idx, false); err != nil {
+	if skipped, err := s.scanDir(contentFS, s.postsDir, idx, false); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("scanning posts: %w", err)
 		}
+	} else {
+		errCount += skipped
 	}
 
 	// Scan pages
-	if err := s.scanDir(contentFS, s.pagesDir, idx, true); err != nil {
+	if skipped, err := s.scanDir(contentFS, s.pagesDir, idx, true); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("scanning pages: %w", err)
 		}
+	} else {
+		errCount += skipped
 	}
 
 	// Detect post/page cross-namespace slug collisions
@@ -102,13 +131,21 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 		idx.ByYear[post.Date.Year()] = append(idx.ByYear[post.Date.Year()], post)
 	}
 
+	s.logger.Info("content scan completed",
+		"posts", len(idx.Posts),
+		"pages", len(idx.Pages),
+		"errors_skipped", errCount,
+		"duration", time.Since(start),
+	)
+
 	return idx, nil
 }
 
-// scanDir aborts on the first file error (fail-fast). Validate content
-// before deployment to avoid partial index builds.
-func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) error {
-	return fs.WalkDir(contentFS, dir, func(filePath string, d fs.DirEntry, err error) error {
+// scanDir walks a directory, logging and skipping individual file parse errors.
+// Returns the count of skipped files due to errors.
+func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) (int, error) {
+	var skipped int
+	err := fs.WalkDir(contentFS, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -121,12 +158,22 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 
 		data, err := fs.ReadFile(contentFS, filePath)
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", filePath, err)
+			s.logger.Warn("skipping file: read error",
+				"path", filePath,
+				"error", err,
+			)
+			skipped++
+			return nil
 		}
 
 		fm, body, err := ParseFrontMatter(data)
 		if err != nil {
-			return fmt.Errorf("parsing %s: %w", filePath, err)
+			s.logger.Warn("skipping file: front matter parse error",
+				"path", filePath,
+				"error", err,
+			)
+			skipped++
+			return nil
 		}
 		if fm == nil {
 			return nil // no front matter, skip
@@ -136,13 +183,22 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 		}
 
 		if !isPage && fm.Date.IsZero() {
-			return fmt.Errorf("parsing %s: post requires a 'date' field", filePath)
+			s.logger.Warn("skipping file: post missing required date",
+				"path", filePath,
+			)
+			skipped++
+			return nil
 		}
 
 		// Render markdown
 		rendered, err := s.renderer.Render(body)
 		if err != nil {
-			return fmt.Errorf("rendering %s: %w", filePath, err)
+			s.logger.Warn("skipping file: render error",
+				"path", filePath,
+				"error", err,
+			)
+			skipped++
+			return nil
 		}
 
 		// Build slug from front matter or filename
@@ -150,7 +206,12 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 		if slug == "" {
 			slug = slugFromPath(filePath)
 			if strings.Contains(slug, "/") || strings.Contains(slug, "\\") || strings.Contains(slug, "..") || strings.Contains(slug, "\x00") || strings.ContainsAny(slug, " \t") {
-				return fmt.Errorf("scanning %s: generated slug %q contains invalid characters", filePath, slug)
+				s.logger.Warn("skipping file: invalid generated slug",
+					"path", filePath,
+					"slug", slug,
+				)
+				skipped++
+				return nil
 			}
 		}
 
@@ -188,6 +249,7 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 
 		return nil
 	})
+	return skipped, err
 }
 
 // slugFromPath generates a slug from a file path by stripping directory and extension.

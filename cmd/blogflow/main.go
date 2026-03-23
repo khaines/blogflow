@@ -75,7 +75,7 @@ func main() {
 		configFS = blogflow.Defaults
 	}
 
-	cfgLoader := config.NewLoader(configFS)
+	cfgLoader := config.NewLoader(configFS, config.WithLogger(logger))
 	if _, err := cfgLoader.Load(); err != nil {
 		logger.Error("failed to load configuration", "error", err)
 		os.Exit(1)
@@ -93,7 +93,7 @@ func main() {
 
 	// 3. Initialize content pipeline
 	renderer := content.NewRenderer()
-	scanner := content.NewScanner(renderer, cfg.Content.PostsDir, cfg.Content.PagesDir, cfg.Content.SummaryLength)
+	scanner := content.NewScanner(renderer, cfg.Content.PostsDir, cfg.Content.PagesDir, cfg.Content.SummaryLength, logger)
 
 	idx, err := scanner.Scan(contentOverlay)
 	if err != nil {

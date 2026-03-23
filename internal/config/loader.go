@@ -2,13 +2,16 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +61,7 @@ func (e *SecretInYAMLError) Error() string {
 // Loader loads, validates, and manages configuration.
 type Loader struct {
 	configFS  fs.FS
+	logger    *slog.Logger
 	current   atomic.Pointer[Config]
 	configDir string       // OS path for fsnotify watching
 	reloadMu  sync.Mutex   // serializes Reload to prevent stale-callback races
@@ -74,11 +78,17 @@ func WithWatchDir(dir string) LoaderOption {
 	return func(l *Loader) { l.configDir = dir }
 }
 
+// WithLogger sets the structured logger for config operations.
+// If not set, a no-op logger is used.
+func WithLogger(logger *slog.Logger) LoaderOption {
+	return func(l *Loader) { l.logger = logger }
+}
+
 // NewLoader creates a config loader backed by the given filesystem.
 // The FS should be a 2-layer overlay (config + defaults) or a single
 // defaults FS. NewLoader eagerly loads defaults so Get() never returns nil.
 func NewLoader(configFS fs.FS, opts ...LoaderOption) *Loader {
-	l := &Loader{configFS: configFS}
+	l := &Loader{configFS: configFS, logger: slog.New(discardHandler{})}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -86,6 +96,14 @@ func NewLoader(configFS fs.FS, opts ...LoaderOption) *Loader {
 	l.current.Store(Default())
 	return l
 }
+
+// discardHandler is a slog.Handler that discards all log records.
+type discardHandler struct{}
+
+func (discardHandler) Enabled(_ context.Context, _ slog.Level) bool  { return false }
+func (discardHandler) Handle(_ context.Context, _ slog.Record) error { return nil }
+func (discardHandler) WithAttrs(_ []slog.Attr) slog.Handler          { return discardHandler{} }
+func (discardHandler) WithGroup(_ string) slog.Handler               { return discardHandler{} }
 
 // Get returns the current immutable Config. Safe for concurrent use.
 // Never returns nil — defaults are loaded eagerly in NewLoader.
@@ -101,6 +119,7 @@ func (l *Loader) Config() *Config {
 // Load reads site.yaml through the provided FS, applies env var
 // overrides, validates the result, and stores it atomically.
 func (l *Loader) Load() (*Config, error) {
+	start := time.Now()
 	cfg := Default()
 
 	data, err := fs.ReadFile(l.configFS, "site.yaml")
@@ -128,18 +147,44 @@ func (l *Loader) Load() (*Config, error) {
 				return nil, fmt.Errorf("parsing site.yaml: %w", err)
 			}
 		}
+
+		l.logger.Info("config file loaded",
+			"path", "site.yaml",
+			"size_bytes", len(data),
+			"duration", time.Since(start),
+		)
+	} else {
+		l.logger.Debug("no config file found, using defaults")
 	}
 
-	if err := applyEnvOverrides(cfg); err != nil {
-		return nil, fmt.Errorf("applying environment overrides: %w", err)
+	applied, envErr := applyEnvOverrides(cfg)
+	if envErr != nil {
+		return nil, fmt.Errorf("applying environment overrides: %w", envErr)
 	}
-
-	// TODO(P1): Add structured logging (slog) and metrics for config operations.
-	// See GitHub issue for design.
+	if len(applied) > 0 {
+		sort.Strings(applied)
+		redacted := make([]string, len(applied))
+		for i, name := range applied {
+			if secretEnvVars[name] {
+				redacted[i] = name + "=[REDACTED]"
+			} else {
+				redacted[i] = name
+			}
+		}
+		l.logger.Info("env var overrides applied",
+			"count", len(applied),
+			"vars", redacted,
+		)
+	}
 
 	if err := Validate(cfg); err != nil {
+		l.logger.Warn("config validation failed", "error", err)
 		return nil, err
 	}
+
+	l.logger.Info("config validation passed",
+		"duration", time.Since(start),
+	)
 
 	l.current.Store(cfg)
 	return cfg, nil
@@ -318,17 +363,24 @@ var envMap = map[string]func(*Config, string) error{
 	},
 }
 
-func applyEnvOverrides(cfg *Config) error {
+// secretEnvVars identifies env vars that should be redacted in logs.
+var secretEnvVars = map[string]bool{
+	"BLOGFLOW_WEBHOOK_SECRET": true,
+}
+
+func applyEnvOverrides(cfg *Config) ([]string, error) {
+	var applied []string
 	for name, setter := range envMap {
 		v, ok := os.LookupEnv(name)
 		if !ok {
 			continue
 		}
 		if err := setter(cfg, v); err != nil {
-			return err
+			return nil, err
 		}
+		applied = append(applied, name)
 	}
-	return nil
+	return applied, nil
 }
 
 // Package-level validation maps.
