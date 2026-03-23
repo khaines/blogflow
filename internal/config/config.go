@@ -53,12 +53,13 @@ type ThemeConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port          int           `yaml:"port"`
-	ReadTimeout   time.Duration `yaml:"read_timeout"`
-	WriteTimeout  time.Duration `yaml:"write_timeout"`
-	IdleTimeout   time.Duration `yaml:"idle_timeout"`
-	TLSTerminated bool          `yaml:"tls_terminated"`
-	HSTSMaxAge    int           `yaml:"hsts_max_age"`
+	Port              int           `yaml:"port"`
+	ReadTimeout       time.Duration `yaml:"read_timeout"`
+	WriteTimeout      time.Duration `yaml:"write_timeout"`
+	IdleTimeout       time.Duration `yaml:"idle_timeout"`
+	TLSTerminated     bool          `yaml:"tls_terminated"`
+	HSTSMaxAge        int           `yaml:"hsts_max_age"`
+	TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs"`
 }
 
 // CacheConfig holds rendered content cache settings.

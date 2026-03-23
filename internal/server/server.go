@@ -27,6 +27,7 @@ type Server struct {
 	ready      atomic.Bool
 	readyCh    chan struct{}
 	readyOnce  sync.Once
+	ipResolver *ClientIPResolver
 }
 
 // New creates a new BlogFlow server.
@@ -36,11 +37,19 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 	}
 
 	mux := http.NewServeMux()
+
+	ipResolver, err := NewClientIPResolver(cfg.Server.TrustedProxyCIDRs)
+	if err != nil {
+		logger.Error("invalid trusted proxy CIDR", "error", err)
+		panic(fmt.Sprintf("server: invalid trusted proxy CIDR: %v", err))
+	}
+
 	s := &Server{
-		mux:     mux,
-		config:  cfg,
-		logger:  logger,
-		readyCh: make(chan struct{}),
+		mux:        mux,
+		config:     cfg,
+		logger:     logger,
+		readyCh:    make(chan struct{}),
+		ipResolver: ipResolver,
 	}
 
 	s.httpServer = &http.Server{
@@ -170,13 +179,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// middleware chains standard middleware: logging, security headers, recovery, metrics.
+// middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics.
 func (s *Server) middleware(next http.Handler) http.Handler {
-	// Order: logging (outermost) → recovery → security headers → metrics → handler
-	return s.loggingMiddleware(
-		s.recoveryMiddleware(
-			s.securityHeadersMiddleware(
-				MetricsMiddleware(next),
+	// Order: request-ID (outermost) → logging → recovery → security headers → metrics → handler
+	return s.requestIDMiddleware(
+		s.loggingMiddleware(
+			s.recoveryMiddleware(
+				s.securityHeadersMiddleware(
+					MetricsMiddleware(next),
+				),
 			),
 		),
 	)
@@ -193,6 +204,8 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			"status", wrapped.statusCode,
 			"duration", time.Since(start),
 			"remote", r.RemoteAddr,
+			"client_ip", s.ipResolver.ClientIP(r),
+			"request_id", RequestIDFromContext(r.Context()),
 		)
 	})
 }
