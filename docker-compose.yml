@@ -1,6 +1,7 @@
 services:
   blogflow:
     build: .
+    command: ["serve", "--content", "/data/content", "--config", "/data/config"]
     ports:
       - "8080:8080"
     volumes:
@@ -8,3 +9,23 @@ services:
       - ./examples/config:/data/config:ro
     environment:
       - BLOGFLOW_SERVER_PORT=8080
+    restart: unless-stopped
+    # healthcheck: not feasible with distroless image (no shell, wget, or curl)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /data/cache:rw,size=128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
