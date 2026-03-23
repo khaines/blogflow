@@ -36,7 +36,7 @@ Headings from `##` through `######` are supported (h1 is reserved for the post t
 
 ## Images
 
-![Alt text for an image](/static/images/example.png "Optional image title")
+![Alt text for an image](/static/images/example.svg "Optional image title")
 
 ## Blockquotes
 
@@ -127,7 +127,7 @@ HTML:
 | Task lists | ✅ | Checkbox syntax |
 | Strikethrough | ✅ | GFM extension |
 | Footnotes | ✅ | Goldmark extension |
-| Syntax highlighting | ✅ | CSS classes for Chroma (requires theme CSS) |
+| Syntax highlighting | ✅ | Chroma via goldmark-highlighting (CSS classes) |
 | Auto-heading IDs | ✅ | For anchor links |
 
 ### Right-Aligned Table
