@@ -37,7 +37,9 @@ kubectl apply -k examples/k8s/webhook/
 
 1. Search each manifest for `CHANGE-ME` and replace with your values.
 2. Adjust resource requests/limits to match your traffic profile.
-3. Pin the BlogFlow image tag to a specific version instead of `latest`.
+3. Pin the BlogFlow image to a specific semver version (already set to `0.1.0`).
+   For production, pin by SHA256 digest instead of a tag (see
+   `docs/engineering/container-security.md`).
 4. For production, pin the git-sync image by digest (see comments in the
    sidecar deployment).
 
