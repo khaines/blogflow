@@ -49,8 +49,13 @@ spec:
               drop:
                 - ALL
 
+          # NOTE: BlogFlow currently reads the webhook secret from the
+          # BLOGFLOW_WEBHOOK_SECRET env var only (config field has yaml:"-").
+          # Until the app supports file-based secrets, operators must set the
+          # env var separately or patch the app. The file mount below is the
+          # recommended target state because env vars are visible in
+          # /proc/<pid>/environ to any process sharing the pid namespace.
           env:
-            # Webhook HMAC secret — injected from the Secret resource.
             - name: BLOGFLOW_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
@@ -81,6 +86,14 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 5
 
+          # Startup probe — generous window for slow PVC mounts.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+
           volumeMounts:
             # Content volume is read-write — BlogFlow pulls on webhook trigger.
             - name: content
@@ -94,6 +107,11 @@ spec:
               mountPath: /data/cache
             - name: tmp
               mountPath: /tmp
+            # Webhook secret mounted as a file — env vars are visible in
+            # /proc/<pid>/environ; file mounts are restricted by filesystem DAC.
+            - name: webhook-secret
+              mountPath: /etc/blogflow/secrets
+              readOnly: true
 
       volumes:
         # Content volume — read-write so BlogFlow can pull updates itself.
@@ -106,11 +124,20 @@ spec:
         - name: config
           configMap:
             name: blogflow-config
-        # Rendered page cache (ephemeral).
+        # Rendered page cache (ephemeral); capped to protect node storage.
         - name: cache
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 256Mi
         # Scratch space — memory-backed to avoid disk writes.
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        # Webhook HMAC secret projected as a file.
+        - name: webhook-secret
+          secret:
+            secretName: blogflow-webhook-secret
+            defaultMode: 0400
+            items:
+              - key: webhook-secret
+                path: webhook-secret
