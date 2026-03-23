@@ -1,3 +1,6 @@
+# ⚠️  TEMPLATE — Copy this file to YOUR CONTENT REPO at .github/workflows/content-deploy.yml
+# Do NOT use this in the BlogFlow engine repo.
+#
 # Content Deploy — Trigger BlogFlow webhook on content push
 # Copy this workflow to your content repository's .github/workflows/
 name: Deploy Content
