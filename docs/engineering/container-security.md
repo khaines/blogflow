@@ -238,13 +238,13 @@ before it leaves CI:
 
 ```yaml
 - name: Scan image with Trivy
-  # TODO: verify this digest matches the latest v0.28.0 release
-  uses: aquasecurity/trivy-action@0123456789abcdef0123456789abcdef01234567  # v0.28.0
+  uses: aquasecurity/trivy-action@<PIN_BY_SHA>  # See https://github.com/aquasecurity/trivy-action/releases for latest SHA
   with:
     image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
     format: 'sarif'
     output: 'trivy-results.sarif'
     severity: 'CRITICAL,HIGH'
+    exit-code: '1'
 
 - name: Upload Trivy scan results
   uses: github/codeql-action/upload-sarif@v3
@@ -531,13 +531,17 @@ spec:
               mountPath: /tmp
 
         - name: git-sync
-          # TODO: replace with verified digest from
-          #   crane digest registry.k8s.io/git-sync/git-sync:v4.4.0
-          image: registry.k8s.io/git-sync/git-sync@sha256:REPLACE_WITH_VERIFIED_DIGEST
+          image: registry.k8s.io/git-sync/git-sync@sha256:<PIN_BY_DIGEST>  # Run: crane digest registry.k8s.io/git-sync/git-sync:v4.4.0
           args:
             - --repo=https://github.com/your-org/blog-content.git
             - --root=/data/content
             - --period=60s
+          env:
+            - name: GITSYNC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: blogflow-secrets
+                  key: BLOGFLOW_GIT_TOKEN
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532
