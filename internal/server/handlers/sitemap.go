@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/content"
@@ -38,7 +39,7 @@ func NewSitemapHandler(cfg *config.Config, index *content.Index) *SitemapHandler
 	return &SitemapHandler{cfg: cfg, index: index}
 }
 
-func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	baseURL := h.cfg.Site.BaseURL
 
 	// Derive homepage lastmod from the most recent post.
@@ -83,5 +84,17 @@ func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		URLs:  urls,
 	}
 
-	writeXML(w, "application/xml; charset=utf-8", sitemap)
+	var lastMod time.Time
+	for _, p := range h.index.Posts {
+		if p.Date.After(lastMod) {
+			lastMod = p.Date
+		}
+	}
+	for _, p := range h.index.Pages {
+		if p.Date.After(lastMod) {
+			lastMod = p.Date
+		}
+	}
+
+	writeXMLCached(w, r, "application/xml; charset=utf-8", sitemap, lastMod.UTC())
 }
