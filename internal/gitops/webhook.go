@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"container/list"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -20,14 +21,25 @@ import (
 
 const defaultMaxPayloadSize int64 = 1 << 20 // 1 MB
 
+// IPResolver extracts the client IP from an HTTP request.
+// The server.ClientIPResolver type satisfies this interface.
+type IPResolver interface {
+	ClientIP(r *http.Request) string
+}
+
 // WebhookStrategy listens for HTTP webhook callbacks to trigger content reload.
 // Validates HMAC-SHA256 signatures, filters by branch, and rate-limits.
 type WebhookStrategy struct {
-	config   config.WebhookConfig
-	reloader ContentReloader
-	logger   *slog.Logger
-	handler  http.HandlerFunc
+	config     config.WebhookConfig
+	reloader   ContentReloader
+	logger     *slog.Logger
+	handler    http.HandlerFunc
+	ipResolver IPResolver
 }
+
+// SetIPResolver configures a custom IP resolver (e.g. server.ClientIPResolver)
+// for extracting client IPs. When nil, the built-in remoteIP function is used.
+func (w *WebhookStrategy) SetIPResolver(r IPResolver) { w.ipResolver = r }
 
 // NewWebhookStrategy creates a new webhook-based sync strategy.
 // Path must be non-empty and start with "/". Secret must be non-empty.
@@ -79,7 +91,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		}
 
 		// Rate-limit by remote IP.
-		ip := remoteIP(r)
+		ip := w.resolveIP(r)
 		if rl != nil && !rl.allow(ip) {
 			w.logger.Warn("rate limited", "ip", ip)
 			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
@@ -174,12 +186,18 @@ func verifySignature(secret, payload []byte, sigHeader string) bool {
 	return hmac.Equal(decoded, expected)
 }
 
-// remoteIP extracts the client IP from the request, stripping the port.
+// resolveIP returns the client IP using the configured resolver, or the
+// built-in remoteIP heuristic when no resolver is set.
+func (w *WebhookStrategy) resolveIP(r *http.Request) string {
+	if w.ipResolver != nil {
+		return w.ipResolver.ClientIP(r)
+	}
+	return remoteIP(r)
+}
+
 // remoteIP extracts the client IP from the request.
 // Checks X-Forwarded-For first (for reverse-proxy deployments), falls back to RemoteAddr.
 func remoteIP(r *http.Request) string {
-	// Trust X-Forwarded-For if present (standard reverse proxy header).
-	// Takes the first (leftmost) IP — the original client.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {
 			return strings.TrimSpace(xff[:idx])
@@ -193,12 +211,25 @@ func remoteIP(r *http.Request) string {
 	return addr
 }
 
-// rateLimiter implements a sliding-window rate limiter per IP.
+const defaultMaxClients = 10000
+
+// rateLimiter implements a sliding-window rate limiter per IP with LRU
+// eviction. Entries whose timestamps are all older than the rate window are
+// lazily evicted on each request. When the map reaches capacity, the
+// least-recently-seen IP is evicted instead of clearing the entire map.
 type rateLimiter struct {
 	mu      sync.Mutex
 	limit   int
 	window  time.Duration
-	clients map[string][]time.Time
+	maxSize int
+	entries map[string]*list.Element
+	lru     *list.List // front = most-recently-seen
+	now     func() time.Time
+}
+
+type rlEntry struct {
+	ip         string
+	timestamps []time.Time
 }
 
 func newRateLimiter(limit int) *rateLimiter {
@@ -209,7 +240,10 @@ func newRateLimiter(limit int) *rateLimiter {
 	return &rateLimiter{
 		limit:   limit,
 		window:  time.Minute,
-		clients: make(map[string][]time.Time),
+		maxSize: defaultMaxClients,
+		entries: make(map[string]*list.Element),
+		lru:     list.New(),
+		now:     time.Now,
 	}
 }
 
@@ -217,32 +251,62 @@ func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	now := time.Now()
+	now := rl.now()
 	cutoff := now.Add(-rl.window)
 
-	// Periodic eviction: sweep stale entries when map grows large.
-	if len(rl.clients) > 1000 {
-		for k, timestamps := range rl.clients {
-			if len(timestamps) == 0 || timestamps[len(timestamps)-1].Before(cutoff) {
-				delete(rl.clients, k)
+	// Lazy TTL eviction: remove expired entries from the back of the LRU list.
+	rl.evictExpired(cutoff)
+
+	if elem, ok := rl.entries[ip]; ok {
+		rl.lru.MoveToFront(elem)
+		entry := elem.Value.(*rlEntry)
+
+		valid := entry.timestamps[:0]
+		for _, ts := range entry.timestamps {
+			if ts.After(cutoff) {
+				valid = append(valid, ts)
 			}
 		}
-	}
 
-	timestamps := rl.clients[ip]
-	valid := timestamps[:0]
-
-	for _, ts := range timestamps {
-		if ts.After(cutoff) {
-			valid = append(valid, ts)
+		if len(valid) >= rl.limit {
+			entry.timestamps = valid
+			return false
 		}
+
+		entry.timestamps = append(valid, now)
+		return true
 	}
 
-	if len(valid) >= rl.limit {
-		rl.clients[ip] = valid
-		return false
+	// New IP — evict least-recently-seen if at capacity.
+	for len(rl.entries) >= rl.maxSize {
+		rl.evictOldest()
 	}
 
-	rl.clients[ip] = append(valid, now)
+	entry := &rlEntry{ip: ip, timestamps: []time.Time{now}}
+	elem := rl.lru.PushFront(entry)
+	rl.entries[ip] = elem
 	return true
+}
+
+// evictExpired removes entries from the back of the LRU whose latest
+// timestamp is before cutoff.
+func (rl *rateLimiter) evictExpired(cutoff time.Time) {
+	for rl.lru.Len() > 0 {
+		back := rl.lru.Back()
+		entry := back.Value.(*rlEntry)
+		if len(entry.timestamps) > 0 && entry.timestamps[len(entry.timestamps)-1].After(cutoff) {
+			break
+		}
+		rl.lru.Remove(back)
+		delete(rl.entries, entry.ip)
+	}
+}
+
+// evictOldest removes the least-recently-seen entry.
+func (rl *rateLimiter) evictOldest() {
+	if back := rl.lru.Back(); back != nil {
+		entry := back.Value.(*rlEntry)
+		rl.lru.Remove(back)
+		delete(rl.entries, entry.ip)
+	}
 }
