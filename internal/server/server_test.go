@@ -356,3 +356,133 @@ func TestReadyEndpoint_CacheControl(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
 	}
 }
+
+func TestReadyChannel_ClosedAfterStart(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.Port = 0 // let OS pick a free port
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Start()
+	}()
+
+	select {
+	case <-s.Ready():
+		// success — channel closed once listener is bound
+	case err := <-errCh:
+		t.Fatalf("Start returned before Ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ready channel was not closed within timeout")
+	}
+
+	// Clean shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown error: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Start returned unexpected error: %v", err)
+	}
+}
+
+func TestReadyChannel_ClosedAfterServe(t *testing.T) {
+	cfg := defaultTestConfig()
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(ln)
+	}()
+
+	select {
+	case <-s.Ready():
+		// success — channel closed when Serve is called with pre-bound listener
+	case err := <-errCh:
+		t.Fatalf("Serve returned before Ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ready channel was not closed within timeout")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown error: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Serve returned unexpected error: %v", err)
+	}
+}
+
+func TestReadyChannel_DoubleCloseProtection(t *testing.T) {
+	cfg := defaultTestConfig()
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Serve(ln)
+	}()
+
+	select {
+	case <-s.Ready():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ready channel was not closed within timeout")
+	}
+
+	// Calling Serve's close path again via shutdown+re-serve should not panic
+	// thanks to sync.Once protection. Verify by directly invoking the ready
+	// signal a second time through a second Serve on a new listener.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown error: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Serve returned unexpected error: %v", err)
+	}
+
+	// A second Serve on the same Server must not panic from double-close.
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen (2nd): %v", err)
+	}
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- s.Serve(ln2)
+	}()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if err := s.Shutdown(ctx2); err != nil {
+		t.Fatalf("Shutdown (2nd) error: %v", err)
+	}
+	if err := <-errCh2; err != nil {
+		t.Fatalf("Serve (2nd) returned unexpected error: %v", err)
+	}
+}
+
+func TestReadyChannel_NotClosedBeforeStart(t *testing.T) {
+	cfg := defaultTestConfig()
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	select {
+	case <-s.Ready():
+		t.Fatal("Ready channel should not be closed before Start/Serve")
+	default:
+		// expected — channel is still open
+	}
+}

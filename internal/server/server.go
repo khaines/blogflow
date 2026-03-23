@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,8 @@ type Server struct {
 	config     *config.Config
 	logger     *slog.Logger
 	ready      atomic.Bool
+	readyCh    chan struct{}
+	readyOnce  sync.Once
 }
 
 // New creates a new BlogFlow server.
@@ -34,9 +37,10 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 
 	mux := http.NewServeMux()
 	s := &Server{
-		mux:    mux,
-		config: cfg,
-		logger: logger,
+		mux:     mux,
+		config:  cfg,
+		logger:  logger,
+		readyCh: make(chan struct{}),
 	}
 
 	s.httpServer = &http.Server{
@@ -122,18 +126,35 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	}
 }
 
+// Ready returns a channel that is closed once the server's network listener
+// is bound and the server is ready to accept connections.
+func (s *Server) Ready() <-chan struct{} {
+	return s.readyCh
+}
+
 // Start begins serving HTTP. Blocks until the server stops.
 func (s *Server) Start() error {
-	s.logger.Info("server starting", "addr", s.httpServer.Addr)
-	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	addr := s.httpServer.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("server: %w", err)
+	}
+	s.logger.Info("server listening", "addr", ln.Addr().String())
+	s.readyOnce.Do(func() { close(s.readyCh) })
+	if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
 	}
 	return nil
 }
 
 // Serve begins serving HTTP on the given listener. Blocks until the server stops.
+// The ready channel is closed immediately since the listener is already bound.
 func (s *Server) Serve(ln net.Listener) error {
 	s.logger.Info("server starting", "addr", ln.Addr().String())
+	s.readyOnce.Do(func() { close(s.readyCh) })
 	if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
 	}
