@@ -38,7 +38,7 @@ Open [http://localhost:8080](http://localhost:8080) — that's it.
 - **Overlay filesystem** — external files override embedded defaults (`io/fs.FS`)
 - **Goldmark** — GitHub Flavored Markdown with syntax highlighting (CSS classes for Chroma — requires theme CSS), tables, task lists, footnotes
 - **Secure by default** — distroless container, rootless (UID 65532), read-only root FS
-- **< 15 MB container** — single static binary on `gcr.io/distroless/static-debian12:nonroot`
+- **< 25 MB container** — single static binary on `gcr.io/distroless/static-debian12:nonroot`
 - **Git-driven content** — git-sync sidecar or fsnotify for live reload
 - **HMAC-SHA256 webhooks** — constant-time signature validation, branch filtering, rate limiting
 - **Atom/RSS feeds** — auto-generated with configurable item count
