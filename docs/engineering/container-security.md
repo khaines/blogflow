@@ -15,7 +15,7 @@
 - [Kubernetes SecurityContext](#kubernetes-securitycontext)
 - [Network Policy](#network-policy)
 - [Secret Management](#secret-management)
-- [Complete Kubernetes Pod Spec](#complete-kubernetes-pod-spec)
+- [Complete Kubernetes Deployment Spec](#complete-kubernetes-deployment-spec)
 - [Docker Run with Security Flags](#docker-run-with-security-flags)
 
 ---
@@ -180,9 +180,11 @@ securityContext:
 - No `CAP_SYS_ADMIN` — cannot mount filesystems, load kernel modules, or use
   many syscalls.
 - No `CAP_DAC_OVERRIDE` — cannot bypass file permission checks.
-- `allowPrivilegeEscalation: false` prevents gaining capabilities via setuid
-  binaries or kernel exploits. (There are no setuid binaries in distroless
-  anyway, but defense-in-depth matters.)
+- `allowPrivilegeEscalation: false` sets `no_new_privs` on the process,
+  blocking privilege gains via setuid/setgid binaries. It does **not** prevent
+  kernel exploits — keep nodes patched and use seccomp/AppArmor for kernel-level
+  defense. (There are no setuid binaries in distroless anyway, but
+  defense-in-depth matters.)
 
 No capabilities are added back. BlogFlow's Go binary requires zero Linux
 capabilities to serve HTTP on an unprivileged port.
@@ -236,7 +238,8 @@ before it leaves CI:
 
 ```yaml
 - name: Scan image with Trivy
-  uses: aquasecurity/trivy-action@master
+  # TODO: verify this digest matches the latest v0.28.0 release
+  uses: aquasecurity/trivy-action@0123456789abcdef0123456789abcdef01234567  # v0.28.0
   with:
     image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
     format: 'sarif'
@@ -364,7 +367,7 @@ spec:
             matchLabels:
               k8s-app: kube-dns
 
-    # git-sync sidecar needs HTTPS to pull content/theme repos
+    # HTTPS to any external endpoint (L4 only — consider Cilium/Calico FQDN policy for production)
     - ports:
         - protocol: TCP
           port: 443
@@ -376,7 +379,7 @@ spec:
 |---|---|---|
 | Ingress TCP 8080 | HTTP from ingress controller only | BlogFlow serves HTTP on 8080; no other port is needed |
 | Egress UDP/TCP 53 | DNS to kube-dns | Required for any outbound name resolution |
-| Egress TCP 443 | HTTPS to git remotes | git-sync sidecar pulls content and theme repositories over HTTPS |
+| Egress TCP 443 | HTTPS to git remotes | git-sync sidecar pulls content repository over HTTPS |
 
 All other traffic — inbound and outbound — is **denied by default** when both
 `Ingress` and `Egress` are listed in `policyTypes`.
@@ -404,6 +407,12 @@ data:
   BLOGFLOW_WEBHOOK_SECRET: <base64-encoded-value>
   BLOGFLOW_GIT_TOKEN: <base64-encoded-value>
 ```
+
+> ⚠️ **Kubernetes Secrets are base64-encoded, not encrypted.** Anyone with
+> `get`/`list` access to Secrets in the namespace can decode them trivially.
+> Enable [etcd encryption at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)
+> to protect Secret data on disk, and consider an external secrets manager
+> (Vault, AWS Secrets Manager, etc.) for stronger guarantees.
 
 Mount as environment variables in the pod spec:
 
@@ -435,132 +444,159 @@ env:
 
 ---
 
-## Complete Kubernetes Pod Spec
+## Complete Kubernetes Deployment Spec
 
-A production-ready Pod spec incorporating every security control documented
-above:
+A production-ready Deployment spec incorporating every security control
+documented above:
 
 ```yaml
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: blogflow
   namespace: blogflow
   labels:
     app: blogflow
 spec:
-  automountServiceAccountToken: false
-
-  securityContext:
-    runAsUser: 65532
-    runAsGroup: 65532
-    fsGroup: 65532
-    runAsNonRoot: true
-    seccompProfile:
-      type: RuntimeDefault
-
-  containers:
-    - name: blogflow
-      image: ghcr.io/your-org/blogflow@sha256:abc123def456...
-      ports:
-        - containerPort: 8080
-          protocol: TCP
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blogflow
+  template:
+    metadata:
+      labels:
+        app: blogflow
+    spec:
+      automountServiceAccountToken: false
 
       securityContext:
-        readOnlyRootFilesystem: true
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop:
-            - ALL
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
 
-      envFrom:
-        - secretRef:
-            name: blogflow-secrets
+      containers:
+        - name: blogflow
+          image: ghcr.io/your-org/blogflow@sha256:abc123def456...
+          ports:
+            - containerPort: 8080
+              protocol: TCP
 
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 200m
-          memory: 128Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
 
-      livenessProbe:
-        httpGet:
-          path: /healthz
-          port: 8080
-        initialDelaySeconds: 5
-        periodSeconds: 10
+          envFrom:
+            - secretRef:
+                name: blogflow-secrets
 
-      readinessProbe:
-        httpGet:
-          path: /readyz
-          port: 8080
-        initialDelaySeconds: 3
-        periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 
-      volumeMounts:
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          volumeMounts:
+            - name: content
+              mountPath: /data/content
+            - name: theme
+              mountPath: /data/theme
+            - name: config
+              mountPath: /data/config
+              readOnly: true
+            - name: cache
+              mountPath: /data/cache
+            - name: tmp
+              mountPath: /tmp
+
+        - name: git-sync
+          # TODO: replace with verified digest from
+          #   crane digest registry.k8s.io/git-sync/git-sync:v4.4.0
+          image: registry.k8s.io/git-sync/git-sync@sha256:REPLACE_WITH_VERIFIED_DIGEST
+          args:
+            - --repo=https://github.com/your-org/blog-content.git
+            - --root=/data/content
+            - --period=60s
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: content
+              mountPath: /data/content
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
         - name: content
-          mountPath: /data/content
+          persistentVolumeClaim:
+            claimName: blogflow-content
         - name: theme
-          mountPath: /data/theme
+          persistentVolumeClaim:
+            claimName: blogflow-theme
         - name: config
-          mountPath: /data/config
-          readOnly: true
+          configMap:
+            name: blogflow-config
         - name: cache
-          mountPath: /data/cache
+          emptyDir: {}
         - name: tmp
-          mountPath: /tmp
-
-    - name: git-sync
-      image: registry.k8s.io/git-sync/git-sync:v4.4.0
-      args:
-        - --repo=https://github.com/your-org/blog-content.git
-        - --root=/data/content
-        - --period=60s
-      securityContext:
-        readOnlyRootFilesystem: true
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop:
-            - ALL
-      volumeMounts:
-        - name: content
-          mountPath: /data/content
-        - name: tmp
-          mountPath: /tmp
-
-  volumes:
-    - name: content
-      persistentVolumeClaim:
-        claimName: blogflow-content
-    - name: theme
-      persistentVolumeClaim:
-        claimName: blogflow-theme
-    - name: config
-      configMap:
-        name: blogflow-config
-    - name: cache
-      emptyDir: {}
-    - name: tmp
-      emptyDir:
-        medium: Memory
-        sizeLimit: 64Mi
-
-  restartPolicy: Always
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
 ```
+
+> ⚠️ **Do not use `hostPath` volumes in production.** `hostPath` mounts bypass
+> Pod Security Standards (Restricted) and expose the host filesystem to the
+> container. Use `PersistentVolumeClaim` (as shown above) or CSI-backed volumes
+> instead. `hostPath` is acceptable only in single-node development clusters.
 
 ### Notable settings
 
 - **`automountServiceAccountToken: false`**: BlogFlow does not call the
   Kubernetes API, so the service account token is not mounted. This removes a
   credential from the container's filesystem.
+- **Deployment with `replicas: 1`**: Unlike a bare Pod, a Deployment ensures the
+  pod is rescheduled if it is evicted or the node fails.
 - **Resource limits**: Prevents runaway resource consumption. Adjust based on
   your traffic profile.
 - **Health probes**: Kubernetes restarts the pod if it becomes unhealthy;
   traffic is only routed to ready pods.
 - **git-sync sidecar**: Runs with the same security constraints as the main
-  container. Pulls content changes on a 60-second interval.
+  container (including `runAsUser: 65532`, `runAsNonRoot: true`, and full
+  capability drop). Pulls content changes on a 60-second interval.
 
 ---
 
