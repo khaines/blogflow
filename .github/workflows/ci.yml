@@ -173,3 +173,13 @@ jobs:
             docker logs "$CONTAINER"
             exit 1
           fi
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run E2E tests
+        run: make e2e

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt docker clean run dev smoke-test
+.PHONY: build test lint fmt docker clean run dev smoke-test e2e
 
 ## build: Compile blogflow binary
 build:
@@ -73,6 +73,10 @@ smoke-test: docker
 	check "$$BASE/nonexistent" 404 ""         "GET /nonexistent → 404"; \
 	echo ""; echo "Results: $$PASS passed, $$FAIL failed"; \
 	if [ "$$FAIL" -gt 0 ]; then docker logs "$$CONTAINER"; exit 1; fi
+
+## e2e: Run end-to-end tests via Docker Compose
+e2e:
+	./scripts/e2e-test.sh
 
 ## clean: Remove build artifacts
 clean:
