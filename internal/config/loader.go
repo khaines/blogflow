@@ -60,6 +60,7 @@ type Loader struct {
 	configFS  fs.FS
 	current   atomic.Pointer[Config]
 	configDir string       // OS path for fsnotify watching
+	reloadMu  sync.Mutex   // serializes Reload to prevent stale-callback races
 	mu        sync.RWMutex // protects callbacks
 	callbacks []func(*Config)
 }

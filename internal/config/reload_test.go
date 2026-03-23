@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -267,6 +268,85 @@ func TestConfig_ReturnsCurrentConfig(t *testing.T) {
 	}
 	if loader.Config().Site.Title != "Getter" {
 		t.Errorf("expected 'Getter' after Load, got %q", loader.Config().Site.Title)
+	}
+}
+
+// --- Concurrent access ---
+
+func TestReload_ConcurrentReadDuringReload(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `site:
+  title: "Concurrent"
+  base_url: "http://localhost:8080"
+`)
+	loader := NewLoader(os.DirFS(dir))
+	if _, err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Spin up readers that continuously call Config().
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for range 4 {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					cfg := loader.Config()
+					if cfg == nil {
+						t.Error("Config() returned nil")
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	// Concurrent reloads while readers are active.
+	for range 20 {
+		if _, err := loader.Reload(); err != nil {
+			t.Fatalf("Reload failed: %v", err)
+		}
+	}
+}
+
+func TestReload_ConcurrentReloads(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `site:
+  title: "Race"
+  base_url: "http://localhost:8080"
+`)
+	loader := NewLoader(os.DirFS(dir))
+	if _, err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	var callbackCount atomic.Int32
+	loader.OnChange(func(cfg *Config) {
+		// Callback must receive non-nil, valid config.
+		if cfg == nil {
+			t.Error("callback received nil config")
+		}
+	})
+	loader.OnChange(func(_ *Config) { callbackCount.Add(1) })
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				_, _ = loader.Reload()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if c := callbackCount.Load(); c != 80 {
+		t.Errorf("expected 80 callback invocations, got %d", c)
 	}
 }
 

@@ -17,6 +17,9 @@ const debounceDuration = 500 * time.Millisecond
 // On validation (or parse) failure the previous config is preserved and
 // the error is returned.
 func (l *Loader) Reload() (*Config, error) {
+	l.reloadMu.Lock()
+	defer l.reloadMu.Unlock()
+
 	cfg, err := l.Load()
 	if err != nil {
 		return nil, err
