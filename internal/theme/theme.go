@@ -1,8 +1,6 @@
-// Package theme loads Go html/templates from the overlay FS and renders pages.
-//
-// The Engine reads .html files from a templates/ directory within the provided
-// fs.FS (typically an OverlayFS), parses them with custom template functions,
-// and caches the result. Callers render named templates with arbitrary data.
+// Package theme loads Go html/templates from the overlay FS and renders
+// blog pages. Base template and partials are shared; page templates are
+// cloned per request so their {{define}} blocks don't collide.
 package theme
 
 import (
@@ -19,12 +17,12 @@ import (
 // Engine loads and caches templates from the overlay FS.
 type Engine struct {
 	fs    fs.FS
-	tmpl  atomic.Pointer[template.Template]
+	base  atomic.Pointer[template.Template] // base.html + partials
+	pages atomic.Pointer[map[string]string] // page template sources keyed by path
 	funcs template.FuncMap
 }
 
 // NewEngine creates a theme engine that reads templates from the given fs.FS.
-// The fs should be an OverlayFS or similar — templates are resolved through it.
 func NewEngine(fsys fs.FS) (*Engine, error) {
 	e := &Engine{
 		fs:    fsys,
@@ -36,15 +34,30 @@ func NewEngine(fsys fs.FS) (*Engine, error) {
 	return e, nil
 }
 
-// Render renders a named template to the writer with the given data.
-// Output is buffered so that partial content is never written on error.
+// Render renders a page using base.html with the named page template's
+// block overrides ({{define "content"}}, {{define "title"}}, etc.).
+// Each page template is cloned+parsed per request so defines don't collide.
 func (e *Engine) Render(w io.Writer, name string, data any) error {
+	pages := *e.pages.Load()
+	src, ok := pages[name]
+	if !ok {
+		return fmt.Errorf("theme: template %q not found", name)
+	}
+
+	clone, err := e.base.Load().Clone()
+	if err != nil {
+		return fmt.Errorf("theme: clone: %w", err)
+	}
+	if _, err := clone.Parse(src); err != nil {
+		return fmt.Errorf("theme: parse page %s: %w", name, err)
+	}
+
 	var buf bytes.Buffer
-	if err := e.tmpl.Load().ExecuteTemplate(&buf, name, data); err != nil {
+	if err := clone.ExecuteTemplate(&buf, "templates/base.html", data); err != nil {
 		return err
 	}
-	_, err := buf.WriteTo(w)
-	return err
+	_, writeErr := buf.WriteTo(w)
+	return writeErr
 }
 
 // RenderToString renders a named template to a string.
@@ -57,13 +70,13 @@ func (e *Engine) RenderToString(name string, data any) (string, error) {
 }
 
 // Reload re-reads all templates from the filesystem.
-// Called after content/theme changes for hot-reload.
 func (e *Engine) Reload() error {
 	return e.loadTemplates()
 }
 
 func (e *Engine) loadTemplates() error {
-	tmpl := template.New("").Funcs(e.funcs)
+	base := template.New("").Funcs(e.funcs)
+	pages := make(map[string]string)
 
 	err := fs.WalkDir(e.fs, "templates", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -81,9 +94,22 @@ func (e *Engine) loadTemplates() error {
 			return fmt.Errorf("reading template %s: %w", path, readErr)
 		}
 
-		// Use the full path as template name (e.g., "templates/post.html").
-		if _, parseErr := tmpl.New(path).Parse(string(data)); parseErr != nil {
-			return fmt.Errorf("parsing template %s: %w", path, parseErr)
+		src := string(data)
+
+		// Base template and partials go into the shared base set.
+		// Page templates (list, post, page, 404) are stored separately
+		// and cloned+parsed per request so their defines don't collide.
+		//
+		// Convention: partials may use {{define "name"}} blocks to export
+		// a short alias (e.g., {{define "post-meta"}}). Without a define
+		// block, the partial is registered under its full WalkDir path
+		// (e.g., "templates/partials/header.html"). Both patterns work.
+		if strings.Contains(path, "partials/") || path == "templates/base.html" {
+			if _, parseErr := base.New(path).Parse(src); parseErr != nil {
+				return fmt.Errorf("parsing template %s: %w", path, parseErr)
+			}
+		} else {
+			pages[path] = src
 		}
 
 		return nil
@@ -92,7 +118,13 @@ func (e *Engine) loadTemplates() error {
 		return fmt.Errorf("loading templates: %w", err)
 	}
 
-	e.tmpl.Store(tmpl)
+	// Validate base.html exists — all page renders depend on it.
+	if base.Lookup("templates/base.html") == nil {
+		return fmt.Errorf("loading templates: templates/base.html not found (required)")
+	}
+
+	e.base.Store(base)
+	e.pages.Store(&pages)
 	return nil
 }
 
@@ -128,9 +160,6 @@ func defaultFuncMap() template.FuncMap {
 			}
 			return 1
 		},
-		// safeHTML was intentionally removed — content from the scanner is
-		// already typed as template.HTML, so a conversion helper is unnecessary
-		// and would widen the XSS attack surface.
 		"urlize": func(s string) string {
 			s = strings.ToLower(s)
 			s = strings.ReplaceAll(s, " ", "-")

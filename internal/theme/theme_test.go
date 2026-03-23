@@ -10,6 +10,10 @@ import (
 
 func testFS(files map[string]string) fstest.MapFS {
 	m := make(fstest.MapFS)
+	// Always include base template for the engine's clone+parse pattern
+	if _, ok := files["templates/base.html"]; !ok {
+		m["templates/base.html"] = &fstest.MapFile{Data: []byte(`<!DOCTYPE html>{{block "content" .}}{{end}}`)}
+	}
 	for k, v := range files {
 		m[k] = &fstest.MapFile{Data: []byte(v)}
 	}
@@ -18,7 +22,7 @@ func testFS(files map[string]string) fstest.MapFS {
 
 func TestNewEngine_LoadsTemplates(t *testing.T) {
 	fs := testFS(map[string]string{
-		"templates/index.html": `<h1>Hello</h1>`,
+		"templates/index.html": `{{define "content"}}<h1>Hello</h1>{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -30,14 +34,14 @@ func TestNewEngine_LoadsTemplates(t *testing.T) {
 	if err := e.Render(&b, "templates/index.html", nil); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if got := b.String(); got != "<h1>Hello</h1>" {
-		t.Errorf("got %q, want %q", got, "<h1>Hello</h1>")
+	if got := b.String(); !strings.Contains(got, "<h1>Hello</h1>") {
+		t.Errorf("output %q does not contain %q", got, "<h1>Hello</h1>")
 	}
 }
 
 func TestRender_WithData(t *testing.T) {
 	fs := testFS(map[string]string{
-		"templates/post.html": `<h1>{{.Title}}</h1><p>by {{.Author}}</p>`,
+		"templates/post.html": `{{define "content"}}<h1>{{.Title}}</h1><p>by {{.Author}}</p>{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -55,8 +59,8 @@ func TestRender_WithData(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	want := `<h1>My Post</h1><p>by Alice</p>`
-	if got := b.String(); got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if got := b.String(); !strings.Contains(got, want) {
+		t.Errorf("output %q does not contain %q", got, want)
 	}
 }
 
@@ -69,73 +73,73 @@ func TestRender_FuncMap(t *testing.T) {
 	}{
 		{
 			name:     "formatDate",
-			template: `{{formatDate .Date "2006-01-02"}}`,
+			template: `{{define "content"}}{{formatDate .Date "2006-01-02"}}{{end}}`,
 			data:     struct{ Date time.Time }{Date: time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)},
 			want:     "2025-03-15",
 		},
 		{
 			name:     "lower",
-			template: `{{lower .}}`,
+			template: `{{define "content"}}{{lower .}}{{end}}`,
 			data:     "HELLO",
 			want:     "hello",
 		},
 		{
 			name:     "upper",
-			template: `{{upper .}}`,
+			template: `{{define "content"}}{{upper .}}{{end}}`,
 			data:     "hello",
 			want:     "HELLO",
 		},
 		{
 			name:     "truncate_short",
-			template: `{{truncate . 10}}`,
+			template: `{{define "content"}}{{truncate . 10}}{{end}}`,
 			data:     "short",
 			want:     "short",
 		},
 		{
 			name:     "truncate_long_word_boundary",
-			template: `{{truncate . 20}}`,
+			template: `{{define "content"}}{{truncate . 20}}{{end}}`,
 			data:     "This is a long sentence that should be truncated",
 			want:     "This is a long…",
 		},
 		{
 			name:     "truncate_long_no_space",
-			template: `{{truncate . 5}}`,
+			template: `{{define "content"}}{{truncate . 5}}{{end}}`,
 			data:     "abcdefghij",
 			want:     "abcde…",
 		},
 		{
 			name:     "urlize",
-			template: `{{urlize .}}`,
+			template: `{{define "content"}}{{urlize .}}{{end}}`,
 			data:     "Hello World! 123",
 			want:     "hello-world-123",
 		},
 		{
 			name:     "add",
-			template: `{{add 2 3}}`,
+			template: `{{define "content"}}{{add 2 3}}{{end}}`,
 			data:     nil,
 			want:     "5",
 		},
 		{
 			name:     "sub",
-			template: `{{sub 10 3}}`,
+			template: `{{define "content"}}{{sub 10 3}}{{end}}`,
 			data:     nil,
 			want:     "7",
 		},
 		{
 			name:     "seq",
-			template: `{{range seq 1 3}}{{.}} {{end}}`,
+			template: `{{define "content"}}{{range seq 1 3}}{{.}} {{end}}{{end}}`,
 			data:     nil,
 			want:     "1 2 3 ",
 		},
 		{
 			name:     "readingTime_short",
-			template: `{{readingTime .}}`,
+			template: `{{define "content"}}{{readingTime .}}{{end}}`,
 			data:     "A few words",
 			want:     "1",
 		},
 		{
 			name:     "readingTime_long",
-			template: `{{readingTime .}}`,
+			template: `{{define "content"}}{{readingTime .}}{{end}}`,
 			data:     strings.Repeat("word ", 600),
 			want:     "3",
 		},
@@ -154,8 +158,8 @@ func TestRender_FuncMap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RenderToString: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("output %q does not contain %q", got, tt.want)
 			}
 		})
 	}
@@ -164,7 +168,7 @@ func TestRender_FuncMap(t *testing.T) {
 func TestRender_Partials(t *testing.T) {
 	fs := testFS(map[string]string{
 		"templates/partials/header.html": `<header>{{.SiteName}}</header>`,
-		"templates/page.html":            `{{template "templates/partials/header.html" .}}<main>content</main>`,
+		"templates/page.html":            `{{define "content"}}{{template "templates/partials/header.html" .}}<main>content</main>{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -178,14 +182,14 @@ func TestRender_Partials(t *testing.T) {
 		t.Fatalf("RenderToString: %v", err)
 	}
 	want := `<header>BlogFlow</header><main>content</main>`
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if !strings.Contains(got, want) {
+		t.Errorf("output %q does not contain %q", got, want)
 	}
 }
 
 func TestRender_MissingTemplate(t *testing.T) {
 	fs := testFS(map[string]string{
-		"templates/index.html": `<h1>Hello</h1>`,
+		"templates/index.html": `{{define "content"}}<h1>Hello</h1>{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -202,9 +206,10 @@ func TestRender_MissingTemplate(t *testing.T) {
 
 func TestRender_Blocks(t *testing.T) {
 	t.Run("default_block", func(t *testing.T) {
-		// When no {{define}} overrides the block, the default content is used.
+		// When the page template does not override the block, the default is used.
 		fs := testFS(map[string]string{
-			"templates/base.html": `<html>{{block "content" .}}default{{end}}</html>`,
+			"templates/base.html":  `<html>{{block "content" .}}default{{end}}</html>`,
+			"templates/empty.html": ``,
 		})
 
 		e, err := NewEngine(fs)
@@ -212,7 +217,7 @@ func TestRender_Blocks(t *testing.T) {
 			t.Fatalf("NewEngine: %v", err)
 		}
 
-		got, err := e.RenderToString("templates/base.html", nil)
+		got, err := e.RenderToString("templates/empty.html", nil)
 		if err != nil {
 			t.Fatalf("RenderToString: %v", err)
 		}
@@ -222,7 +227,7 @@ func TestRender_Blocks(t *testing.T) {
 	})
 
 	t.Run("overridden_block", func(t *testing.T) {
-		// A {{define}} in another template overrides the block default.
+		// A {{define}} in a page template overrides the block default.
 		fs := testFS(map[string]string{
 			"templates/base.html": `<html>{{block "content" .}}default{{end}}</html>`,
 			"templates/home.html": `{{define "content"}}home page{{end}}`,
@@ -233,7 +238,7 @@ func TestRender_Blocks(t *testing.T) {
 			t.Fatalf("NewEngine: %v", err)
 		}
 
-		got, err := e.RenderToString("templates/base.html", nil)
+		got, err := e.RenderToString("templates/home.html", nil)
 		if err != nil {
 			t.Fatalf("RenderToString: %v", err)
 		}
@@ -245,7 +250,8 @@ func TestRender_Blocks(t *testing.T) {
 
 func TestReload(t *testing.T) {
 	m := fstest.MapFS{
-		"templates/index.html": &fstest.MapFile{Data: []byte(`v1`)},
+		"templates/base.html":  &fstest.MapFile{Data: []byte(`<!DOCTYPE html>{{block "content" .}}{{end}}`)},
+		"templates/index.html": &fstest.MapFile{Data: []byte(`{{define "content"}}v1{{end}}`)},
 	}
 
 	e, err := NewEngine(m)
@@ -257,12 +263,12 @@ func TestReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
-	if got != "v1" {
-		t.Errorf("before reload: got %q, want %q", got, "v1")
+	if !strings.Contains(got, "v1") {
+		t.Errorf("before reload: output %q does not contain %q", got, "v1")
 	}
 
-	// Update the file in the MapFS.
-	m["templates/index.html"] = &fstest.MapFile{Data: []byte(`v2`)}
+	// Update the page template in the MapFS.
+	m["templates/index.html"] = &fstest.MapFile{Data: []byte(`{{define "content"}}v2{{end}}`)}
 
 	if err := e.Reload(); err != nil {
 		t.Fatalf("Reload: %v", err)
@@ -272,13 +278,16 @@ func TestReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderToString after reload: %v", err)
 	}
-	if got != "v2" {
-		t.Errorf("after reload: got %q, want %q", got, "v2")
+	if !strings.Contains(got, "v2") {
+		t.Errorf("after reload: output %q does not contain %q", got, "v2")
 	}
 }
 
 func TestReload_ConcurrentWithRender(t *testing.T) {
-	m := fstest.MapFS{"templates/t.html": &fstest.MapFile{Data: []byte("v1")}}
+	m := fstest.MapFS{
+		"templates/base.html": &fstest.MapFile{Data: []byte(`<!DOCTYPE html>{{block "content" .}}{{end}}`)},
+		"templates/t.html":    &fstest.MapFile{Data: []byte(`{{define "content"}}v1{{end}}`)},
+	}
 	e, err := NewEngine(m)
 	if err != nil {
 		t.Fatal(err)
@@ -303,9 +312,10 @@ func TestReload_ConcurrentWithRender(t *testing.T) {
 }
 
 func TestNewEngine_NoTemplatesDir(t *testing.T) {
-	fs := testFS(map[string]string{
-		"static/main.css": `body {}`,
-	})
+	// Use raw MapFS so testFS doesn't auto-add templates/base.html.
+	fs := fstest.MapFS{
+		"static/main.css": &fstest.MapFile{Data: []byte(`body {}`)},
+	}
 
 	_, err := NewEngine(fs)
 	if err == nil {
@@ -315,7 +325,7 @@ func TestNewEngine_NoTemplatesDir(t *testing.T) {
 
 func TestRender_HTMLEscaping(t *testing.T) {
 	fs := testFS(map[string]string{
-		"templates/page.html": `<p>{{.Content}}</p>`,
+		"templates/page.html": `{{define "content"}}<p>{{.Content}}</p>{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -333,14 +343,14 @@ func TestRender_HTMLEscaping(t *testing.T) {
 		t.Errorf("expected HTML escaping, got raw script tag: %s", got)
 	}
 	want := `<p>&lt;script&gt;alert(&#34;xss&#34;)&lt;/script&gt;</p>`
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if !strings.Contains(got, want) {
+		t.Errorf("output %q does not contain %q", got, want)
 	}
 }
 
 func TestRenderToString(t *testing.T) {
 	fs := testFS(map[string]string{
-		"templates/greeting.html": `Hello, {{.Name}}!`,
+		"templates/greeting.html": `{{define "content"}}Hello, {{.Name}}!{{end}}`,
 	})
 
 	e, err := NewEngine(fs)
@@ -353,7 +363,7 @@ func TestRenderToString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
-	if got != "Hello, World!" {
-		t.Errorf("got %q, want %q", got, "Hello, World!")
+	if !strings.Contains(got, "Hello, World!") {
+		t.Errorf("output %q does not contain %q", got, "Hello, World!")
 	}
 }

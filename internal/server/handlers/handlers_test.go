@@ -40,17 +40,20 @@ func testDeps(t *testing.T, posts, pages []*content.Post) *handlers.Deps {
 
 	// Minimal templates that render enough to assert on.
 	tmplFS := fstest.MapFS{
+		"templates/base.html": &fstest.MapFile{
+			Data: []byte(`{{block "content" .}}{{end}}`),
+		},
 		"templates/list.html": &fstest.MapFile{
-			Data: []byte(`{{.Title}}|posts={{len .Posts}}|page={{.Pagination.CurrentPage}}|total={{.Pagination.TotalPages}}`),
+			Data: []byte(`{{define "content"}}{{.Title}}|posts={{len .Posts}}|page={{.Pagination.CurrentPage}}|total={{.Pagination.TotalPages}}{{end}}`),
 		},
 		"templates/post.html": &fstest.MapFile{
-			Data: []byte(`post:{{.Post.Slug}}|{{.Title}}`),
+			Data: []byte(`{{define "content"}}post:{{.Post.Slug}}|{{.Title}}{{end}}`),
 		},
 		"templates/page.html": &fstest.MapFile{
-			Data: []byte(`page:{{.Page.Slug}}|{{.Title}}`),
+			Data: []byte(`{{define "content"}}page:{{.Page.Slug}}|{{.Title}}{{end}}`),
 		},
 		"templates/404.html": &fstest.MapFile{
-			Data: []byte(`404:{{.Title}}`),
+			Data: []byte(`{{define "content"}}404:{{.Title}}{{end}}`),
 		},
 	}
 	eng, err := theme.NewEngine(tmplFS)

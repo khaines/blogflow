@@ -1,12 +1,12 @@
-{{define "title"}}{{if .PageTitle}}{{.PageTitle}} — {{end}}{{.Site.Title}}{{end}}
+{{define "title"}}{{if .Title}}{{.Title}} — {{end}}{{.Site.Title}}{{end}}
 
 {{define "content"}}
 <section class="post-list">
-    {{if .PageTitle}}<h1>{{.PageTitle}}</h1>{{end}}
+    {{if .Title}}<h1>{{.Title}}</h1>{{end}}
     {{range .Posts}}
     <article class="post-summary">
         <header>
-            <h2><a href="{{.URL}}">{{.Title}}</a></h2>
+            <h2><a href="/posts/{{.Slug}}">{{.Title}}</a></h2>
             {{template "post-meta" .}}
         </header>
         {{if .Summary}}<p class="summary">{{.Summary}}</p>{{end}}
