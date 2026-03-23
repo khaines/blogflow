@@ -19,7 +19,7 @@ var allowedSchemes = map[string]bool{
 type linkSanitizer struct{}
 
 func (ls *linkSanitizer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
-	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	_ = ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}

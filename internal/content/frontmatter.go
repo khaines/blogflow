@@ -1,3 +1,5 @@
+// Package content provides markdown rendering and front matter parsing
+// for BlogFlow's content pipeline.
 package content
 
 import (
