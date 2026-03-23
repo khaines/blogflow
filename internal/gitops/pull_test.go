@@ -28,7 +28,7 @@ func newBareRepoWithCommit(t *testing.T) string {
 	}
 
 	// Write a file and commit it.
-	if err := os.WriteFile(filepath.Join(srcDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "README.md"), []byte("# test\n"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func addCommitToBareRepo(t *testing.T, bareDir, filename, content string) {
 		t.Fatalf("clone for push: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(tmpDir, filename), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, filename), []byte(content), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
@@ -186,7 +186,7 @@ func TestCloneOrPull_CloneNew(t *testing.T) {
 	}
 
 	// Verify the file was cloned.
-	data, err := os.ReadFile(filepath.Join(destDir, "README.md"))
+	data, err := os.ReadFile(filepath.Join(destDir, "README.md")) //nolint:gosec // G304: test reads known path
 	if err != nil {
 		t.Fatalf("read cloned file: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCloneOrPull_PullWithNewCommit(t *testing.T) {
 	}
 
 	// Verify the new file is present.
-	data, err := os.ReadFile(filepath.Join(destDir, "second.txt"))
+	data, err := os.ReadFile(filepath.Join(destDir, "second.txt")) //nolint:gosec // G304: test reads known path
 	if err != nil {
 		t.Fatalf("read new file: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestCloneOrPull_PullFallbackReclone(t *testing.T) {
 	}
 
 	// Verify the new file is present after re-clone.
-	data, err := os.ReadFile(filepath.Join(destDir, "new.txt"))
+	data, err := os.ReadFile(filepath.Join(destDir, "new.txt")) //nolint:gosec // G304: test reads known path
 	if err != nil {
 		t.Fatalf("read file after re-clone: %v", err)
 	}
