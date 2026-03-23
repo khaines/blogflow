@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/gitops"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/gitops"
 )
 
 func signPayload(secret, payload []byte) string {

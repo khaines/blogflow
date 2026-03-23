@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/content"
 )
 
 // Sitemap XML structures per sitemaps.org protocol.

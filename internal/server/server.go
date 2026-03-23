@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 // Server is the BlogFlow HTTP server.

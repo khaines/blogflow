@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 const maxPayloadSize = 1 << 20 // 1 MB

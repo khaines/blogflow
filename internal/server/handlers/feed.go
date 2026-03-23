@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/content"
 )
 
 // Atom XML structures.
