@@ -155,10 +155,11 @@ func TestRateLimiter_LRUOrderUpdatedOnAccess(t *testing.T) {
 func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
-	rl := newRateLimiter(100)
+	rl := newRateLimiter(5) // low limit → some requests denied
+	rl.maxSize = 50         // 100 unique IPs forces concurrent LRU eviction
 	var wg sync.WaitGroup
 
-	for i := range 50 {
+	for i := range 100 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
