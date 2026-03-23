@@ -56,6 +56,12 @@ server:
   read_timeout: "5s"          # Max time to read request (Go duration)
   write_timeout: "10s"        # Max time to write response
   idle_timeout: "120s"        # Max time for idle keep-alive connections
+  # tls_terminated: false     # Set to true when behind a TLS-terminating reverse proxy
+                              # to enable Strict-Transport-Security (HSTS) header.
+                              # Override: BLOGFLOW_SERVER_TLS_TERMINATED
+  # hsts_max_age: 63072000   # HSTS max-age in seconds (default: 63072000 = 2 years).
+                              # Only used when tls_terminated is true.
+                              # Override: BLOGFLOW_SERVER_HSTS_MAX_AGE
 
 # ---------------------------------------------------------------------------
 # Cache — in-memory rendered content cache

@@ -202,6 +202,12 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 				"connect-src 'none'; style-src 'self'; img-src 'self' https: data:; "+
 				"font-src 'self' https:; base-uri 'self'; form-action 'self'; "+
 				"frame-ancestors 'self'")
+		w.Header().Set("Permissions-Policy",
+			"camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=(), interest-cohort=()")
+		if s.config.Server.TLSTerminated {
+			w.Header().Set("Strict-Transport-Security",
+				fmt.Sprintf("max-age=%d; includeSubDomains", s.config.Server.HSTSMaxAge))
+		}
 		next.ServeHTTP(w, r)
 	})
 }

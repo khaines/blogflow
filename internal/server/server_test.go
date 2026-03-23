@@ -154,6 +154,51 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestPermissionsPolicyHeader(t *testing.T) {
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	got := rec.Header().Get("Permissions-Policy")
+	want := "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=(), interest-cohort=()"
+	if got != want {
+		t.Errorf("Permissions-Policy = %q, want %q", got, want)
+	}
+}
+
+func TestHSTSHeader_DefaultOff(t *testing.T) {
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("HSTS should be absent by default, got %q", got)
+	}
+}
+
+func TestHSTSHeader_EnabledWhenTLSTerminated(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.TLSTerminated = true
+	cfg.Server.HSTSMaxAge = 63072000
+
+	s := New(cfg, slog.Default())
+	s.RegisterRoutes(testRouteOptions())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	got := rec.Header().Get("Strict-Transport-Security")
+	want := "max-age=63072000; includeSubDomains"
+	if got != want {
+		t.Errorf("Strict-Transport-Security = %q, want %q", got, want)
+	}
+}
+
 func TestCSPHeader(t *testing.T) {
 	s := newTestServer(t)
 
