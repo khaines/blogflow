@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,15 +57,30 @@ func (e *SecretInYAMLError) Error() string {
 
 // Loader loads, validates, and manages configuration.
 type Loader struct {
-	configFS fs.FS
-	current  atomic.Pointer[Config]
+	configFS  fs.FS
+	current   atomic.Pointer[Config]
+	configDir string       // OS path for fsnotify watching
+	mu        sync.RWMutex // protects callbacks
+	callbacks []func(*Config)
+}
+
+// LoaderOption configures optional Loader behaviour.
+type LoaderOption func(*Loader)
+
+// WithWatchDir sets the OS-level directory that Watch() monitors for
+// site.yaml changes. Required only if Watch() will be called.
+func WithWatchDir(dir string) LoaderOption {
+	return func(l *Loader) { l.configDir = dir }
 }
 
 // NewLoader creates a config loader backed by the given filesystem.
 // The FS should be a 2-layer overlay (config + defaults) or a single
 // defaults FS. NewLoader eagerly loads defaults so Get() never returns nil.
-func NewLoader(configFS fs.FS) *Loader {
+func NewLoader(configFS fs.FS, opts ...LoaderOption) *Loader {
 	l := &Loader{configFS: configFS}
+	for _, opt := range opts {
+		opt(l)
+	}
 	// Eagerly store defaults so Get() is never nil.
 	l.current.Store(Default())
 	return l
@@ -73,6 +89,11 @@ func NewLoader(configFS fs.FS) *Loader {
 // Get returns the current immutable Config. Safe for concurrent use.
 // Never returns nil — defaults are loaded eagerly in NewLoader.
 func (l *Loader) Get() *Config {
+	return l.current.Load()
+}
+
+// Config returns the current immutable Config atomically. Alias for Get().
+func (l *Loader) Config() *Config {
 	return l.current.Load()
 }
 
@@ -112,8 +133,6 @@ func (l *Loader) Load() (*Config, error) {
 		return nil, fmt.Errorf("applying environment overrides: %w", err)
 	}
 
-	// TODO(P1): Add Reload() for runtime config reloading and OnChange() callback
-	// registration. See GitHub issue for design.
 	// TODO(P1): Add structured logging (slog) and metrics for config operations.
 	// See GitHub issue for design.
 
