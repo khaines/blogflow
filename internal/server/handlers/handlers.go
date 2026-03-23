@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"bytes"
 	"log/slog"
 	"math"
 	"net/http"
@@ -47,49 +48,19 @@ type Pagination struct {
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page := queryInt(r, "page", 1)
-		if page < 1 {
-			page = 1
-		}
-
-		posts := deps.Index.Posts
 		perPage := deps.Config.Content.PostsPerPage
-		if perPage <= 0 {
-			perPage = 10
+
+		paged, pag := paginate(deps.Index.Posts, page, perPage)
+
+		data := &PageData{
+			Site:       deps.Config.Site,
+			Feed:       deps.Config.Feed,
+			Posts:      paged,
+			Title:      deps.Config.Site.Title,
+			Pagination: pag,
 		}
 
-		totalPages := int(math.Ceil(float64(len(posts)) / float64(perPage)))
-		if totalPages < 1 {
-			totalPages = 1
-		}
-		if page > totalPages {
-			page = totalPages
-		}
-
-		start := (page - 1) * perPage
-		end := start + perPage
-		if end > len(posts) {
-			end = len(posts)
-		}
-
-		data := PageData{
-			Site:  deps.Config.Site,
-			Feed:  deps.Config.Feed,
-			Posts: posts[start:end],
-			Title: deps.Config.Site.Title,
-			Pagination: &Pagination{
-				CurrentPage: page,
-				TotalPages:  totalPages,
-				HasPrev:     page > 1,
-				HasNext:     page < totalPages,
-				PrevPage:    page - 1,
-				NextPage:    page + 1,
-			},
-		}
-
-		if err := deps.Theme.Render(w, "templates/list.html", data); err != nil {
-			slog.Error("rendering list", "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
+		renderTemplate(w, deps.Theme, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -105,17 +76,14 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data := PageData{
+		data := &PageData{
 			Site:  deps.Config.Site,
 			Feed:  deps.Config.Feed,
 			Post:  post,
 			Title: post.Title,
 		}
 
-		if err := deps.Theme.Render(w, "templates/post.html", data); err != nil {
-			slog.Error("rendering post", "slug", slug, "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
+		renderTemplate(w, deps.Theme, "templates/post.html", data, http.StatusOK)
 	}
 }
 
@@ -131,17 +99,14 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data := PageData{
+		data := &PageData{
 			Site:  deps.Config.Site,
 			Feed:  deps.Config.Feed,
 			Page:  page,
 			Title: page.Title,
 		}
 
-		if err := deps.Theme.Render(w, "templates/page.html", data); err != nil {
-			slog.Error("rendering page", "slug", slug, "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
+		renderTemplate(w, deps.Theme, "templates/page.html", data, http.StatusOK)
 	}
 }
 
@@ -157,45 +122,81 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data := PageData{
-			Site:  deps.Config.Site,
-			Feed:  deps.Config.Feed,
-			Posts: posts,
-			Tag:   tag,
-			Title: "Posts tagged \"" + tag + "\"",
-			Pagination: &Pagination{
-				CurrentPage: 1,
-				TotalPages:  1,
-				HasPrev:     false,
-				HasNext:     false,
-				PrevPage:    0,
-				NextPage:    0,
-			},
+		page := queryInt(r, "page", 1)
+		perPage := deps.Config.Content.PostsPerPage
+
+		paged, pag := paginate(posts, page, perPage)
+
+		data := &PageData{
+			Site:       deps.Config.Site,
+			Feed:       deps.Config.Feed,
+			Posts:      paged,
+			Tag:        tag,
+			Title:      "Posts tagged \"" + tag + "\"",
+			Pagination: pag,
 		}
 
-		if err := deps.Theme.Render(w, "templates/list.html", data); err != nil {
-			slog.Error("rendering tag", "tag", tag, "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
+		renderTemplate(w, deps.Theme, "templates/list.html", data, http.StatusOK)
 	}
 }
 
 // NotFoundHandler returns a handler that renders the 404 page.
 func NotFoundHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-
-		data := PageData{
+		data := &PageData{
 			Site:  deps.Config.Site,
 			Feed:  deps.Config.Feed,
 			Title: "Page Not Found",
 		}
 
-		if err := deps.Theme.Render(w, "templates/404.html", data); err != nil {
-			slog.Error("rendering 404", "error", err)
-			http.Error(w, "Not Found", http.StatusNotFound)
-		}
+		renderTemplate(w, deps.Theme, "templates/404.html", data, http.StatusNotFound)
 	}
+}
+
+// paginate returns a page slice and pagination metadata for the given posts.
+func paginate(posts []*content.Post, page, perPage int) ([]*content.Post, *Pagination) {
+	if perPage <= 0 {
+		perPage = 10
+	}
+	total := len(posts)
+	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * perPage
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return posts[start:end], &Pagination{
+		CurrentPage: page,
+		TotalPages:  totalPages,
+		HasPrev:     page > 1,
+		HasNext:     page < totalPages,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+	}
+}
+
+// renderTemplate renders the named template into a buffer, then writes
+// the response. If rendering fails the client receives a 500 error
+// without any partial content.
+func renderTemplate(w http.ResponseWriter, engine *theme.Engine, name string, data *PageData, statusCode int) {
+	var buf bytes.Buffer
+	if err := engine.Render(&buf, name, data); err != nil {
+		slog.Error("template render failed", "template", name, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(statusCode)
+	_, _ = buf.WriteTo(w)
 }
 
 // queryInt reads an integer query parameter with a default value.
