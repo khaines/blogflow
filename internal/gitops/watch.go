@@ -25,14 +25,15 @@ var watchedExtensions = map[string]bool{
 // WatchStrategy monitors filesystem directories for changes using fsnotify.
 // On change, it debounces events and calls the ContentReloader.
 type WatchStrategy struct {
-	reloader  ContentReloader
-	logger    *slog.Logger
-	dirs      []string
-	debounce  time.Duration
-	watcher   *fsnotify.Watcher
-	startOnce sync.Once
-	stopOnce  sync.Once
-	done      chan struct{}
+	reloader ContentReloader
+	logger   *slog.Logger
+	dirs     []string
+	debounce time.Duration
+	watcher  *fsnotify.Watcher
+	mu       sync.Mutex
+	started  bool
+	stopOnce sync.Once
+	done     chan struct{}
 }
 
 // NewWatchStrategy creates a file watcher strategy.
@@ -47,29 +48,41 @@ func NewWatchStrategy(reloader ContentReloader, logger *slog.Logger, dirs ...str
 	}
 }
 
+// SetDirs configures the directories to watch. Must be called before Start
+// when the strategy is constructed without directories (e.g. via the factory).
+func (w *WatchStrategy) SetDirs(dirs ...string) { w.dirs = dirs }
+
 // Start begins watching the filesystem for content changes.
 // It returns promptly; background work runs in a separate goroutine.
+// Start may be retried after a transient failure (e.g. missing dirs).
 func (w *WatchStrategy) Start(ctx context.Context) error {
-	var startErr error
-	w.startOnce.Do(func() {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			startErr = fmt.Errorf("gitops: create watcher: %w", err)
-			return
-		}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-		for _, dir := range w.dirs {
-			if err := addRecursive(watcher, dir); err != nil {
-				watcher.Close()
-				startErr = fmt.Errorf("gitops: watch %q: %w", dir, err)
-				return
-			}
-		}
+	if w.started {
+		return nil
+	}
 
-		w.watcher = watcher
-		go w.loop(ctx)
-	})
-	return startErr
+	if len(w.dirs) == 0 {
+		return fmt.Errorf("gitops: watch strategy has no directories configured — call SetDirs before Start")
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("gitops: create watcher: %w", err)
+	}
+
+	for _, dir := range w.dirs {
+		if err := addRecursive(watcher, dir); err != nil {
+			watcher.Close()
+			return fmt.Errorf("gitops: watch %q: %w", dir, err)
+		}
+	}
+
+	w.watcher = watcher
+	w.started = true
+	go w.loop(ctx)
+	return nil
 }
 
 // Stop gracefully shuts down the filesystem watcher.
@@ -108,6 +121,7 @@ func (w *WatchStrategy) loop(ctx context.Context) {
 			if timer != nil {
 				timer.Stop()
 			}
+			_ = w.watcher.Close()
 			return
 
 		case event, ok := <-w.watcher.Events:
@@ -165,7 +179,7 @@ func (w *WatchStrategy) tryWatchDir(path string) {
 	if isIgnoredDir(filepath.Base(path)) {
 		return
 	}
-	if err := w.watcher.Add(path); err != nil {
+	if err := addRecursive(w.watcher, path); err != nil {
 		w.logger.Debug("could not watch new directory", "path", path, "err", err)
 	}
 }
@@ -208,9 +222,22 @@ func isIgnoredFile(name string) bool {
 	return containsDotGit(name)
 }
 
+// ignoredDirs lists directory base names that should never be watched.
+var ignoredDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+	"__pycache__":  true,
+	".cache":       true,
+	".idea":        true,
+	".vscode":      true,
+	"dist":         true,
+	"_site":        true,
+}
+
 // isIgnoredDir returns true for directories that should not be watched.
 func isIgnoredDir(name string) bool {
-	return name == ".git"
+	return ignoredDirs[name]
 }
 
 // containsDotGit checks if any path component is ".git".

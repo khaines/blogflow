@@ -143,6 +143,32 @@ func TestWatchStrategy_StopClean(t *testing.T) {
 	}
 }
 
+func TestWatchStrategy_StartErrorNoDirs(t *testing.T) {
+	t.Parallel()
+
+	w := NewWatchStrategy(func() error { return nil }, watchTestLogger())
+
+	err := w.Start(context.Background())
+	if err == nil {
+		t.Fatal("expected error when starting with no dirs")
+	}
+	if got := err.Error(); got != "gitops: watch strategy has no directories configured — call SetDirs before Start" {
+		t.Fatalf("unexpected error: %s", got)
+	}
+
+	// After SetDirs, Start should succeed (retryable).
+	dir := t.TempDir()
+	w.SetDirs(dir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("Start after SetDirs failed: %v", err)
+	}
+	defer w.Stop(context.Background())
+}
+
 func TestWatchStrategy_ContextCancel(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

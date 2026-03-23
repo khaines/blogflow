@@ -170,6 +170,10 @@ func TestStrategy_StartStop(t *testing.T) {
 				t.Fatalf("unexpected error for %q: %v", tc.name, err)
 			}
 
+			if ws, ok := s.(*gitops.WatchStrategy); ok {
+				ws.SetDirs(t.TempDir())
+			}
+
 			if err := s.Start(ctx); err != nil {
 				t.Errorf("%s.Start() error: %v", tc.name, err)
 			}
@@ -201,6 +205,10 @@ func TestStrategy_DoubleStop(t *testing.T) {
 			s, err := gitops.NewStrategy(tc.cfg, noop, logger())
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.name, err)
+			}
+
+			if ws, ok := s.(*gitops.WatchStrategy); ok {
+				ws.SetDirs(t.TempDir())
 			}
 
 			if err := s.Start(ctx); err != nil {
