@@ -1,6 +1,7 @@
 package content
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,48 @@ Body.
 	}
 	if len(fm.Categories) != 2 {
 		t.Fatalf("expected 2 categories, got %d", len(fm.Categories))
+	}
+}
+
+func TestParseFrontMatter_HorizontalRule(t *testing.T) {
+	data := []byte("----\nNot front matter")
+	fm, body, err := ParseFrontMatter(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm != nil {
+		t.Error("---- should not be parsed as front matter")
+	}
+	if string(body) != string(data) {
+		t.Error("body should be original data")
+	}
+}
+
+func TestParseFrontMatter_ClosingDelimiterInYAML(t *testing.T) {
+	data := []byte("---\ntitle: \"has---inside\"\ndescription: \"test\"\n---\nbody")
+	fm, body, err := ParseFrontMatter(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm == nil {
+		t.Fatal("expected front matter")
+	}
+	if fm.Title != "has---inside" {
+		t.Errorf("title = %q", fm.Title)
+	}
+	if !bytes.HasPrefix(body, []byte("body")) {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestParseFrontMatter_SizeLimit(t *testing.T) {
+	huge := make([]byte, 0, 70*1024)
+	huge = append(huge, []byte("---\ntitle: ")...)
+	huge = append(huge, bytes.Repeat([]byte("x"), 65*1024)...)
+	huge = append(huge, []byte("\n---\nbody")...)
+	_, _, err := ParseFrontMatter(huge)
+	if err == nil {
+		t.Fatal("expected size limit error")
 	}
 }
 

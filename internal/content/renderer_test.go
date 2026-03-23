@@ -191,3 +191,55 @@ func TestRender_HardWraps(t *testing.T) {
 		t.Errorf("expected <br> with hard wraps, got %q", got)
 	}
 }
+
+func TestRender_JavaScriptURISanitized(t *testing.T) {
+	r := NewRenderer()
+	html, err := r.RenderString(`[click](javascript:alert(1))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "javascript:") {
+		t.Errorf("javascript: URI not sanitized: %s", html)
+	}
+}
+
+func TestRender_DataURISanitized(t *testing.T) {
+	r := NewRenderer()
+	html, err := r.RenderString(`[click](data:text/html,<script>alert(1)</script>)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "data:") {
+		t.Errorf("data: URI not sanitized: %s", html)
+	}
+}
+
+func TestRender_SafeURLsAllowed(t *testing.T) {
+	r := NewRenderer()
+	html, err := r.RenderString(`[link](https://example.com) [mail](mailto:a@b.com) [rel](/page) [frag](#id)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"https://example.com", "mailto:a@b.com", "/page", "#id"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("safe URL %q not preserved in: %s", want, html)
+		}
+	}
+}
+
+func TestRender_SizeLimit(t *testing.T) {
+	r := NewRenderer()
+	huge := make([]byte, 11*1024*1024)
+	_, err := r.Render(huge)
+	if err == nil {
+		t.Fatal("expected size limit error")
+	}
+}
+
+func TestRenderTo_NilWriter(t *testing.T) {
+	r := NewRenderer()
+	err := r.RenderTo(nil, []byte("# Hello"))
+	if err == nil {
+		t.Fatal("expected error for nil writer")
+	}
+}

@@ -8,6 +8,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	maxFrontMatterSize = 64 * 1024 // 64 KB
+)
+
 // FrontMatter holds the metadata from a markdown file's YAML front matter.
 type FrontMatter struct {
 	Title       string    `yaml:"title"`
@@ -27,9 +31,16 @@ type FrontMatter struct {
 // ParseFrontMatter splits a markdown file into front matter and body.
 // Returns the parsed front matter, the remaining markdown body, and any error.
 // Front matter is delimited by --- at the start of the file.
+// ReadingTime in FrontMatter is populated from YAML if present.
+// Callers should compute it via ReadingTimeMinutes() if the field is zero.
 func ParseFrontMatter(data []byte) (*FrontMatter, []byte, error) {
 	if !bytes.HasPrefix(data, []byte("---")) {
 		return nil, data, nil
+	}
+
+	// Require --- followed by newline or EOF (reject ----, ---text, etc.)
+	if len(data) > 3 && data[3] != '\n' && data[3] != '\r' {
+		return nil, data, nil // not front matter
 	}
 
 	rest := data[3:]
@@ -39,12 +50,17 @@ func ParseFrontMatter(data []byte) (*FrontMatter, []byte, error) {
 		rest = rest[2:]
 	}
 
-	end := bytes.Index(rest, []byte("\n---"))
+	end := findClosingDelimiter(rest)
 	if end == -1 {
 		return nil, nil, fmt.Errorf("front matter: missing closing ---")
 	}
 
 	fmData := rest[:end]
+
+	if len(fmData) > maxFrontMatterSize {
+		return nil, nil, fmt.Errorf("front matter: exceeds maximum size of %d bytes", maxFrontMatterSize)
+	}
+
 	body := rest[end+4:] // skip \n---
 	if len(body) > 0 && body[0] == '\n' {
 		body = body[1:]
@@ -58,6 +74,26 @@ func ParseFrontMatter(data []byte) (*FrontMatter, []byte, error) {
 	}
 
 	return &fm, body, nil
+}
+
+// findClosingDelimiter finds the first standalone \n--- line in data.
+// A standalone closing delimiter is \n--- followed by \n, \r\n, or EOF.
+// Returns the index of the \n that starts the delimiter, or -1 if not found.
+func findClosingDelimiter(data []byte) int {
+	offset := 0
+	for {
+		idx := bytes.Index(data[offset:], []byte("\n---"))
+		if idx < 0 {
+			return -1
+		}
+		pos := offset + idx
+		afterDelim := pos + 4
+		// Valid if followed by \n, \r\n, or EOF
+		if afterDelim >= len(data) || data[afterDelim] == '\n' || data[afterDelim] == '\r' {
+			return pos
+		}
+		offset = pos + 1
+	}
 }
 
 // ReadingTimeMinutes estimates reading time based on word count.
