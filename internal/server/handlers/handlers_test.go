@@ -16,7 +16,7 @@ import (
 )
 
 // testDeps builds a Deps with a minimal theme engine and test content.
-func testDeps(t *testing.T, posts []*content.Post, pages []*content.Post) *handlers.Deps {
+func testDeps(t *testing.T, posts, pages []*content.Post) *handlers.Deps {
 	t.Helper()
 
 	// Build index from provided posts/pages.
