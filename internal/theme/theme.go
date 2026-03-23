@@ -153,8 +153,8 @@ func defaultFuncMap() template.FuncMap {
 			}
 			return truncated + "…"
 		},
-		"readingTime": func(content string) int {
-			words := len(strings.Fields(content))
+		"readingTime": func(content any) int {
+			words := len(strings.Fields(fmt.Sprint(content)))
 			if m := words / 200; m > 0 {
 				return m
 			}
