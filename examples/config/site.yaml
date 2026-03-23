@@ -72,11 +72,10 @@ cache:
 sync:
   strategy: "watch"           # Content sync strategy:
                               #   "watch"   — fsnotify file watcher (local dev)
-                              #   "webhook" — GitHub/GitLab push webhook (planned)
+                              #   "webhook" — GitHub/GitLab push webhook
                               #   "sidecar" — git-sync sidecar (Kubernetes)
                               # Override: BLOGFLOW_SYNC_STRATEGY
 
-  # NOTE: Webhook support is a planned feature and is not yet implemented.
   webhook:
     path: "/api/webhook"      # URL path for the webhook endpoint
     allowed_events:           # GitHub events to accept
@@ -87,7 +86,7 @@ sync:
     rate_limit: 10            # Max webhook requests per minute (1–100)
 
 # ---------------------------------------------------------------------------
-# Feed — RSS/Atom feed generation (planned — not yet implemented)
+# Feed — RSS/Atom feed generation
 # ---------------------------------------------------------------------------
 feed:
   enabled: true               # Generate a feed at /feed.xml (or /feed.atom)

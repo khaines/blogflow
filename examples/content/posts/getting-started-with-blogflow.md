@@ -111,7 +111,7 @@ content:
   posts_per_page: 5
 
 feed:
-  enabled: true       # (coming soon) feed generation is a planned feature
+  enabled: true
   type: "atom"
 ```
 
@@ -152,5 +152,5 @@ The resulting image is under 15 MB and runs rootless on a distroless base.
 ## What's Next?
 
 - Explore [Markdown Features](/posts/markdown-features) to see everything BlogFlow supports
-- Set up webhook sync for automatic deploys on `git push` (coming soon)
+- Set up [webhook sync](/posts/getting-started-with-blogflow#webhooks) for automatic deploys on `git push`
 - Create a custom theme directory with your own templates and CSS
