@@ -88,7 +88,7 @@ func TestLoadAuthFromEnv_SSHKeyMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when SSH key is explicitly set but inaccessible")
 	}
-	if !strings.Contains(err.Error(), "BLOGFLOW_GIT_SSH_KEY set but not accessible") {
+	if !strings.Contains(err.Error(), "SSH key not accessible") {
 		t.Fatalf("unexpected error message: %v", err)
 	}
 }
@@ -211,15 +211,46 @@ func TestAuthConfig_StringRedaction(t *testing.T) {
 }
 
 func TestAuthConfig_LogValueRedaction(t *testing.T) {
+	// Token method: must redact token, must not leak ssh_key_path
 	cfg := AuthConfig{Method: AuthToken, Token: "ghp_supersecret123"}
 	lv := cfg.LogValue()
-
 	resolved := lv.Resolve().String()
 	if strings.Contains(resolved, "ghp_supersecret123") {
 		t.Fatal("LogValue() must not contain the raw token")
 	}
 	if !strings.Contains(resolved, "[REDACTED]") {
-		t.Fatal("LogValue() must contain [REDACTED]")
+		t.Fatal("LogValue() must contain [REDACTED] for token method")
+	}
+	if strings.Contains(resolved, "ssh_key_path") {
+		t.Fatal("LogValue() for token method must not include ssh_key_path")
+	}
+
+	// SSH method: must include ssh_key_path, must not include token field
+	cfg = AuthConfig{Method: AuthSSH, SSHKeyPath: "/home/user/.ssh/id_ed25519"}
+	lv = cfg.LogValue()
+	resolved = lv.Resolve().String()
+	if !strings.Contains(resolved, "/home/user/.ssh/id_ed25519") {
+		t.Fatal("LogValue() for SSH method must include ssh_key_path")
+	}
+	if strings.Contains(resolved, "token") {
+		t.Fatal("LogValue() for SSH method must not include token field")
+	}
+	if !strings.Contains(resolved, "ssh") {
+		t.Fatal("LogValue() for SSH method must include method=ssh")
+	}
+
+	// None method: must only have method=none
+	cfg = AuthConfig{Method: AuthNone}
+	lv = cfg.LogValue()
+	resolved = lv.Resolve().String()
+	if !strings.Contains(resolved, "none") {
+		t.Fatal("LogValue() for AuthNone must include method=none")
+	}
+	if strings.Contains(resolved, "token") {
+		t.Fatal("LogValue() for AuthNone must not include token field")
+	}
+	if strings.Contains(resolved, "ssh_key_path") {
+		t.Fatal("LogValue() for AuthNone must not include ssh_key_path field")
 	}
 }
 

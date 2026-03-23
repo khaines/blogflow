@@ -49,11 +49,22 @@ func (a AuthConfig) String() string {
 
 // LogValue implements slog.LogValuer to redact secrets in structured logs.
 func (a AuthConfig) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("method", a.Method.String()),
-		slog.String("ssh_key_path", a.SSHKeyPath),
-		slog.String("token", "[REDACTED]"),
-	)
+	switch a.Method {
+	case AuthSSH:
+		return slog.GroupValue(
+			slog.String("method", "ssh"),
+			slog.String("ssh_key_path", a.SSHKeyPath),
+		)
+	case AuthToken:
+		return slog.GroupValue(
+			slog.String("method", "token"),
+			slog.String("token", "[REDACTED]"),
+		)
+	default:
+		return slog.GroupValue(
+			slog.String("method", "none"),
+		)
+	}
 }
 
 // LoadAuthFromEnv reads git authentication configuration from environment variables.
@@ -66,9 +77,6 @@ func LoadAuthFromEnv(logger *slog.Logger) (*AuthConfig, error) {
 
 	// Check SSH key first (preferred)
 	if keyPath := os.Getenv("BLOGFLOW_GIT_SSH_KEY"); keyPath != "" {
-		if _, err := os.Stat(keyPath); err != nil {
-			return nil, fmt.Errorf("gitops: BLOGFLOW_GIT_SSH_KEY set but not accessible: %w", err)
-		}
 		cfg := &AuthConfig{Method: AuthSSH, SSHKeyPath: keyPath}
 		if err := cfg.Validate(); err != nil {
 			return nil, err
