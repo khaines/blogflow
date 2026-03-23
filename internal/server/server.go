@@ -104,6 +104,9 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	s.mux.HandleFunc("GET /healthz", s.healthHandler)
 	s.mux.HandleFunc("GET /readyz", s.readyHandler)
 
+	// Prometheus metrics (registered directly on the mux, outside metrics middleware)
+	s.mux.Handle("GET /metrics", MetricsHandler())
+
 	// Static assets
 	if opts.StaticFS != nil {
 		s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(opts.StaticFS)))
@@ -146,12 +149,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// middleware chains standard middleware: logging, security headers, recovery.
+// middleware chains standard middleware: logging, security headers, recovery, metrics.
 func (s *Server) middleware(next http.Handler) http.Handler {
-	// Order: logging (outermost) → recovery → security headers → handler
+	// Order: logging (outermost) → recovery → security headers → metrics → handler
 	return s.loggingMiddleware(
 		s.recoveryMiddleware(
-			s.securityHeadersMiddleware(next),
+			s.securityHeadersMiddleware(
+				MetricsMiddleware(next),
+			),
 		),
 	)
 }
