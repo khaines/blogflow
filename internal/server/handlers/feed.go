@@ -2,10 +2,8 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -92,10 +90,10 @@ func (h *FeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	posts := h.limitedPosts()
 
 	if h.cfg.Feed.Type == "rss" {
-		h.serveRSS(w, posts)
+		h.serveRSS(w, r, posts)
 		return
 	}
-	h.serveAtom(w, posts)
+	h.serveAtom(w, r, posts)
 }
 
 func (h *FeedHandler) limitedPosts() []*content.Post {
@@ -110,12 +108,14 @@ func (h *FeedHandler) limitedPosts() []*content.Post {
 	return posts
 }
 
-func (h *FeedHandler) serveAtom(w http.ResponseWriter, posts []*content.Post) {
+func (h *FeedHandler) serveAtom(w http.ResponseWriter, r *http.Request, posts []*content.Post) {
 	baseURL := h.cfg.Site.BaseURL
 
+	var lastMod time.Time
 	updated := time.Now().UTC().Format(time.RFC3339)
 	if len(posts) > 0 {
-		updated = posts[0].Date.UTC().Format(time.RFC3339)
+		lastMod = posts[0].Date.UTC()
+		updated = lastMod.Format(time.RFC3339)
 	}
 
 	entries := make([]AtomEntry, 0, len(posts))
@@ -148,15 +148,17 @@ func (h *FeedHandler) serveAtom(w http.ResponseWriter, posts []*content.Post) {
 		Entries: entries,
 	}
 
-	writeXML(w, "application/atom+xml; charset=utf-8", feed)
+	writeXMLCached(w, r, "application/atom+xml; charset=utf-8", feed, lastMod)
 }
 
-func (h *FeedHandler) serveRSS(w http.ResponseWriter, posts []*content.Post) {
+func (h *FeedHandler) serveRSS(w http.ResponseWriter, r *http.Request, posts []*content.Post) {
 	baseURL := h.cfg.Site.BaseURL
 
+	var lastMod time.Time
 	var pubDate string
 	if len(posts) > 0 {
-		pubDate = posts[0].Date.UTC().Format(time.RFC1123Z)
+		lastMod = posts[0].Date.UTC()
+		pubDate = lastMod.Format(time.RFC1123Z)
 	}
 
 	items := make([]RSSItem, 0, len(posts))
@@ -182,19 +184,5 @@ func (h *FeedHandler) serveRSS(w http.ResponseWriter, posts []*content.Post) {
 		},
 	}
 
-	writeXML(w, "application/rss+xml; charset=utf-8", feed)
-}
-
-func writeXML(w http.ResponseWriter, contentType string, v any) {
-	var buf bytes.Buffer
-	buf.WriteString(xml.Header)
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		slog.Error("XML encode failed", "error", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", contentType)
-	_, _ = w.Write(buf.Bytes())
+	writeXMLCached(w, r, "application/rss+xml; charset=utf-8", feed, lastMod)
 }
