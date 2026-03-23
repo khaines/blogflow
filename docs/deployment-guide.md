@@ -10,6 +10,7 @@
 - [Pattern 2: Kubernetes — git-sync Sidecar](#pattern-2-kubernetes--git-sync-sidecar)
 - [Pattern 3: Kubernetes — Webhook + go-git Pull](#pattern-3-kubernetes--webhook--go-git-pull)
 - [Pattern 4: Docker Production (Webhook)](#pattern-4-docker-production-webhook)
+- [Helm Chart Installation](#helm-chart-installation)
 - [Authentication Reference](#authentication-reference)
 - [Environment Variable Reference](#environment-variable-reference)
 
@@ -30,19 +31,27 @@ Choose a deployment pattern based on your environment and update-latency needs:
 All patterns share the same binary and container image. Only the `sync.strategy`
 config value and surrounding infrastructure differ.
 
+```mermaid
+graph TD
+    Start{{Which environment?}} -->|Local / dev| P1["Pattern 1: watch\n(fsnotify)"]
+    Start -->|Kubernetes| K8s{{Inbound webhook\navailable?}}
+    Start -->|Docker / VM| P4["Pattern 4: Docker webhook\n(go-git pull)"]
+
+    K8s -->|"No (restricted network)"| P2["Pattern 2: git-sync sidecar\n(outbound poll)"]
+    K8s -->|"Yes"| P3["Pattern 3: K8s webhook\n(go-git pull, instant)"]
+```
+
 ---
 
 ## Pattern 1: Local Development (watch)
 
 ### Architecture
 
-```
-┌─────────────┐       fsnotify        ┌──────────────┐
-│  Local disk  │ ───── file events ──▶ │   BlogFlow   │
-│  ./content/  │                       │  (watch mode) │
-└─────────────┘                       └──────────────┘
-      ▲                                      │
-      │  You edit files                      │  Serves on :8080
+```mermaid
+graph LR
+    Editor["✏️ Editor"] -->|"writes .md"| Content["📁 ./content/"]
+    Content -->|"fsnotify\nfile events"| BF["⚙️ BlogFlow\n(watch mode)"]
+    BF -->|"serves on :8080"| Browser["🌐 Browser"]
 ```
 
 The `watch` strategy uses [fsnotify](https://github.com/fsnotify/fsnotify) to
@@ -106,20 +115,16 @@ No persistent volumes are needed — you are editing files directly on your host
 
 ### Architecture
 
-```
-┌──────────────┐    HTTPS poll     ┌──────────────────────────────────────────────┐
-│  Git remote   │ ◀─── (60 s) ─── │  Pod                                         │
-│  (GitHub)     │                  │  ┌──────────────┐    ┌──────────────────┐    │
-└──────────────┘                  │  │  git-sync     │    │  BlogFlow        │    │
-                                  │  │  sidecar      │    │  (sidecar mode)  │    │
-                                  │  │               │    │                  │    │
-                                  │  │  clones repo  │    │  watches for     │    │
-                                  │  │  swaps symlink│──▶ │  symlink swap    │    │
-                                  │  │               │    │  reloads content │    │
-                                  │  └───────┬───────┘    └────────┬─────────┘    │
-                                  │          │  shared volume      │              │
-                                  │          └─────── /data/content ──────────────┘
-                                  └──────────────────────────────────────────────┘
+```mermaid
+graph LR
+    Git["Git Remote\n(GitHub)"] -- "HTTPS poll\n(every 60 s)" --> GS
+
+    subgraph Pod ["☸ Kubernetes Pod"]
+        GS["git-sync\nsidecar"] -- "symlink swap" --> Vol[("Shared Volume\n/data/content")]
+        Vol -- "fsnotify\ndetects swap" --> BF["BlogFlow\n(sidecar mode)"]
+    end
+
+    BF --> Svc["K8s Service\n:8080"]
 ```
 
 **How it works:** The [git-sync](https://github.com/kubernetes/git-sync)
@@ -135,93 +140,29 @@ Create/Remove/Rename events, then triggers a debounced content reload.
 - BlogFlow never needs git credentials — git-sync handles authentication
 - Clean separation of concerns: git-sync manages git, BlogFlow manages content
 
-### Kubernetes Deployment YAML
+### Quick Start
+
+Production-ready manifests (Deployment, Service, ConfigMap, Namespace) are in
+[`examples/k8s/sidecar/`](../examples/k8s/sidecar/). Deploy with Kustomize:
+
+```bash
+kubectl apply -k examples/k8s/sidecar/
+```
+
+> **Tip:** Edit the `--repo` arg in `deployment.yaml` and create a
+> `blogflow-git-credentials` Secret before applying. See the manifests for
+> full details.
+
+### Key Sidecar Excerpt
+
+The critical piece is the git-sync sidecar container definition (see
+[`examples/k8s/sidecar/deployment.yaml`](../examples/k8s/sidecar/deployment.yaml)
+for the full Deployment):
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: blogflow
-  namespace: blogflow
-  labels:
-    app: blogflow
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: blogflow
-  template:
-    metadata:
-      labels:
-        app: blogflow
-    spec:
-      automountServiceAccountToken: false
-
-      securityContext:
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-
-      containers:
-        # --- BlogFlow application container ---
-        - name: blogflow
-          image: ghcr.io/your-org/blogflow:latest  # pin by digest in production
-          args: ["serve", "--content", "/data/content", "--config", "/data/config"]
-          ports:
-            - containerPort: 8080
-              protocol: TCP
-
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-
-          env:
-            - name: BLOGFLOW_SYNC_STRATEGY
-              value: "sidecar"
-
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
-
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8080
-            initialDelaySeconds: 3
-            periodSeconds: 5
-
-          volumeMounts:
-            - name: content
-              mountPath: /data/content
-              readOnly: true
-            - name: config
-              mountPath: /data/config
-              readOnly: true
-            - name: cache
-              mountPath: /data/cache
-            - name: tmp
-              mountPath: /tmp
-
         # --- git-sync sidecar container ---
         - name: git-sync
-          image: registry.k8s.io/git-sync/git-sync:v4.4.0  # pin by digest in production
+          image: registry.k8s.io/git-sync/git-sync:v4.4.0
           args:
             - --repo=https://github.com/your-org/blog-content.git
             - --ref=main
@@ -236,89 +177,13 @@ spec:
                 secretKeyRef:
                   name: blogflow-git-credentials
                   key: token
-
           securityContext:
             runAsUser: 65532
-            runAsGroup: 65532
             runAsNonRoot: true
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
-              drop:
-                - ALL
-
-          resources:
-            requests:
-              cpu: 25m
-              memory: 32Mi
-            limits:
-              cpu: 100m
-              memory: 64Mi
-
-          volumeMounts:
-            - name: content
-              mountPath: /data/content
-            - name: tmp-gitsync
-              mountPath: /tmp
-
-      volumes:
-        - name: content
-          emptyDir: {}           # shared between git-sync (writer) and blogflow (reader)
-        - name: config
-          configMap:
-            name: blogflow-config
-        - name: cache
-          emptyDir: {}
-        - name: tmp
-          emptyDir:
-            medium: Memory
-            sizeLimit: 64Mi
-        - name: tmp-gitsync
-          emptyDir:
-            medium: Memory
-            sizeLimit: 64Mi
-```
-
-### Service and Ingress
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: blogflow
-  namespace: blogflow
-spec:
-  selector:
-    app: blogflow
-  ports:
-    - port: 80
-      targetPort: 8080
-      protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: blogflow
-  namespace: blogflow
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - blog.example.com
-      secretName: blogflow-tls
-  rules:
-    - host: blog.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: blogflow
-                port:
-                  number: 80
+              drop: ["ALL"]
 ```
 
 ### Config (site.yaml)
@@ -424,17 +289,17 @@ volumeMounts:
 
 ### Architecture
 
-```
-┌──────────────┐   push event    ┌───────────┐   POST /api/webhook   ┌──────────────┐
-│  Developer    │ ──────────────▶ │  GitHub    │ ─────────────────────▶│  BlogFlow    │
-│  git push     │                │  Webhooks  │                       │  (webhook    │
-└──────────────┘                └───────────┘                       │   mode)      │
-                                                                     │              │
-                                                     go-git clone    │  clones/pulls│
-                                      ┌──────────── ◀──────────────  │  to R/W vol  │
-                                      │ Git remote                   │              │
-                                      └────────────────────────────▶ │  reloads     │
-                                                                     └──────────────┘
+```mermaid
+graph LR
+    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub\nWebhooks"]
+    GH -->|"POST /api/webhook"| BF
+
+    subgraph K8s ["☸ Kubernetes"]
+        BF["BlogFlow\n(webhook mode)"] -->|"go-git\nclone/pull"| Vol[("Content Volume\n/data/content")]
+        Vol -->|"re-scan\n& reload"| BF
+    end
+
+    BF -->|":8080"| Ingress["Ingress"]
 ```
 
 **How it works:** GitHub sends a push webhook to BlogFlow's `/api/webhook`
@@ -442,6 +307,23 @@ endpoint. BlogFlow validates the HMAC-SHA256 signature, checks the branch
 filter, and then uses [go-git](https://github.com/go-git/go-git) to clone
 (first time) or pull (subsequent) the content repository to a read-write
 volume. Content is reloaded immediately after pull completes.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant GH as GitHub
+    participant BF as BlogFlow
+    participant Repo as Git Remote
+
+    Dev->>GH: git push (main)
+    GH->>BF: POST /api/webhook<br/>(X-Hub-Signature-256)
+    BF->>BF: Validate HMAC-SHA256
+    BF->>BF: Check branch filter
+    BF->>Repo: go-git pull (or clone)
+    Repo-->>BF: Content
+    BF->>BF: Re-scan & reload content
+    BF-->>GH: 200 OK
+```
 
 **Why choose this pattern:**
 - Instant updates — no polling delay
@@ -453,58 +335,33 @@ volume. Content is reloaded immediately after pull completes.
 - Requires egress to git remote (HTTPS or SSH)
 - BlogFlow needs git credentials (unlike the sidecar pattern)
 
-### Kubernetes Deployment YAML
+### Quick Start
+
+Production-ready manifests (Deployment, Service, Ingress, Secret, ConfigMap,
+Namespace) are in [`examples/k8s/webhook/`](../examples/k8s/webhook/). Deploy
+with Kustomize:
+
+```bash
+kubectl apply -k examples/k8s/webhook/
+```
+
+> **Tip:** Edit the repo URL in `deployment.yaml`, create secrets (see
+> [Secrets](#secrets) below), and update the Ingress host before applying.
+
+### Key Webhook Excerpt
+
+The webhook pattern uses a single container with environment-injected secrets
+(see [`examples/k8s/webhook/deployment.yaml`](../examples/k8s/webhook/deployment.yaml)
+for the full Deployment):
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: blogflow
-  namespace: blogflow
-  labels:
-    app: blogflow
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: blogflow
-  template:
-    metadata:
-      labels:
-        app: blogflow
-    spec:
-      automountServiceAccountToken: false
-
-      securityContext:
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-
-      containers:
-        - name: blogflow
-          image: ghcr.io/your-org/blogflow:latest  # pin by digest in production
-          args: ["serve", "--content", "/data/content", "--config", "/data/config"]
-          ports:
-            - containerPort: 8080
-              protocol: TCP
-
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-
           env:
             - name: BLOGFLOW_SYNC_STRATEGY
               value: "webhook"
             - name: BLOGFLOW_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: blogflow-secrets
+                  name: blogflow-webhook-secret
                   key: webhook-secret
             - name: BLOGFLOW_GIT_TOKEN
               valueFrom:
@@ -512,112 +369,12 @@ spec:
                   name: blogflow-secrets
                   key: git-token
 
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
-
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8080
-            initialDelaySeconds: 3
-            periodSeconds: 5
-
           volumeMounts:
             - name: content
-              mountPath: /data/content
+              mountPath: /data/content       # read-write — go-git pulls here
             - name: config
               mountPath: /data/config
               readOnly: true
-            - name: cache
-              mountPath: /data/cache
-            - name: tmp
-              mountPath: /tmp
-
-      volumes:
-        - name: content
-          persistentVolumeClaim:
-            claimName: blogflow-content    # R/W — go-git clones into this
-        - name: config
-          configMap:
-            name: blogflow-config
-        - name: cache
-          emptyDir: {}
-        - name: tmp
-          emptyDir:
-            medium: Memory
-            sizeLimit: 64Mi
-```
-
-### PersistentVolumeClaim
-
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: blogflow-content
-  namespace: blogflow
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi               # adjust based on content repo size
-```
-
-### Service and Ingress
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: blogflow
-  namespace: blogflow
-spec:
-  selector:
-    app: blogflow
-  ports:
-    - port: 80
-      targetPort: 8080
-      protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: blogflow
-  namespace: blogflow
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    # Rate-limit the webhook path at the ingress level
-    nginx.ingress.kubernetes.io/limit-rps: "5"
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - blog.example.com
-      secretName: blogflow-tls
-  rules:
-    - host: blog.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: blogflow
-                port:
-                  number: 80
 ```
 
 ### Secrets
@@ -673,13 +430,14 @@ computes the HMAC signature via a GitHub Actions secret.
 **Verifying the webhook:**
 
 ```bash
-# Send a test payload
-echo '{"ref":"refs/heads/main"}' | \
-  curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -H "X-Hub-Signature-256: sha256=$(echo -n '{"ref":"refs/heads/main"}' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | cut -d' ' -f2)" \
-    -d @- \
-    https://blog.example.com/api/webhook
+# Send a test payload (use printf to avoid trailing-newline mismatch with HMAC)
+BODY='{"ref":"refs/heads/main"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | cut -d' ' -f2)
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -d "$BODY" \
+  https://blog.example.com/api/webhook
 ```
 
 ### Volume strategy
@@ -755,6 +513,10 @@ defaults to `AuthNone`.
   variable — never in `site.yaml` (BlogFlow rejects YAML containing secrets).
 - Consider restricting webhook ingress to [GitHub's webhook IP
   ranges](https://api.github.com/meta) via NetworkPolicy or ingress annotations.
+- Apply a NetworkPolicy restricting ingress to TCP 8080 from the ingress
+  controller and egress to DNS (UDP/TCP 53) and HTTPS (TCP 443) to git remotes.
+  See the [Container Security Guide](engineering/container-security.md#network-policy)
+  for a ready-to-use NetworkPolicy manifest.
 
 ---
 
@@ -762,16 +524,17 @@ defaults to `AuthNone`.
 
 ### Architecture
 
-```
-┌──────────────┐   push event    ┌───────────┐   POST /api/webhook   ┌──────────────┐
-│  Developer    │ ──────────────▶ │  GitHub    │ ─────────────────────▶│  BlogFlow    │
-│  git push     │                │  Webhooks  │                       │  (Docker)    │
-└──────────────┘                └───────────┘                       │              │
-                                                                     │  go-git pull │
-                                                                     │  to volume   │
-                                                                     │              │
-                                                                     │  :8080       │
-                                                                     └──────────────┘
+```mermaid
+graph LR
+    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub\nWebhooks"]
+    GH -->|"POST /api/webhook"| BF
+
+    subgraph Docker ["🐳 Docker Host"]
+        BF["BlogFlow\n(Docker)"] -->|"go-git pull"| Vol[("Named Volume\nblogflow-content")]
+        Vol -->|"re-scan\n& reload"| BF
+    end
+
+    BF -->|":8080"| Proxy["Reverse Proxy\n(TLS)"]
 ```
 
 This is the same webhook + go-git pull pattern as Pattern 3, but deployed with
@@ -940,6 +703,52 @@ environment:
 
 ---
 
+## Helm Chart Installation
+
+A Helm chart is available in [`deploy/helm/blogflow/`](../deploy/helm/blogflow/)
+for deploying BlogFlow to Kubernetes with a single command. It supports all
+three sync strategies (`watch`, `sidecar`, `webhook`) via Helm values.
+
+### Quick Start
+
+```bash
+# Sidecar pattern
+helm install blogflow deploy/helm/blogflow/ \
+  --set sync.strategy=sidecar \
+  --set sync.sidecar.repo=https://github.com/your-org/blog-content.git
+
+# Webhook pattern
+helm install blogflow deploy/helm/blogflow/ \
+  --set sync.strategy=webhook \
+  --set sync.webhook.secret="$WEBHOOK_SECRET"
+
+# Watch pattern (default — local/dev use)
+helm install blogflow deploy/helm/blogflow/
+```
+
+### Configuration
+
+All options are documented in
+[`deploy/helm/blogflow/values.yaml`](../deploy/helm/blogflow/values.yaml).
+Key configuration areas:
+
+| Section | What it controls |
+|---|---|
+| `sync.strategy` | `watch`, `sidecar`, or `webhook` |
+| `sync.sidecar.*` | git-sync image, repo URL, branch, poll period, resources |
+| `sync.webhook.*` | Webhook path, secret, branch filter, rate limit |
+| `siteConfig` | Full `site.yaml` content (title, base URL, cache, feed, etc.) |
+| `ingress` | Ingress class, TLS, hosts (disabled by default) |
+| `resources` | CPU/memory requests and limits |
+
+### Upgrading
+
+```bash
+helm upgrade blogflow deploy/helm/blogflow/ --set sync.sidecar.repo=https://github.com/your-org/new-content.git
+```
+
+---
+
 ## Authentication Reference
 
 BlogFlow loads git authentication from environment variables at startup via
@@ -977,14 +786,22 @@ BlogFlow loads git authentication from environment variables at startup via
 
 ## Environment Variable Reference
 
-| Variable | Description | Used by |
-|---|---|---|
-| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar` | All patterns |
-| `BLOGFLOW_WEBHOOK_SECRET` | HMAC-SHA256 webhook secret | Webhook patterns (3, 4) |
-| `BLOGFLOW_GIT_TOKEN` | Git PAT or GitHub App token | Webhook patterns (3, 4) |
-| `BLOGFLOW_GIT_SSH_KEY` | Path to SSH private key | Webhook patterns (3, 4) |
-| `BLOGFLOW_SERVER_PORT` | HTTP listen port (default: 8080) | All patterns |
-| `BLOGFLOW_SERVER_TLS_TERMINATED` | Enable HSTS header | Production patterns |
-| `BLOGFLOW_SERVER_HSTS_MAX_AGE` | HSTS max-age in seconds | Production patterns |
-| `BLOGFLOW_SITE_BASE_URL` | Canonical site URL | All patterns |
-| `BLOGFLOW_CACHE_ENABLED` | Enable/disable render cache | All patterns |
+The table below covers the most common deployment variables. For server tuning
+and feed options, see the inline comments in the config examples above.
+
+| Variable | Description | Default | Used by |
+|---|---|---|---|
+| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar` | `watch` | All patterns |
+| `BLOGFLOW_WEBHOOK_SECRET` | HMAC-SHA256 webhook secret (≥ 32 bytes) | *(required for webhook)* | Webhook patterns (3, 4) |
+| `BLOGFLOW_GIT_TOKEN` | Git PAT or GitHub App token | — | Webhook patterns (3, 4) |
+| `BLOGFLOW_GIT_SSH_KEY` | Path to SSH private key file | — | Webhook patterns (3, 4) |
+| `BLOGFLOW_SERVER_PORT` | HTTP listen port | `8080` | All patterns |
+| `BLOGFLOW_SERVER_TLS_TERMINATED` | Enable HSTS header | `false` | Production patterns |
+| `BLOGFLOW_SERVER_HSTS_MAX_AGE` | HSTS max-age in seconds | `63072000` | Production patterns |
+| `BLOGFLOW_SERVER_READ_TIMEOUT` | HTTP read timeout | `5s` | All patterns |
+| `BLOGFLOW_SERVER_WRITE_TIMEOUT` | HTTP write timeout | `10s` | All patterns |
+| `BLOGFLOW_SERVER_IDLE_TIMEOUT` | HTTP idle timeout | `120s` | All patterns |
+| `BLOGFLOW_SITE_BASE_URL` | Canonical site URL | `http://localhost:8080` | All patterns |
+| `BLOGFLOW_CACHE_ENABLED` | Enable/disable render cache | `true` | All patterns |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Max webhook requests/min/IP | `10` | Webhook patterns (3, 4) |
+| `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` | `atom` | All patterns |
