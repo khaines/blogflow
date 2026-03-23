@@ -174,6 +174,6 @@ func main() {
 func placeholderHandler(name string, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "blogflow: %s handler (placeholder)\n", name)
+		_, _ = fmt.Fprintf(w, "blogflow: %s handler (placeholder)\n", name)
 	}
 }
