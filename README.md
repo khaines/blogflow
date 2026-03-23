@@ -246,6 +246,16 @@ Markdown content here...
 Supported front matter fields: `title`, `slug`, `date`, `updated`, `draft`,
 `tags`, `categories`, `author`, `description`, `template`, `image`.
 
+## Deployment
+
+BlogFlow supports multiple deployment patterns — from local development to
+production Kubernetes clusters.
+
+- **[Deployment Guide](docs/deployment-guide.md)** — full walkthrough of all patterns (watch, sidecar, webhook, Docker)
+- **[K8s Sidecar Manifests](examples/k8s/sidecar/)** — production-ready Kubernetes manifests for the git-sync sidecar pattern
+- **[K8s Webhook Manifests](examples/k8s/webhook/)** — production-ready Kubernetes manifests for the webhook pattern
+- **[Helm Chart](deploy/helm/blogflow/)** — deploy with `helm install` using any sync strategy
+
 ## Contributing
 
 1. Fork the repository
