@@ -200,6 +200,22 @@ func TestPageHandler(t *testing.T) {
 	}
 }
 
+func TestPageHandler_NotFound(t *testing.T) {
+	deps := testDeps(t, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/pages/nope", nil)
+	req.SetPathValue("slug", "nope")
+	rec := httptest.NewRecorder()
+	handlers.PageHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "404:") {
+		t.Errorf("expected 404 template, got body: %s", rec.Body.String())
+	}
+}
+
 func TestTagHandler(t *testing.T) {
 	posts := []*content.Post{
 		makePost("a", "Alpha", []string{"go"}),
