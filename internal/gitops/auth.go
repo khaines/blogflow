@@ -10,10 +10,11 @@ import (
 // AuthMethod represents a git authentication configuration.
 type AuthMethod int
 
+// AuthMethod represents a git authentication type.
 const (
-	AuthNone AuthMethod = iota
-	AuthSSH
-	AuthToken
+	AuthNone  AuthMethod = iota // No authentication (public repos)
+	AuthSSH                     // SSH key authentication
+	AuthToken                   // Token-based authentication (PAT)
 )
 
 // String returns a human-readable label for the AuthMethod.
@@ -41,7 +42,7 @@ func (a AuthConfig) String() string {
 	case AuthSSH:
 		return fmt.Sprintf("AuthConfig{Method:ssh, SSHKeyPath:%s}", a.SSHKeyPath)
 	case AuthToken:
-		return fmt.Sprintf("AuthConfig{Method:token, Token:[REDACTED]}")
+		return "AuthConfig{Method:token, Token:[REDACTED]}"
 	default:
 		return "AuthConfig{Method:none}"
 	}

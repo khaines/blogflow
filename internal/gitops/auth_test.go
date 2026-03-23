@@ -128,7 +128,7 @@ func TestValidate_SSHPermissions(t *testing.T) {
 
 	// 0644 should be rejected
 	unsafeKey := filepath.Join(tmp, "unsafe_key")
-	if err := os.WriteFile(unsafeKey, []byte("fake-key"), 0o644); err != nil {
+	if err := os.WriteFile(unsafeKey, []byte("fake-key"), 0o644); err != nil { //nolint:gosec // G306: intentionally unsafe perms to test rejection
 		t.Fatal(err)
 	}
 	cfg := &AuthConfig{Method: AuthSSH, SSHKeyPath: unsafeKey}
