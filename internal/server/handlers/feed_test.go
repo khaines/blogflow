@@ -38,7 +38,7 @@ func testIndex(n int) *content.Index {
 		p := &content.Post{
 			Slug:    fmt.Sprintf("post-%d", i+1),
 			Summary: fmt.Sprintf("Summary for post %d", i+1),
-			Content: template.HTML(fmt.Sprintf("<p>Content %d</p>", i+1)),
+			Content: template.HTML(fmt.Sprintf("<p>Content %d</p>", i+1)), //nolint:gosec
 		}
 		p.Title = fmt.Sprintf("Post %d", i+1)
 		p.Date = base.AddDate(0, 0, -i)

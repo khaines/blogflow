@@ -12,12 +12,14 @@ import (
 
 // Sitemap XML structures per sitemaps.org protocol.
 
+// URLSet represents the root element of a sitemap.
 type URLSet struct {
 	XMLName xml.Name `xml:"urlset"`
 	XMLNS   string   `xml:"xmlns,attr"`
 	URLs    []URL    `xml:"url"`
 }
 
+// URL represents a URL entry in a sitemap.
 type URL struct {
 	Loc        string `xml:"loc"`
 	LastMod    string `xml:"lastmod,omitempty"`

@@ -1,3 +1,4 @@
+// Package handlers provides HTTP handlers for BlogFlow content routes, feeds, and sitemaps.
 package handlers
 
 import (
@@ -14,6 +15,7 @@ import (
 
 // Atom XML structures.
 
+// AtomFeed represents an Atom 1.0 feed document.
 type AtomFeed struct {
 	XMLName xml.Name    `xml:"feed"`
 	XMLNS   string      `xml:"xmlns,attr"`
@@ -25,17 +27,20 @@ type AtomFeed struct {
 	Entries []AtomEntry `xml:"entry"`
 }
 
+// AtomLink represents a link element in an Atom feed.
 type AtomLink struct {
 	Href string `xml:"href,attr"`
 	Rel  string `xml:"rel,attr,omitempty"`
 	Type string `xml:"type,attr,omitempty"`
 }
 
+// AtomAuthor represents an author element in an Atom feed.
 type AtomAuthor struct {
 	Name  string `xml:"name"`
 	Email string `xml:"email,omitempty"`
 }
 
+// AtomEntry represents an entry element in an Atom feed.
 type AtomEntry struct {
 	Title   string   `xml:"title"`
 	Link    AtomLink `xml:"link"`
@@ -46,12 +51,14 @@ type AtomEntry struct {
 
 // RSS 2.0 XML structures.
 
+// RSSFeed represents an RSS 2.0 feed document.
 type RSSFeed struct {
 	XMLName xml.Name   `xml:"rss"`
 	Version string     `xml:"version,attr"`
 	Channel RSSChannel `xml:"channel"`
 }
 
+// RSSChannel represents a channel element in an RSS feed.
 type RSSChannel struct {
 	Title       string    `xml:"title"`
 	Link        string    `xml:"link"`
@@ -61,6 +68,7 @@ type RSSChannel struct {
 	Items       []RSSItem `xml:"item"`
 }
 
+// RSSItem represents an item element in an RSS feed.
 type RSSItem struct {
 	Title       string `xml:"title"`
 	Link        string `xml:"link"`

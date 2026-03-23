@@ -20,7 +20,7 @@ func TestSitemapHandler(t *testing.T) {
 	page := &content.Post{
 		Slug:    "about",
 		Summary: "About page",
-		Content: template.HTML("<p>About</p>"),
+		Content: template.HTML("<p>About</p>"), //nolint:gosec
 	}
 	page.Title = "About"
 	page.Date = time.Date(2025, 1, 10, 0, 0, 0, 0, time.UTC)
