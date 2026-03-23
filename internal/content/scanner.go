@@ -166,7 +166,7 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 		post := &Post{
 			FrontMatter: *fm,
 			Slug:        slug,
-			Content:     template.HTML(rendered),
+			Content:     template.HTML(rendered), //nolint:gosec // G203: content is sanitized by goldmark (raw HTML stripped by default)
 			Summary:     summary,
 			ReadingTime: readingTime,
 			Path:        filePath,
