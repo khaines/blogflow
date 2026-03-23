@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -201,18 +203,16 @@ func TestLoad_SecretInYAML(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for secret in YAML, got nil")
 			}
-			var secretErr *SecretInYAMLError
 			if !isSecretError(err) {
 				t.Errorf("expected SecretInYAMLError, got: %T: %v", err, err)
 			}
-			_ = secretErr
 		})
 	}
 }
 
 func isSecretError(err error) bool {
-	_, ok := err.(*SecretInYAMLError)
-	return ok
+	var secretErr *SecretInYAMLError
+	return errors.As(err, &secretErr)
 }
 
 // --- Load: YAML anchors/aliases rejected ---
@@ -769,5 +769,180 @@ func TestConfig_LogValue(t *testing.T) {
 	s := val.String()
 	if strings.Contains(s, "super-secret-value") {
 		t.Error("LogValue() should redact webhook secret")
+	}
+}
+
+// --- H-NEW-2: Cache.TTL bounds ---
+
+func TestValidate_CacheTTL(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*Config)
+		wantErr bool
+	}{
+		{"zero TTL", func(c *Config) { c.Cache.Enabled = true; c.Cache.TTL = 0 }, true},
+		{"negative TTL", func(c *Config) { c.Cache.Enabled = true; c.Cache.TTL = -1 * time.Second }, true},
+		{"over 24h", func(c *Config) { c.Cache.Enabled = true; c.Cache.TTL = 25 * time.Hour }, true},
+		{"exactly 24h", func(c *Config) { c.Cache.Enabled = true; c.Cache.TTL = 24 * time.Hour }, false},
+		{"valid 1h", func(c *Config) { c.Cache.Enabled = true; c.Cache.TTL = 1 * time.Hour }, false},
+		{"disabled cache skips check", func(c *Config) { c.Cache.Enabled = false; c.Cache.TTL = 0 }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.setup(cfg)
+			err := Validate(cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				cfgErr, ok := err.(*ConfigError)
+				if !ok {
+					t.Fatalf("expected *ConfigError, got %T", err)
+				}
+				found := false
+				for _, fe := range cfgErr.Errors {
+					if fe.Field == "cache.ttl" {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("expected cache.ttl field error, got: %v", cfgErr.Errors)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// --- M-NEW-1: AllowedEvents validated against known set ---
+
+func TestValidate_AllowedEventsUnknown(t *testing.T) {
+	cfg := Default()
+	cfg.Sync.Strategy = "webhook"
+	cfg.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+	cfg.Sync.Webhook.AllowedEvents = []string{"push", "unknown_event"}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for unknown event")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "sync.webhook.allowed_events" && fe.Value == "unknown_event" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected sync.webhook.allowed_events field error for unknown_event")
+	}
+}
+
+func TestValidate_AllowedEventsAllValid(t *testing.T) {
+	cfg := Default()
+	cfg.Sync.Strategy = "webhook"
+	cfg.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+	cfg.Sync.Webhook.AllowedEvents = []string{"push", "ping", "pull_request", "release", "workflow_dispatch"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error for all valid events, got: %v", err)
+	}
+}
+
+// --- M-NEW-2: BaseURL validated ---
+
+func TestValidate_BaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{"valid http", "http://example.com", false},
+		{"valid https", "https://example.com", false},
+		{"valid with port", "http://localhost:8080", false},
+		{"missing scheme", "example.com", true},
+		{"ftp scheme", "ftp://example.com", true},
+		{"empty host", "http://", true},
+		{"empty string", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Site.BaseURL = tt.baseURL
+			err := Validate(cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				cfgErr, ok := err.(*ConfigError)
+				if !ok {
+					t.Fatalf("expected *ConfigError, got %T", err)
+				}
+				found := false
+				for _, fe := range cfgErr.Errors {
+					if fe.Field == "site.base_url" {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("expected site.base_url field error, got: %v", cfgErr.Errors)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// --- M-NEW-3: Feed validation conditional on Enabled ---
+
+func TestValidate_FeedDisabledSkipsValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Feed.Enabled = false
+	cfg.Feed.Type = "invalid"
+	cfg.Feed.Items = 0
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error when feed is disabled, got: %v", err)
+	}
+}
+
+// --- M-NEW-4: DateFormat non-empty ---
+
+func TestValidate_DateFormatEmpty(t *testing.T) {
+	cfg := Default()
+	cfg.Content.DateFormat = ""
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for empty date_format")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "content.date_format" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected content.date_format field error, got: %v", cfgErr.Errors)
+	}
+}
+
+// --- L-NEW-2: isSecretError uses errors.As ---
+
+func TestIsSecretError_WrappedError(t *testing.T) {
+	base := &SecretInYAMLError{Field: "test", Pattern: "test"}
+	wrapped := fmt.Errorf("wrapped: %w", base)
+	if !isSecretError(wrapped) {
+		t.Error("isSecretError should find SecretInYAMLError via errors.As on wrapped errors")
 	}
 }

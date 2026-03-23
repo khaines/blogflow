@@ -62,12 +62,12 @@ type SyncConfig struct {
 	Webhook  WebhookConfig `yaml:"webhook"`
 }
 
+// IP allowlisting is handled at the infrastructure layer (reverse proxy, K8s NetworkPolicy), not in the application.
 type WebhookConfig struct {
 	Path          string   `yaml:"path"`
 	Secret        string   `yaml:"-"` // never from YAML — env var only
 	AllowedEvents []string `yaml:"allowed_events"`
 	BranchFilter  string   `yaml:"branch_filter"`
-	IPAllowlist   bool     `yaml:"ip_allowlist"`
 	RateLimit     int      `yaml:"rate_limit"`
 }
 
@@ -116,7 +116,6 @@ func Default() *Config {
 				Path:          "/api/webhook",
 				AllowedEvents: []string{"push"},
 				BranchFilter:  "main",
-				IPAllowlist:   true,
 				RateLimit:     10,
 			},
 		},

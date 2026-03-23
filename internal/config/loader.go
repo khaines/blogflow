@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -296,8 +297,12 @@ func applyEnvOverrides(cfg *Config) error {
 
 // Package-level validation maps.
 var (
-	validStrategies = map[string]bool{"watch": true, "webhook": true, "sidecar": true}
-	validFeedTypes  = map[string]bool{"atom": true, "rss": true}
+	validStrategies    = map[string]bool{"watch": true, "webhook": true, "sidecar": true}
+	validFeedTypes     = map[string]bool{"atom": true, "rss": true}
+	validAllowedEvents = map[string]bool{
+		"push": true, "ping": true, "pull_request": true,
+		"release": true, "workflow_dispatch": true,
+	}
 )
 
 // Validate checks a Config for structural and semantic correctness.
@@ -336,6 +341,15 @@ func Validate(cfg *Config) error {
 		})
 	}
 
+	// Site.BaseURL: must have http/https scheme and non-empty host
+	if u, err := url.Parse(cfg.Site.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		errs = append(errs, FieldError{
+			Field:   "site.base_url",
+			Value:   cfg.Site.BaseURL,
+			Message: "must be a valid URL with http or https scheme and a non-empty host",
+		})
+	}
+
 	// Content paths: no absolute paths, no ".."
 	for _, pc := range []struct {
 		field string
@@ -367,6 +381,15 @@ func Validate(cfg *Config) error {
 			Field:   "content.posts_per_page",
 			Value:   cfg.Content.PostsPerPage,
 			Message: "must be between 1 and 100",
+		})
+	}
+
+	// Content.DateFormat: must not be empty
+	if cfg.Content.DateFormat == "" {
+		errs = append(errs, FieldError{
+			Field:   "content.date_format",
+			Value:   cfg.Content.DateFormat,
+			Message: "must not be empty",
 		})
 	}
 
@@ -406,6 +429,17 @@ func Validate(cfg *Config) error {
 		})
 	}
 
+	// Cache.TTL: must be > 0 and <= 24h when cache is enabled
+	if cfg.Cache.Enabled {
+		if cfg.Cache.TTL <= 0 || cfg.Cache.TTL > 24*time.Hour {
+			errs = append(errs, FieldError{
+				Field:   "cache.ttl",
+				Value:   cfg.Cache.TTL,
+				Message: "must be > 0 and <= 24h when cache is enabled",
+			})
+		}
+	}
+
 	// Sync.Strategy: must be watch, webhook, or sidecar
 	if !validStrategies[cfg.Sync.Strategy] {
 		errs = append(errs, FieldError{
@@ -431,6 +465,15 @@ func Validate(cfg *Config) error {
 				Message: "must not be empty when strategy is webhook",
 			})
 		}
+		for _, ev := range cfg.Sync.Webhook.AllowedEvents {
+			if !validAllowedEvents[ev] {
+				errs = append(errs, FieldError{
+					Field:   "sync.webhook.allowed_events",
+					Value:   ev,
+					Message: "unknown event; allowed: push, ping, pull_request, release, workflow_dispatch",
+				})
+			}
+		}
 		if !strings.HasPrefix(cfg.Sync.Webhook.Path, "/") {
 			errs = append(errs, FieldError{
 				Field:   "sync.webhook.path",
@@ -447,22 +490,25 @@ func Validate(cfg *Config) error {
 		}
 	}
 
-	// Feed.Type: must be atom or rss
-	if !validFeedTypes[cfg.Feed.Type] {
-		errs = append(errs, FieldError{
-			Field:   "feed.type",
-			Value:   cfg.Feed.Type,
-			Message: "must be one of: atom, rss",
-		})
-	}
+	// Feed validation only when feed is enabled
+	if cfg.Feed.Enabled {
+		// Feed.Type: must be atom or rss
+		if !validFeedTypes[cfg.Feed.Type] {
+			errs = append(errs, FieldError{
+				Field:   "feed.type",
+				Value:   cfg.Feed.Type,
+				Message: "must be one of: atom, rss",
+			})
+		}
 
-	// Feed.Items: 1-100
-	if cfg.Feed.Items < 1 || cfg.Feed.Items > 100 {
-		errs = append(errs, FieldError{
-			Field:   "feed.items",
-			Value:   cfg.Feed.Items,
-			Message: "must be between 1 and 100",
-		})
+		// Feed.Items: 1-100
+		if cfg.Feed.Items < 1 || cfg.Feed.Items > 100 {
+			errs = append(errs, FieldError{
+				Field:   "feed.items",
+				Value:   cfg.Feed.Items,
+				Message: "must be between 1 and 100",
+			})
+		}
 	}
 
 	if len(errs) > 0 {
