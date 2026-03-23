@@ -222,3 +222,28 @@ func TestReadingTimeMinutes(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFrontMatter_CRLF(t *testing.T) {
+	data := []byte("---\r\ntitle: Test\r\n---\r\nbody here")
+	fm, body, err := ParseFrontMatter(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm == nil {
+		t.Fatal("expected front matter")
+	}
+	if fm.Title != "Test" {
+		t.Errorf("title = %q", fm.Title)
+	}
+	if !bytes.Contains(body, []byte("body here")) {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestParseFrontMatter_TemplatePathTraversal(t *testing.T) {
+	data := []byte("---\ntitle: Test\ntemplate: \"../../etc/passwd\"\n---\nbody")
+	_, _, err := ParseFrontMatter(data)
+	if err == nil {
+		t.Fatal("expected error for path traversal in template")
+	}
+}

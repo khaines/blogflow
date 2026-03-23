@@ -243,3 +243,14 @@ func TestRenderTo_NilWriter(t *testing.T) {
 		t.Fatal("expected error for nil writer")
 	}
 }
+
+func TestRender_ProtocolRelativeBlocked(t *testing.T) {
+	r := NewRenderer()
+	html, err := r.RenderString("[evil](//malicious.com/payload)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "//malicious.com") {
+		t.Errorf("protocol-relative URL not blocked: %s", html)
+	}
+}

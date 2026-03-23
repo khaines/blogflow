@@ -32,6 +32,12 @@ func (ls *linkSanitizer) Transform(node *ast.Document, reader text.Reader, pc pa
 			if !isSafeURL(v.Destination) {
 				v.Destination = []byte("#blocked")
 			}
+		case *ast.AutoLink:
+			if !isSafeURL(v.URL(reader.Source())) {
+				replacement := ast.NewString(v.Label(reader.Source()))
+				parent := n.Parent()
+				parent.ReplaceChild(parent, n, replacement)
+			}
 		}
 		return ast.WalkContinue, nil
 	})
@@ -41,8 +47,14 @@ func (ls *linkSanitizer) Transform(node *ast.Document, reader text.Reader, pc pa
 // Relative URLs (no scheme), fragment-only (#), and root-relative (/) are allowed.
 func isSafeURL(dest []byte) bool {
 	s := strings.TrimSpace(string(dest))
-	if s == "" || s[0] == '#' || s[0] == '/' {
-		return true // relative, fragment, or root-relative
+	if s == "" || s[0] == '#' {
+		return true // relative or fragment
+	}
+	if s[0] == '/' && (len(s) < 2 || s[1] != '/') {
+		return true // root-relative only, not protocol-relative
+	}
+	if len(s) >= 2 && s[0] == '/' && s[1] == '/' {
+		return false // protocol-relative URL
 	}
 	idx := strings.Index(s, ":")
 	if idx < 0 {

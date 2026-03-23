@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -73,6 +74,16 @@ func ParseFrontMatter(data []byte) (*FrontMatter, []byte, error) {
 		return nil, nil, fmt.Errorf("front matter: %w", err)
 	}
 
+	if fm.Image != "" && !isSafeURL([]byte(fm.Image)) {
+		return nil, nil, fmt.Errorf("front matter: image URL uses disallowed scheme")
+	}
+
+	if fm.Template != "" {
+		if strings.Contains(fm.Template, "/") || strings.Contains(fm.Template, "\\") || strings.Contains(fm.Template, "..") {
+			return nil, nil, fmt.Errorf("front matter: template must be a plain filename, got %q", fm.Template)
+		}
+	}
+
 	return &fm, body, nil
 }
 
@@ -89,7 +100,7 @@ func findClosingDelimiter(data []byte) int {
 		pos := offset + idx
 		afterDelim := pos + 4
 		// Valid if followed by \n, \r\n, or EOF
-		if afterDelim >= len(data) || data[afterDelim] == '\n' || data[afterDelim] == '\r' {
+		if afterDelim >= len(data) || data[afterDelim] == '\n' || (data[afterDelim] == '\r' && afterDelim+1 < len(data) && data[afterDelim+1] == '\n') {
 			return pos
 		}
 		offset = pos + 1
@@ -99,7 +110,7 @@ func findClosingDelimiter(data []byte) int {
 // ReadingTimeMinutes estimates reading time based on word count.
 // Average reading speed: ~200 words per minute.
 func ReadingTimeMinutes(text string) int {
-	words := len(bytes.Fields([]byte(text)))
+	words := len(strings.Fields(text))
 	minutes := words / 200
 	if minutes < 1 {
 		return 1
