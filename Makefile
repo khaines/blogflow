@@ -22,11 +22,11 @@ docker:
 
 ## run: Run blogflow server locally
 run: build
-	./bin/blogflow serve --dev --watch --content ./data/content --theme ./data/theme
+	./bin/blogflow --dev --content ./data/content --theme ./data/theme
 
 ## dev: Run with live reload (requires content directory)
 dev: build
-	./bin/blogflow serve --dev --watch --content ./data/content
+	./bin/blogflow --dev --content ./data/content
 
 ## clean: Remove build artifacts
 clean:

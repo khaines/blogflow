@@ -84,14 +84,13 @@ Every post starts with YAML front matter between `---` delimiters:
 ## Step 4: Run BlogFlow
 
 ```bash
-./bin/blogflow serve --content ./my-blog/content --dev --watch
+./bin/blogflow --content ./my-blog/content --dev
 ```
 
 Flags explained:
 
 - `--content` — path to your content directory
 - `--dev` — enables verbose logging and disables caching
-- `--watch` — watches for file changes and reloads automatically
 
 Open [http://localhost:8080](http://localhost:8080) to see your blog.
 
@@ -112,7 +111,7 @@ content:
   posts_per_page: 5
 
 feed:
-  enabled: true
+  enabled: true       # (coming soon) feed generation is a planned feature
   type: "atom"
 ```
 
@@ -137,12 +136,15 @@ Pages are served at `/<slug>` — this one appears at `/about`.
 
 ## Step 7: Deploy with Docker
 
+Use the pre-built BlogFlow image (or build from the
+[engine repo](https://github.com/kenhaines/blogflow)):
+
 ```bash
-docker build -t my-blog .
 docker run -p 8080:8080 \
   -v ./my-blog/content:/data/content:ro \
+  -v ./my-blog/site.yaml:/data/config/site.yaml:ro \
   -e BLOGFLOW_SITE_BASE_URL="https://myblog.example.com" \
-  my-blog
+  blogflow --content /data/content --config /data/config
 ```
 
 The resulting image is under 15 MB and runs rootless on a distroless base.
@@ -150,5 +152,5 @@ The resulting image is under 15 MB and runs rootless on a distroless base.
 ## What's Next?
 
 - Explore [Markdown Features](/posts/markdown-features) to see everything BlogFlow supports
-- Set up webhook sync for automatic deploys on `git push`
+- Set up webhook sync for automatic deploys on `git push` (coming soon)
 - Create a custom theme directory with your own templates and CSS

@@ -25,7 +25,7 @@ Welcome to my blog, powered by BlogFlow.
 EOF
 
 # 3. Run BlogFlow
-blogflow serve --content ./content
+blogflow --content ./content
 ```
 
 Open [http://localhost:8080](http://localhost:8080) — that's it.
@@ -34,12 +34,12 @@ Open [http://localhost:8080](http://localhost:8080) — that's it.
 
 - **Zero-config start** — embedded defaults mean the binary works standalone
 - **Overlay filesystem** — external files override embedded defaults (`io/fs.FS`)
-- **Goldmark** — GitHub Flavored Markdown with syntax highlighting, tables, task lists, footnotes
+- **Goldmark** — GitHub Flavored Markdown with syntax highlighting (CSS classes for Chroma — requires theme CSS), tables, task lists, footnotes
 - **Secure by default** — distroless container, rootless (UID 65532), read-only root FS
 - **< 15 MB container** — single static binary on `gcr.io/distroless/static-debian12:nonroot`
-- **Git-driven content** — webhook, git-sync sidecar, or fsnotify for live reload
-- **HMAC-SHA256 webhooks** — constant-time signature validation, branch filtering, rate limiting
-- **Atom/RSS feeds** — auto-generated with configurable item count
+- **Git-driven content** — git-sync sidecar or fsnotify for live reload
+- **HMAC-SHA256 webhooks** (planned) — constant-time signature validation, branch filtering, rate limiting
+- **Atom/RSS feeds** (planned) — auto-generated with configurable item count
 - **Rendered content cache** — in-memory LRU with configurable TTL
 
 ## Configuration
@@ -81,7 +81,7 @@ cache:
   max_entries: 1000
 
 feed:
-  enabled: true
+  enabled: true       # (coming soon) feed generation is a planned feature
   type: "atom"
   items: 20
 ```
@@ -100,10 +100,10 @@ See [`examples/config/site.yaml`](examples/config/site.yaml) for a fully documen
 | `BLOGFLOW_SERVER_WRITE_TIMEOUT` | Write timeout |
 | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | Idle timeout |
 | `BLOGFLOW_CACHE_ENABLED` | Enable/disable cache (`true`/`false`) |
-| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar` |
-| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (≥ 32 bytes, **never in YAML**) |
-| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook rate limit (1–100 req/min) |
-| `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` |
+| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook` (planned), `sidecar` |
+| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (planned) (≥ 32 bytes, **never in YAML**) |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook rate limit (planned) (1–100 req/min) |
+| `BLOGFLOW_FEED_TYPE` | Feed format (planned): `atom` or `rss` |
 
 ## Progressive Customization
 
@@ -119,14 +119,13 @@ BlogFlow is designed for progressive disclosure — start simple, customize as n
 ## CLI Flags
 
 ```
-blogflow serve [flags]
+blogflow [flags]
 
 Flags:
   --content <path>    Path to content directory
   --theme <path>      Path to custom theme directory
   --config <path>     Path to site.yaml config file
   --dev               Enable development mode (verbose logging, no cache)
-  --watch             Enable filesystem watching for live reload
   --port <number>     HTTP server port (overrides config)
 ```
 
@@ -147,7 +146,7 @@ docker run -p 8080:8080 blogflow
 # With external content
 docker run -p 8080:8080 \
   -v ./content:/data/content:ro \
-  blogflow serve --content /data/content
+  blogflow --content /data/content
 
 # With config overrides
 docker run -p 8080:8080 \
@@ -167,7 +166,7 @@ make test     # Run tests with race detector
 make lint     # Run golangci-lint
 make fmt      # Format with gofumpt
 make docker   # Build Docker image
-make run      # Build and run locally (dev mode + watch)
+make run      # Build and run locally (dev mode)
 make dev      # Build and run with live reload
 make clean    # Remove build artifacts
 make help     # Show all targets
@@ -188,7 +187,7 @@ defaults/              Embedded defaults (templates, CSS, images, config)
 **Overlay FS resolution order** (first match wins):
 
 ```
-External content → External theme → External config → Embedded defaults
+External theme → External content → External config → Embedded defaults
 ```
 
 **Content pipeline**:
@@ -198,6 +197,32 @@ Markdown files → YAML front matter + goldmark → Go html/template → Cached 
 ```
 
 Design documents and ADRs are in [`docs/engineering/design/`](docs/engineering/design/).
+
+## Health Checks
+
+BlogFlow exposes two health endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `/healthz` | Liveness probe — returns `200 OK` if the process is running |
+| `/readyz` | Readiness probe — returns `200 OK` once the server has finished initialization (atomic gate) |
+
+Use these with Kubernetes liveness/readiness probes or any load-balancer health check.
+
+## Logging
+
+BlogFlow uses Go's structured `slog` logger. Each request logs:
+
+| Field | Description |
+|---|---|
+| `method` | HTTP method |
+| `path` | Request path |
+| `status` | Response status code |
+| `duration` | Request handling time |
+| `remote` | Client address |
+
+Use `--dev` to set the log level to debug. In production, logs are emitted as
+structured JSON at info level.
 
 ## Content Format
 

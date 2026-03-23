@@ -36,7 +36,7 @@ Headings from `##` through `######` are supported (h1 is reserved for the post t
 
 ## Images
 
-![Alt text for an image](https://via.placeholder.com/600x200 "Optional image title")
+![Alt text for an image](/static/images/example.png "Optional image title")
 
 ## Blockquotes
 
@@ -74,7 +74,7 @@ Headings from `##` through `######` are supported (h1 is reserved for the post t
 
 ### Inline Code
 
-Use `blogflow serve` to start the server. The config struct is `config.Config`.
+Use `blogflow` to start the server. The config struct is `config.Config`.
 
 ### Fenced Code Blocks
 
@@ -107,7 +107,7 @@ Bash:
 ```bash
 # Build and run BlogFlow
 make build
-./bin/blogflow serve --dev --watch --content ./content
+./bin/blogflow --dev --content ./content
 ```
 
 HTML:
@@ -127,7 +127,7 @@ HTML:
 | Task lists | ✅ | Checkbox syntax |
 | Strikethrough | ✅ | GFM extension |
 | Footnotes | ✅ | Goldmark extension |
-| Syntax highlighting | ✅ | Fenced code blocks |
+| Syntax highlighting | ✅ | CSS classes for Chroma (requires theme CSS) |
 | Auto-heading IDs | ✅ | For anchor links |
 
 ### Right-Aligned Table
