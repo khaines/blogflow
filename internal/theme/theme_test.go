@@ -423,6 +423,49 @@ func TestRender_HTMLEscaping_TemplateHTML(t *testing.T) {
 	})
 }
 
+// TestReadingTime_TemplateHTML verifies that readingTime works when called
+// with template.HTML (the actual type of .Content in production templates),
+// not just plain string.
+func TestReadingTime_TemplateHTML(t *testing.T) {
+	tests := []struct {
+		name    string
+		content template.HTML
+		want    string
+	}{
+		{
+			name:    "short_html_content",
+			content: template.HTML("<p>A <strong>few</strong> words here</p>"),
+			want:    "1",
+		},
+		{
+			name:    "long_html_content",
+			content: template.HTML("<p>" + strings.Repeat("word ", 600) + "</p>"), //nolint:gosec // static test data
+			want:    "3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := testFS(map[string]string{
+				"templates/post.html": `{{define "content"}}{{readingTime .Content}}{{end}}`,
+			})
+			e, err := NewEngine(fs)
+			if err != nil {
+				t.Fatalf("NewEngine: %v", err)
+			}
+
+			data := struct{ Content template.HTML }{Content: tt.content}
+			got, err := e.RenderToString("templates/post.html", data)
+			if err != nil {
+				t.Fatalf("RenderToString: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("output %q does not contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderToString(t *testing.T) {
 	fs := testFS(map[string]string{
 		"templates/greeting.html": `{{define "content"}}Hello, {{.Name}}!{{end}}`,
