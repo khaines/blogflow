@@ -276,6 +276,48 @@ func TestCloneOrPull_PullWithNewCommit(t *testing.T) {
 	}
 }
 
+func TestCloneOrPull_PullFallbackReclone(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "fallback-dest")
+
+	// Initial clone.
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+
+	// Corrupt the repo to force a pull failure.
+	if err := os.RemoveAll(filepath.Join(destDir, ".git", "objects")); err != nil {
+		t.Fatalf("corrupt repo: %v", err)
+	}
+
+	// Push a new commit to the bare repo.
+	addCommitToBareRepo(t, bareRepo, "new.txt", "content")
+
+	// CloneOrPull should detect pull failure and fall back to re-clone.
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("fallback re-clone failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true after re-clone")
+	}
+
+	// Verify the new file is present after re-clone.
+	data, err := os.ReadFile(filepath.Join(destDir, "new.txt"))
+	if err != nil {
+		t.Fatalf("read file after re-clone: %v", err)
+	}
+	if string(data) != "content" {
+		t.Fatalf("unexpected content: %q", data)
+	}
+}
+
 func TestSanitizeURL(t *testing.T) {
 	tests := []struct {
 		name string

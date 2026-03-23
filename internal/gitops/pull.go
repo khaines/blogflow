@@ -55,6 +55,11 @@ func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
 
 // CloneOrPull clones a repo to destPath if it doesn't exist, or pulls if it does.
 // Returns true if content changed, false if already up-to-date.
+//
+// repoURL must match the originally-cloned remote URL. Because pulls operate on
+// the existing remote configuration, a changed URL only takes effect when the
+// fallback re-clone path is triggered (e.g. shallow-clone corruption). To
+// intentionally switch URLs, delete destPath first and let CloneOrPull re-clone.
 func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath string) (changed bool, err error) {
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
 		return p.pull(ctx, repoURL, branch, destPath)
