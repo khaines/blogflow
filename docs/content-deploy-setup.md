@@ -42,6 +42,25 @@ Any push to the `main` branch will automatically trigger a content refresh on yo
 4. BlogFlow verifies the signature, checks the branch, and triggers a content reload
 5. Your blog updates within seconds
 
+## Cache behavior after reload
+
+> ⚠️ Content reload does **not** flush the render cache. Previously rendered
+> pages may serve stale HTML for up to `cache.ttl` (default 1 hour).
+
+After a webhook-triggered reload, the content index is rebuilt immediately, but
+cached rendered HTML is only replaced once its TTL expires. See the
+[Cache Invalidation on Content Reload](content-authoring-guide.md#cache-invalidation-on-content-reload)
+section in the Content Authoring Guide for details and workarounds.
+
+To minimize the stale window, lower the cache TTL in `site.yaml`:
+
+```yaml
+cache:
+  ttl: "5m"
+```
+
+Or disable caching entirely with `BLOGFLOW_CACHE_ENABLED=false`.
+
 ## Troubleshooting
 - **401 Unauthorized**: Secret mismatch between the workflow and BlogFlow server
 - **404 Not Found**: Wrong webhook URL or webhook path not configured

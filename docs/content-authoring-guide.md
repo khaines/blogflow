@@ -402,6 +402,109 @@ configurable endpoint (default `/api/webhook`), verify the payload signature,
 and trigger a content reload. Configuration is accepted in `site.yaml` under
 `sync.webhook` but has no effect until the implementation is finished.
 
+### Cache Invalidation on Content Reload
+
+When a sync strategy (watch, webhook, or sidecar) triggers a content reload,
+BlogFlow re-scans the content directory and rebuilds the in-memory content index
+(posts, pages, tags). The **render cache**, however, is managed separately from
+the content index. Understanding how these two layers interact is important for
+operators who need to reason about stale content.
+
+#### How the Render Cache Works
+
+BlogFlow maintains an in-memory render cache (`internal/content/cache.go`) that
+stores rendered HTML fragments keyed by content path. Each entry has:
+
+- **TTL** — entries expire after `cache.ttl` (default `1h`). Expired entries are
+  lazily evicted on the next read or when the cache reaches capacity.
+- **Max entries** — the cache holds at most `cache.max_entries` (default `1000`).
+  When full, an expired entry is preferred for eviction; otherwise a random entry
+  is removed.
+- **Thread safety** — all reads and writes are protected by a read-write mutex.
+  In-flight HTTP requests that already hold a cache reference will complete
+  normally; they are not interrupted by a flush.
+
+The cache exposes two invalidation methods:
+
+| Method           | Effect                              |
+|------------------|-------------------------------------|
+| `Invalidate(key)`| Removes a single entry by key.      |
+| `InvalidateAll()`| Drops every entry from the cache.   |
+
+#### Current Behavior: Cache Is Not Flushed on Reload
+
+> ⚠️ **Known gap.** As of this writing, none of the sync strategies
+> (watch, webhook, sidecar) call `InvalidateAll()` or `Invalidate()` when
+> content is reloaded. The render cache is flushed only by **TTL expiry**.
+
+This means that after a content reload:
+
+1. **Updated posts** may continue to serve stale rendered HTML until their cache
+   entries expire (up to `cache.ttl`, default 1 hour).
+2. **New posts** are immediately available because they have no prior cache entry.
+3. **Deleted posts** will return 404 once their cache entry expires, but may
+   briefly serve stale content if the entry is still valid.
+
+#### TTL Expiry vs Reload-Triggered Flush
+
+| Scenario                     | Cache behavior                                    |
+|------------------------------|---------------------------------------------------|
+| Post edited, TTL not expired | **Stale content served** until TTL expires         |
+| Post edited, TTL expired     | Fresh content rendered and cached on next request  |
+| New post added               | Cache miss → rendered and cached immediately       |
+| Post deleted                 | Stale HTML served until TTL expiry, then 404       |
+| `cache.enabled` set to `false` | Every request re-renders (no caching)           |
+
+#### In-Flight Requests During a Flush
+
+If `InvalidateAll()` were called (e.g., by a future reload implementation):
+
+- Requests that already retrieved a cache entry **before** the flush will
+  complete normally with the (now-stale) data. The cache returns a defensive
+  copy, so the caller's slice is unaffected by the flush.
+- Requests arriving **after** the flush will see a cache miss and trigger a
+  fresh render.
+- There is no request queuing or blocking — the flush is instantaneous (swap the
+  internal map under a write lock) and non-disruptive.
+
+#### Operator Guidance
+
+**When to expect stale content:**
+
+- After any content change delivered via watch, webhook, or sidecar, previously
+  rendered pages may remain stale for up to `cache.ttl`.
+
+**How to minimize stale windows:**
+
+1. **Lower the TTL.** Set `cache.ttl` to a shorter duration (e.g., `"5m"`) if
+   freshness matters more than render performance:
+   ```yaml
+   cache:
+     ttl: "5m"
+   ```
+2. **Disable the cache entirely.** Set `cache.enabled: false` or
+   `BLOGFLOW_CACHE_ENABLED=false`. Every request will re-render from the
+   content index, which is always up to date after a reload.
+3. **Restart the process.** A full restart rebuilds the content index and starts
+   with an empty cache. This is the most reliable way to guarantee zero stale
+   content.
+
+**Forcing a cache flush (workaround):**
+
+Until cache invalidation is wired into the reload path, the only way to force an
+immediate flush of all cached content is to restart the BlogFlow process:
+
+```bash
+# Docker
+docker compose restart blogflow
+
+# Kubernetes
+kubectl rollout restart deployment/blogflow
+
+# Systemd
+sudo systemctl restart blogflow
+```
+
 ---
 
 ## 6. Media and Images
