@@ -1,0 +1,177 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/kenhaines/blogflow/internal/config"
+)
+
+// Server is the BlogFlow HTTP server.
+type Server struct {
+	httpServer *http.Server
+	mux        *http.ServeMux
+	config     *config.Config
+	logger     *slog.Logger
+}
+
+// New creates a new BlogFlow server.
+func New(cfg *config.Config, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	mux := http.NewServeMux()
+	s := &Server{
+		mux:    mux,
+		config: cfg,
+		logger: logger,
+	}
+
+	s.httpServer = &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:      s.middleware(mux),
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
+	}
+
+	return s
+}
+
+// RouteOptions holds the handler functions injected into the server.
+type RouteOptions struct {
+	ListHandler    http.HandlerFunc
+	PostHandler    http.HandlerFunc
+	PageHandler    http.HandlerFunc
+	TagHandler     http.HandlerFunc
+	FeedHandler    http.HandlerFunc
+	SitemapHandler http.HandlerFunc
+	WebhookHandler http.HandlerFunc
+	StaticFS       fs.FS
+}
+
+// RegisterRoutes sets up all HTTP routes. Call this after content and theme are loaded.
+// contentHandler, pageHandler, etc. are injected as http.HandlerFunc.
+func (s *Server) RegisterRoutes(opts RouteOptions) {
+	// Content routes
+	s.mux.HandleFunc("GET /", opts.ListHandler)
+	s.mux.HandleFunc("GET /posts/{slug}", opts.PostHandler)
+	s.mux.HandleFunc("GET /pages/{slug}", opts.PageHandler)
+	s.mux.HandleFunc("GET /tags/{tag}", opts.TagHandler)
+
+	// Feed
+	if s.config.Feed.Enabled {
+		s.mux.HandleFunc("GET /feed.xml", opts.FeedHandler)
+	}
+
+	// Sitemap
+	s.mux.HandleFunc("GET /sitemap.xml", opts.SitemapHandler)
+
+	// Health checks
+	s.mux.HandleFunc("GET /healthz", s.healthHandler)
+	s.mux.HandleFunc("GET /readyz", s.readyHandler)
+
+	// Static assets
+	if opts.StaticFS != nil {
+		s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(opts.StaticFS)))
+	}
+
+	// Webhook (if configured)
+	if s.config.Sync.Strategy == "webhook" {
+		s.mux.HandleFunc("POST /api/webhook", opts.WebhookHandler)
+	}
+}
+
+// Start begins serving HTTP. Blocks until the server stops.
+func (s *Server) Start() error {
+	s.logger.Info("server starting", "addr", s.httpServer.Addr)
+	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("server: %w", err)
+	}
+	return nil
+}
+
+// Shutdown gracefully stops the server with the given context deadline.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("server shutting down")
+	return s.httpServer.Shutdown(ctx)
+}
+
+// middleware chains standard middleware: logging, security headers, recovery.
+func (s *Server) middleware(next http.Handler) http.Handler {
+	return s.recoveryMiddleware(
+		s.securityHeadersMiddleware(
+			s.loggingMiddleware(next),
+		),
+	)
+}
+
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(wrapped, r)
+		s.logger.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", wrapped.statusCode,
+			"duration", time.Since(start),
+			"remote", r.RemoteAddr,
+		)
+	})
+}
+
+func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; script-src 'none'; object-src 'none'; "+
+				"connect-src 'none'; style-src 'self'; img-src 'self' https: data:; "+
+				"font-src 'self' https:; base-uri 'self'; form-action 'self'; "+
+				"frame-ancestors 'self'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logger.Error("panic recovered", "panic", rec, "path", r.URL.Path)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO: check that content index is loaded and templates are parsed
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ready")
+}
+
+// responseWriter wraps http.ResponseWriter to capture the status code.
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
