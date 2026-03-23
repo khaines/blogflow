@@ -35,11 +35,11 @@ func TestWatchStrategy_DetectsFileChange(t *testing.T) {
 	if err := w.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer w.Stop(context.Background())
+	defer func() { _ = w.Stop(context.Background()) }()
 
 	time.Sleep(100 * time.Millisecond)
 
-	if err := os.WriteFile(filepath.Join(dir, "post.md"), []byte("# Hello"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "post.md"), []byte("# Hello"), 0o644); err != nil { //nolint:gosec // G306: test files
 		t.Fatal(err)
 	}
 
@@ -69,13 +69,13 @@ func TestWatchStrategy_Debounce(t *testing.T) {
 	if err := w.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer w.Stop(context.Background())
+	defer func() { _ = w.Stop(context.Background()) }()
 
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < 5; i++ {
 		name := filepath.Join(dir, fmt.Sprintf("post%d.md", i))
-		if err := os.WriteFile(name, []byte("content"), 0o644); err != nil {
+		if err := os.WriteFile(name, []byte("content"), 0o644); err != nil { //nolint:gosec // G306: test files
 			t.Fatal(err)
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -108,13 +108,13 @@ func TestWatchStrategy_IgnoresTempFiles(t *testing.T) {
 	if err := w.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer w.Stop(context.Background())
+	defer func() { _ = w.Stop(context.Background()) }()
 
 	time.Sleep(100 * time.Millisecond)
 
-	_ = os.WriteFile(filepath.Join(dir, ".post.md.swp"), []byte("swap"), 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "draft.tmp"), []byte("temp"), 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "backup.md~"), []byte("backup"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".post.md.swp"), []byte("swap"), 0o644) //nolint:gosec // G306: test files
+	_ = os.WriteFile(filepath.Join(dir, "draft.tmp"), []byte("temp"), 0o644) //nolint:gosec // G306: test files
+	_ = os.WriteFile(filepath.Join(dir, "backup.md~"), []byte("backup"), 0o644) //nolint:gosec // G306: test files
 
 	time.Sleep(300 * time.Millisecond)
 
@@ -166,7 +166,7 @@ func TestWatchStrategy_StartErrorNoDirs(t *testing.T) {
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start after SetDirs failed: %v", err)
 	}
-	defer w.Stop(context.Background())
+	defer func() { _ = w.Stop(context.Background()) }()
 }
 
 func TestWatchStrategy_ContextCancel(t *testing.T) {

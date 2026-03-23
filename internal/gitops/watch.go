@@ -74,7 +74,7 @@ func (w *WatchStrategy) Start(ctx context.Context) error {
 
 	for _, dir := range w.dirs {
 		if err := addRecursive(watcher, dir); err != nil {
-			watcher.Close()
+			_ = watcher.Close()
 			return fmt.Errorf("gitops: watch %q: %w", dir, err)
 		}
 	}
