@@ -1,0 +1,19 @@
+{{define "title"}}{{.Post.Title}} — {{.Site.Title}}{{end}}
+{{define "og_title"}}{{.Post.Title}}{{end}}
+{{define "og_description"}}{{.Post.Description}}{{end}}
+{{define "og_type"}}article{{end}}
+{{define "og_url"}}{{.Post.URL}}{{end}}
+{{define "meta_description"}}{{.Post.Description}}{{end}}
+
+{{define "content"}}
+{{/* .Content must be template.HTML — caller is responsible for sanitizing markdown output before wrapping. */}}
+<article class="post">
+    <header class="post-header">
+        <h1>{{.Post.Title}}</h1>
+        {{template "post-meta" .Post}}
+    </header>
+    <div class="post-content">
+        {{.Content}}
+    </div>
+</article>
+{{end}}

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="{{.Site.Language}}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self' https: data:; font-src 'self' https:; base-uri 'self'; form-action 'self'">
+    <title>{{block "title" .}}{{.Site.Title}}{{end}}</title>
+    <meta name="description" content="{{block "meta_description" .}}{{.Site.Description}}{{end}}">
+    <meta property="og:title" content="{{block "og_title" .}}{{.Site.Title}}{{end}}">
+    <meta property="og:description" content="{{block "og_description" .}}{{.Site.Description}}{{end}}">
+    <meta property="og:type" content="{{block "og_type" .}}website{{end}}">
+    <meta property="og:url" content="{{block "og_url" .}}{{.Site.BaseURL}}{{end}}">
+    <link rel="icon" href="/static/images/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/css/main.css">
+    {{if .Feed.Enabled}}<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="{{.Site.Title}} Feed">{{end}}
+</head>
+<body>
+    <a href="#main" class="skip-link">Skip to content</a>
+    {{template "partials/header.html" .}}
+    <main id="main">
+        {{block "content" .}}{{end}}
+    </main>
+    {{template "partials/footer.html" .}}
+</body>
+</html>

@@ -1,0 +1,50 @@
+# BlogFlow default configuration
+# Override by placing site.yaml in /data/config/ or setting BLOGFLOW_* env vars
+
+site:
+  title: "My Blog"
+  description: "A blog powered by BlogFlow"
+  base_url: "http://localhost:8080"  # Override in production with your actual HTTPS URL
+  language: "en"
+  author:
+    name: ""
+    email: ""
+
+content:
+  posts_dir: "posts"
+  pages_dir: "pages"
+  media_dir: "media"
+  posts_per_page: 10
+  date_format: "January 2, 2006"
+  summary_length: 200
+
+theme:
+  name: "default"
+  path: ""
+
+server:
+  port: 8080
+  read_timeout: "5s"
+  write_timeout: "10s"
+  idle_timeout: "120s"
+
+cache:
+  enabled: true
+  ttl: "1h"
+  max_entries: 1000
+
+sync:
+  strategy: "watch"
+  webhook:
+    path: "/api/webhook"
+    allowed_events:
+      - push
+    # secret: Set via BLOGFLOW_WEBHOOK_SECRET env var (never in YAML files)
+    branch_filter: "main"
+    ip_allowlist: true
+    rate_limit: 10
+
+feed:
+  enabled: true
+  type: "atom"
+  items: 20

@@ -1,0 +1,16 @@
+{{define "title"}}{{.Page.Title}} — {{.Site.Title}}{{end}}
+{{define "og_title"}}{{.Page.Title}}{{end}}
+{{define "og_description"}}{{.Page.Description}}{{end}}
+{{define "og_type"}}website{{end}}
+{{define "og_url"}}{{.Page.URL}}{{end}}
+{{define "meta_description"}}{{.Page.Description}}{{end}}
+
+{{define "content"}}
+{{/* .Content must be template.HTML — caller is responsible for sanitizing markdown output before wrapping. */}}
+<article class="page">
+    <h1>{{.Page.Title}}</h1>
+    <div class="page-content">
+        {{.Content}}
+    </div>
+</article>
+{{end}}
