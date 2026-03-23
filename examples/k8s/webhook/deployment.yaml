@@ -1,0 +1,116 @@
+# BlogFlow Deployment — webhook pattern.
+# BlogFlow receives push events via its /api/webhook endpoint, pulls the latest
+# content, and re-renders. No sidecar is needed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blogflow
+  namespace: blogflow
+  labels:
+    app.kubernetes.io/name: blogflow
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blogflow
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blogflow
+        app.kubernetes.io/component: server
+    spec:
+      # BlogFlow does not call the Kubernetes API — do not mount a token.
+      automountServiceAccountToken: false
+
+      # Pod-level security context applied to every container.
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: blogflow
+          # Pin by digest for production — see docs/engineering/container-security.md
+          image: ghcr.io/khaines/blogflow:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # Container-level security hardening.
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          env:
+            # Webhook HMAC secret — injected from the Secret resource.
+            - name: BLOGFLOW_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: blogflow-webhook-secret
+                  key: webhook-secret
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+          # Kubernetes restarts the pod if liveness fails.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          # Traffic is only routed to ready pods.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          volumeMounts:
+            # Content volume is read-write — BlogFlow pulls on webhook trigger.
+            - name: content
+              mountPath: /data/content
+            - name: theme
+              mountPath: /data/theme
+            - name: config
+              mountPath: /data/config
+              readOnly: true
+            - name: cache
+              mountPath: /data/cache
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        # Content volume — read-write so BlogFlow can pull updates itself.
+        - name: content
+          emptyDir: {}
+        # Theme files — replace with a PVC or ConfigMap if shipping custom themes.
+        - name: theme
+          emptyDir: {}
+        # BlogFlow site.yaml from the ConfigMap.
+        - name: config
+          configMap:
+            name: blogflow-config
+        # Rendered page cache (ephemeral).
+        - name: cache
+          emptyDir: {}
+        # Scratch space — memory-backed to avoid disk writes.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
