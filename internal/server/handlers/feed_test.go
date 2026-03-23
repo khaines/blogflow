@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/content"
-	"github.com/kenhaines/blogflow/internal/server/handlers"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/server/handlers"
 )
 
 func testConfig() *config.Config {

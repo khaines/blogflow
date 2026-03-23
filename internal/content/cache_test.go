@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 func testCacheConfig() config.CacheConfig {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 // ContentReloader is called when content changes are detected.

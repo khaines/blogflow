@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/content"
-	"github.com/kenhaines/blogflow/internal/server/handlers"
+	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/server/handlers"
 )
 
 func TestSitemapHandler(t *testing.T) {

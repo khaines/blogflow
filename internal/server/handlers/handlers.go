@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/content"
-	"github.com/kenhaines/blogflow/internal/theme"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/theme"
 )
 
 // Deps holds shared dependencies for all handlers.

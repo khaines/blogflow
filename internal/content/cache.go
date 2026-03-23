@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 // CacheEntry holds a rendered HTML fragment and its metadata.

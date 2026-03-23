@@ -6,7 +6,7 @@ description: "About this blog and the person behind it."
 
 ## About This Blog
 
-This blog is powered by [BlogFlow](https://github.com/kenhaines/blogflow), a compact blog engine written in Go. It turns Markdown files into a clean, fast website with zero configuration required.
+This blog is powered by [BlogFlow](https://github.com/khaines/blogflow), a compact blog engine written in Go. It turns Markdown files into a clean, fast website with zero configuration required.
 
 ## About Me
 
@@ -23,7 +23,7 @@ BlogFlow is designed around a few core principles:
 
 ## Contact
 
-- **GitHub:** [github.com/kenhaines](https://github.com/kenhaines)
+- **GitHub:** [github.com/khaines](https://github.com/khaines)
 - **Email:** hello@example.com
 
 ---

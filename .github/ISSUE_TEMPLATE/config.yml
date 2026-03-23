@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 Documentation
-    url: https://github.com/kenhaines/blogflow
+    url: https://github.com/khaines/blogflow
     about: Check the README and docs before filing an issue
   - name: 💬 Discussions
-    url: https://github.com/kenhaines/blogflow/discussions
+    url: https://github.com/khaines/blogflow/discussions
     about: Ask questions and share ideas in GitHub Discussions

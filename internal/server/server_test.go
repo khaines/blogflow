@@ -14,7 +14,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/kenhaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/config"
 )
 
 func defaultTestConfig() *config.Config {

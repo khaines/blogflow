@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	blogflow "github.com/kenhaines/blogflow"
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/content"
-	"github.com/kenhaines/blogflow/internal/overlayfs"
-	"github.com/kenhaines/blogflow/internal/server"
-	"github.com/kenhaines/blogflow/internal/server/handlers"
-	"github.com/kenhaines/blogflow/internal/theme"
+	blogflow "github.com/khaines/blogflow"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/overlayfs"
+	"github.com/khaines/blogflow/internal/server"
+	"github.com/khaines/blogflow/internal/server/handlers"
+	"github.com/khaines/blogflow/internal/theme"
 )
 
 var version = "dev"

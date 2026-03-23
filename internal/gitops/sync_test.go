@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/kenhaines/blogflow/internal/config"
-	"github.com/kenhaines/blogflow/internal/gitops"
+	"github.com/khaines/blogflow/internal/config"
+	"github.com/khaines/blogflow/internal/gitops"
 )
 
 var noop gitops.ContentReloader = func() error { return nil }

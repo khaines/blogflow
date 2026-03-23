@@ -21,7 +21,7 @@ This tutorial walks through setting up a blog with BlogFlow — from zero to a c
 Build from source:
 
 ```bash
-git clone https://github.com/kenhaines/blogflow.git
+git clone https://github.com/khaines/blogflow.git
 cd blogflow
 make build
 ```
@@ -137,7 +137,7 @@ Pages are served at `/<slug>` — this one appears at `/about`.
 ## Step 7: Deploy with Docker
 
 Use the pre-built BlogFlow image (or build from the
-[engine repo](https://github.com/kenhaines/blogflow)):
+[engine repo](https://github.com/khaines/blogflow)):
 
 ```bash
 docker run -p 8080:8080 \
