@@ -82,6 +82,7 @@ type WebhookConfig struct {
 	AllowedEvents []string `yaml:"allowed_events"`
 	BranchFilter  string   `yaml:"branch_filter"`
 	RateLimit     int      `yaml:"rate_limit"`
+	MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default (1 MB)
 }
 
 // FeedConfig holds RSS/Atom feed settings.

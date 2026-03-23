@@ -220,8 +220,33 @@ func TestWebhookHandler_BodyTooLarge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Payload larger than 1 MB.
+	// Payload larger than default 1 MB limit.
 	largeBody := strings.NewReader(strings.Repeat("x", 1<<20+1))
+	req := httptest.NewRequest(http.MethodPost, "/hook", largeBody)
+	req.Header.Set("X-Hub-Signature-256", "sha256=bogus")
+
+	rec := httptest.NewRecorder()
+	w.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestWebhookHandler_BodyTooLarge_CustomLimit(t *testing.T) {
+	t.Parallel()
+
+	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+		Path:        "/hook",
+		Secret:      "secret",
+		MaxBodySize: 256, // 256 bytes
+	}, func() error { return nil }, webhookLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Payload exceeds custom 256-byte limit.
+	largeBody := strings.NewReader(strings.Repeat("x", 512))
 	req := httptest.NewRequest(http.MethodPost, "/hook", largeBody)
 	req.Header.Set("X-Hub-Signature-256", "sha256=bogus")
 

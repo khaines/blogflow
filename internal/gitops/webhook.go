@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +18,7 @@ import (
 	"github.com/khaines/blogflow/internal/config"
 )
 
-const maxPayloadSize = 1 << 20 // 1 MB
+const defaultMaxPayloadSize int64 = 1 << 20 // 1 MB
 
 // WebhookStrategy listens for HTTP webhook callbacks to trigger content reload.
 // Validates HMAC-SHA256 signatures, filters by branch, and rate-limits.
@@ -86,12 +87,22 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		}
 
 		// Limit request body size.
-		r.Body = http.MaxBytesReader(rw, r.Body, maxPayloadSize)
+		limit := w.config.MaxBodySize
+		if limit <= 0 {
+			limit = defaultMaxPayloadSize
+		}
+		r.Body = http.MaxBytesReader(rw, r.Body, limit)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				w.logger.Warn("body too large", "limit", limit)
+				http.Error(rw, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			w.logger.Warn("body read error", "error", err)
-			http.Error(rw, "request body too large", http.StatusRequestEntityTooLarge)
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
 			return
 		}
 
