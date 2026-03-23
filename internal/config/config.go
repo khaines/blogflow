@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 // Config is the top-level BlogFlow configuration.
 // Returned by Loader.Get() — treat as immutable after load.
@@ -83,6 +86,7 @@ func Default() *Config {
 			Description: "A blog powered by BlogFlow",
 			BaseURL:     "http://localhost:8080",
 			Language:    "en",
+			Author:      AuthorConfig{}, // intentionally empty per design
 		},
 		Content: ContentConfig{
 			PostsDir:      "posts",
@@ -122,4 +126,14 @@ func Default() *Config {
 			Items:   20,
 		},
 	}
+}
+
+// LogValue implements slog.LogValuer, redacting sensitive fields.
+func (c Config) LogValue() slog.Value {
+	type noMethods Config // break recursion
+	r := noMethods(c)
+	if r.Sync.Webhook.Secret != "" {
+		r.Sync.Webhook.Secret = "[REDACTED]"
+	}
+	return slog.AnyValue(r)
 }

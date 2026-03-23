@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,7 +24,11 @@ type ConfigError struct {
 }
 
 func (e *ConfigError) Error() string {
-	return fmt.Sprintf("config validation failed: %d error(s)", len(e.Errors))
+	msgs := make([]string, len(e.Errors))
+	for i, fe := range e.Errors {
+		msgs[i] = fe.Error()
+	}
+	return fmt.Sprintf("config validation failed (%d errors): %s", len(e.Errors), strings.Join(msgs, "; "))
 }
 
 // FieldError describes a single validation failure.
@@ -102,7 +107,14 @@ func (l *Loader) Load() (*Config, error) {
 		}
 	}
 
-	applyEnvOverrides(cfg)
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, fmt.Errorf("applying environment overrides: %w", err)
+	}
+
+	// TODO(P1): Add Reload() for runtime config reloading and OnChange() callback
+	// registration. See GitHub issue for design.
+	// TODO(P1): Add structured logging (slog) and metrics for config operations.
+	// See GitHub issue for design.
 
 	if err := Validate(cfg); err != nil {
 		return nil, err
@@ -130,6 +142,11 @@ var secretPatterns = []struct {
 	{regexp.MustCompile(`-----BEGIN.*PRIVATE KEY-----`), "private key"},
 	{regexp.MustCompile(`AKIA[0-9A-Z]{16}`), "AWS access key"},
 	{regexp.MustCompile(`\$\{BLOGFLOW_\w+\}`), "env var placeholder in YAML (use env vars directly)"},
+	{regexp.MustCompile(`dsn://`), "DSN connection string (dsn://)"},
+	{regexp.MustCompile(`postgres://`), "PostgreSQL connection string (postgres://)"},
+	{regexp.MustCompile(`mysql://`), "MySQL connection string (mysql://)"},
+	{regexp.MustCompile(`redis://`), "Redis connection string (redis://)"},
+	{regexp.MustCompile(`(?im)^\s*\w*(password|secret|token|credential|apikey|api_key)\w*\s*:\s*\S`), "sensitive YAML key with inline value"},
 }
 
 func scanForSecrets(data []byte) error {
@@ -277,6 +294,12 @@ func applyEnvOverrides(cfg *Config) error {
 	return nil
 }
 
+// Package-level validation maps.
+var (
+	validStrategies = map[string]bool{"watch": true, "webhook": true, "sidecar": true}
+	validFeedTypes  = map[string]bool{"atom": true, "rss": true}
+)
+
 // Validate checks a Config for structural and semantic correctness.
 func Validate(cfg *Config) error {
 	var errs []FieldError
@@ -287,6 +310,29 @@ func Validate(cfg *Config) error {
 			Field:   "server.port",
 			Value:   cfg.Server.Port,
 			Message: "must be between 1 and 65535",
+		})
+	}
+
+	// Server timeouts: must be > 0
+	if cfg.Server.ReadTimeout <= 0 {
+		errs = append(errs, FieldError{
+			Field:   "server.read_timeout",
+			Value:   cfg.Server.ReadTimeout,
+			Message: "must be greater than 0",
+		})
+	}
+	if cfg.Server.WriteTimeout <= 0 {
+		errs = append(errs, FieldError{
+			Field:   "server.write_timeout",
+			Value:   cfg.Server.WriteTimeout,
+			Message: "must be greater than 0",
+		})
+	}
+	if cfg.Server.IdleTimeout <= 0 {
+		errs = append(errs, FieldError{
+			Field:   "server.idle_timeout",
+			Value:   cfg.Server.IdleTimeout,
+			Message: "must be greater than 0",
 		})
 	}
 
@@ -315,6 +361,24 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	// Content.PostsPerPage: 1-100
+	if cfg.Content.PostsPerPage < 1 || cfg.Content.PostsPerPage > 100 {
+		errs = append(errs, FieldError{
+			Field:   "content.posts_per_page",
+			Value:   cfg.Content.PostsPerPage,
+			Message: "must be between 1 and 100",
+		})
+	}
+
+	// Content.SummaryLength: 50-1000
+	if cfg.Content.SummaryLength < 50 || cfg.Content.SummaryLength > 1000 {
+		errs = append(errs, FieldError{
+			Field:   "content.summary_length",
+			Value:   cfg.Content.SummaryLength,
+			Message: "must be between 50 and 1000",
+		})
+	}
+
 	// ThemeConfig.Path: if non-empty, no absolute paths, no ".."
 	if cfg.Theme.Path != "" {
 		if filepath.IsAbs(cfg.Theme.Path) {
@@ -333,8 +397,16 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	// Cache.MaxEntries: 0-100000
+	if cfg.Cache.MaxEntries < 0 || cfg.Cache.MaxEntries > 100000 {
+		errs = append(errs, FieldError{
+			Field:   "cache.max_entries",
+			Value:   cfg.Cache.MaxEntries,
+			Message: "must be between 0 and 100000",
+		})
+	}
+
 	// Sync.Strategy: must be watch, webhook, or sidecar
-	validStrategies := map[string]bool{"watch": true, "webhook": true, "sidecar": true}
 	if !validStrategies[cfg.Sync.Strategy] {
 		errs = append(errs, FieldError{
 			Field:   "sync.strategy",
@@ -359,15 +431,37 @@ func Validate(cfg *Config) error {
 				Message: "must not be empty when strategy is webhook",
 			})
 		}
+		if !strings.HasPrefix(cfg.Sync.Webhook.Path, "/") {
+			errs = append(errs, FieldError{
+				Field:   "sync.webhook.path",
+				Value:   cfg.Sync.Webhook.Path,
+				Message: "must start with /",
+			})
+		}
+		if cfg.Sync.Webhook.RateLimit < 1 || cfg.Sync.Webhook.RateLimit > 100 {
+			errs = append(errs, FieldError{
+				Field:   "sync.webhook.rate_limit",
+				Value:   cfg.Sync.Webhook.RateLimit,
+				Message: "must be between 1 and 100",
+			})
+		}
 	}
 
 	// Feed.Type: must be atom or rss
-	validFeedTypes := map[string]bool{"atom": true, "rss": true}
 	if !validFeedTypes[cfg.Feed.Type] {
 		errs = append(errs, FieldError{
 			Field:   "feed.type",
 			Value:   cfg.Feed.Type,
 			Message: "must be one of: atom, rss",
+		})
+	}
+
+	// Feed.Items: 1-100
+	if cfg.Feed.Items < 1 || cfg.Feed.Items > 100 {
+		errs = append(errs, FieldError{
+			Field:   "feed.items",
+			Value:   cfg.Feed.Items,
+			Message: "must be between 1 and 100",
 		})
 	}
 
@@ -378,5 +472,5 @@ func Validate(cfg *Config) error {
 }
 
 func isNotExist(err error) bool {
-	return os.IsNotExist(err)
+	return errors.Is(err, fs.ErrNotExist)
 }

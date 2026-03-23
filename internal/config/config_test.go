@@ -331,6 +331,25 @@ func TestValidate_PathTraversal(t *testing.T) {
 	}
 }
 
+// --- H1: ConfigError.Error() includes field details ---
+
+func TestConfigError_ErrorIncludesFields(t *testing.T) {
+	cfg := Default()
+	cfg.Server.Port = 0
+	cfg.Sync.Strategy = "invalid"
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "server.port") {
+		t.Errorf("expected error to mention server.port, got: %s", msg)
+	}
+	if !strings.Contains(msg, "sync.strategy") {
+		t.Errorf("expected error to mention sync.strategy, got: %s", msg)
+	}
+}
+
 // --- Validate: invalid strategy ---
 
 func TestValidate_InvalidStrategy(t *testing.T) {
@@ -557,5 +576,198 @@ site:
 	}
 	if cfg.Cache.TTL != 1*time.Hour {
 		t.Errorf("expected default cache TTL 1h, got %v", cfg.Cache.TTL)
+	}
+}
+
+// --- CRITICAL: env override parse error is propagated ---
+
+func TestLoad_EnvOverrideError(t *testing.T) {
+	fsys := fstest.MapFS{}
+	t.Setenv("BLOGFLOW_SERVER_PORT", "notanumber")
+
+	loader := NewLoader(fsys)
+	_, err := loader.Load()
+	if err == nil {
+		t.Fatal("expected error for invalid BLOGFLOW_SERVER_PORT, got nil")
+	}
+	if !strings.Contains(err.Error(), "environment overrides") {
+		t.Errorf("expected error about environment overrides, got: %v", err)
+	}
+}
+
+// --- H2: zero timeouts rejected ---
+
+func TestValidate_ZeroTimeouts(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Config)
+		field string
+	}{
+		{"zero read timeout", func(c *Config) { c.Server.ReadTimeout = 0 }, "server.read_timeout"},
+		{"zero write timeout", func(c *Config) { c.Server.WriteTimeout = 0 }, "server.write_timeout"},
+		{"zero idle timeout", func(c *Config) { c.Server.IdleTimeout = 0 }, "server.idle_timeout"},
+		{"negative read timeout", func(c *Config) { c.Server.ReadTimeout = -1 * time.Second }, "server.read_timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.setup(cfg)
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			cfgErr, ok := err.(*ConfigError)
+			if !ok {
+				t.Fatalf("expected *ConfigError, got %T", err)
+			}
+			found := false
+			for _, fe := range cfgErr.Errors {
+				if fe.Field == tt.field {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %s field error", tt.field)
+			}
+		})
+	}
+}
+
+// --- M1: field validation bounds ---
+
+func TestValidate_FieldBounds(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Config)
+		field string
+	}{
+		{"posts_per_page too low", func(c *Config) { c.Content.PostsPerPage = 0 }, "content.posts_per_page"},
+		{"posts_per_page too high", func(c *Config) { c.Content.PostsPerPage = 101 }, "content.posts_per_page"},
+		{"summary_length too low", func(c *Config) { c.Content.SummaryLength = 49 }, "content.summary_length"},
+		{"summary_length too high", func(c *Config) { c.Content.SummaryLength = 1001 }, "content.summary_length"},
+		{"cache max_entries negative", func(c *Config) { c.Cache.MaxEntries = -1 }, "cache.max_entries"},
+		{"cache max_entries too high", func(c *Config) { c.Cache.MaxEntries = 100001 }, "cache.max_entries"},
+		{"feed items too low", func(c *Config) { c.Feed.Items = 0 }, "feed.items"},
+		{"feed items too high", func(c *Config) { c.Feed.Items = 101 }, "feed.items"},
+		{
+			"webhook path no leading slash",
+			func(c *Config) {
+				c.Sync.Strategy = "webhook"
+				c.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+				c.Sync.Webhook.Path = "api/webhook"
+			},
+			"sync.webhook.path",
+		},
+		{
+			"webhook rate_limit too low",
+			func(c *Config) {
+				c.Sync.Strategy = "webhook"
+				c.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+				c.Sync.Webhook.RateLimit = 0
+			},
+			"sync.webhook.rate_limit",
+		},
+		{
+			"webhook rate_limit too high",
+			func(c *Config) {
+				c.Sync.Strategy = "webhook"
+				c.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+				c.Sync.Webhook.RateLimit = 101
+			},
+			"sync.webhook.rate_limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.setup(cfg)
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected validation error for %s", tt.field)
+			}
+			cfgErr, ok := err.(*ConfigError)
+			if !ok {
+				t.Fatalf("expected *ConfigError, got %T", err)
+			}
+			found := false
+			for _, fe := range cfgErr.Errors {
+				if fe.Field == tt.field {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %s field error, got: %v", tt.field, cfgErr.Errors)
+			}
+		})
+	}
+}
+
+// --- H7: expanded secret patterns ---
+
+func TestLoad_SecretPatterns_ConnectionStrings(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"postgres URI", "site:\n  base_url: \"postgres://user:pass@host/db\""},
+		{"mysql URI", "site:\n  base_url: \"mysql://user:pass@host/db\""},
+		{"redis URI", "site:\n  base_url: \"redis://user:pass@host/db\""},
+		{"dsn URI", "site:\n  base_url: \"dsn://user:pass@host/db\""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"site.yaml": &fstest.MapFile{Data: []byte(tt.content)},
+			}
+			loader := NewLoader(fsys)
+			_, err := loader.Load()
+			if err == nil {
+				t.Fatal("expected error for connection string in YAML, got nil")
+			}
+			if !isSecretError(err) {
+				t.Errorf("expected SecretInYAMLError, got: %T: %v", err, err)
+			}
+		})
+	}
+}
+
+func TestLoad_SecretPatterns_SensitiveKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"password key", "password: mysecretpassword"},
+		{"secret key", "secret: mysecretvalue"},
+		{"token key", "token: mytoken123"},
+		{"credential key", "credential: mycred"},
+		{"apikey key", "apikey: myapikey"},
+		{"api_key key", "api_key: myapikey"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"site.yaml": &fstest.MapFile{Data: []byte(tt.content)},
+			}
+			loader := NewLoader(fsys)
+			_, err := loader.Load()
+			if err == nil {
+				t.Fatal("expected error for sensitive key in YAML, got nil")
+			}
+			if !isSecretError(err) {
+				t.Errorf("expected SecretInYAMLError, got: %T: %v", err, err)
+			}
+		})
+	}
+}
+
+// --- M2: slog.LogValuer redacts secret ---
+
+func TestConfig_LogValue(t *testing.T) {
+	cfg := Default()
+	cfg.Sync.Webhook.Secret = "super-secret-value"
+	val := cfg.LogValue()
+	s := val.String()
+	if strings.Contains(s, "super-secret-value") {
+		t.Error("LogValue() should redact webhook secret")
 	}
 }
