@@ -26,7 +26,7 @@ func defaultTestConfig() *config.Config {
 
 func stubHandler(body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, body)
+		_, _ = fmt.Fprint(w, body)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestRecoveryMiddleware_HeadersAlreadySent(t *testing.T) {
 	panicOpts := testRouteOptions()
 	panicOpts.ListHandler = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "partial")
+		_, _ = fmt.Fprint(w, "partial")
 		panic("late panic after headers sent")
 	}
 	s.RegisterRoutes(panicOpts)
