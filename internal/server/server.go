@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/kenhaines/blogflow/internal/config"
@@ -17,6 +20,7 @@ type Server struct {
 	mux        *http.ServeMux
 	config     *config.Config
 	logger     *slog.Logger
+	ready      atomic.Bool
 }
 
 // New creates a new BlogFlow server.
@@ -33,11 +37,12 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 	}
 
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      s.middleware(mux),
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:           s.middleware(mux),
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       cfg.Server.IdleTimeout,
 	}
 
 	return s
@@ -58,14 +63,34 @@ type RouteOptions struct {
 // RegisterRoutes sets up all HTTP routes. Call this after content and theme are loaded.
 // contentHandler, pageHandler, etc. are injected as http.HandlerFunc.
 func (s *Server) RegisterRoutes(opts RouteOptions) {
+	// Nil-handler guards for required routes.
+	if opts.ListHandler == nil {
+		panic("server: RegisterRoutes requires ListHandler")
+	}
+	if opts.PostHandler == nil {
+		panic("server: RegisterRoutes requires PostHandler")
+	}
+	if opts.PageHandler == nil {
+		panic("server: RegisterRoutes requires PageHandler")
+	}
+	if opts.TagHandler == nil {
+		panic("server: RegisterRoutes requires TagHandler")
+	}
+	if opts.SitemapHandler == nil {
+		panic("server: RegisterRoutes requires SitemapHandler")
+	}
+
 	// Content routes
-	s.mux.HandleFunc("GET /", opts.ListHandler)
+	s.mux.HandleFunc("GET /{$}", opts.ListHandler)
 	s.mux.HandleFunc("GET /posts/{slug}", opts.PostHandler)
 	s.mux.HandleFunc("GET /pages/{slug}", opts.PageHandler)
 	s.mux.HandleFunc("GET /tags/{tag}", opts.TagHandler)
 
 	// Feed
 	if s.config.Feed.Enabled {
+		if opts.FeedHandler == nil {
+			panic("server: RegisterRoutes requires FeedHandler when feed is enabled")
+		}
 		s.mux.HandleFunc("GET /feed.xml", opts.FeedHandler)
 	}
 
@@ -83,7 +108,10 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 
 	// Webhook (if configured)
 	if s.config.Sync.Strategy == "webhook" {
-		s.mux.HandleFunc("POST /api/webhook", opts.WebhookHandler)
+		if opts.WebhookHandler == nil {
+			panic("server: RegisterRoutes requires WebhookHandler when sync strategy is webhook")
+		}
+		s.mux.HandleFunc("POST "+s.config.Sync.Webhook.Path, opts.WebhookHandler)
 	}
 }
 
@@ -91,6 +119,15 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 func (s *Server) Start() error {
 	s.logger.Info("server starting", "addr", s.httpServer.Addr)
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("server: %w", err)
+	}
+	return nil
+}
+
+// Serve begins serving HTTP on the given listener. Blocks until the server stops.
+func (s *Server) Serve(ln net.Listener) error {
+	s.logger.Info("server starting", "addr", ln.Addr().String())
+	if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
 	}
 	return nil
@@ -104,9 +141,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // middleware chains standard middleware: logging, security headers, recovery.
 func (s *Server) middleware(next http.Handler) http.Handler {
-	return s.recoveryMiddleware(
-		s.securityHeadersMiddleware(
-			s.loggingMiddleware(next),
+	// Order: logging (outermost) → recovery → security headers → handler
+	return s.loggingMiddleware(
+		s.recoveryMiddleware(
+			s.securityHeadersMiddleware(next),
 		),
 	)
 }
@@ -144,7 +182,17 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				s.logger.Error("panic recovered", "panic", rec, "path", r.URL.Path)
+				panicStr := fmt.Sprintf("%v", rec)
+				if len(panicStr) > 256 {
+					panicStr = panicStr[:256] + "...[truncated]"
+				}
+				s.logger.Error("panic recovered",
+					"panic_type", fmt.Sprintf("%T", rec),
+					"panic", panicStr,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"stack", string(debug.Stack()),
+				)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
@@ -158,9 +206,16 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "ok")
 }
 
+// SetReady marks the server as ready (or not) for traffic.
+func (s *Server) SetReady(v bool) { s.ready.Store(v) }
+
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: check that content index is loaded and templates are parsed
 	w.Header().Set("Content-Type", "text/plain")
+	if !s.ready.Load() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "not ready")
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ready")
 }
@@ -168,10 +223,26 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 // responseWriter wraps http.ResponseWriter to capture the status code.
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode    int
+	headerWritten bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
+	if !rw.headerWritten {
+		rw.statusCode = code
+		rw.headerWritten = true
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.headerWritten {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+// Unwrap returns the underlying ResponseWriter for middleware that need it.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }

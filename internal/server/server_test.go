@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,6 +80,9 @@ func TestNew_CreatesServer(t *testing.T) {
 	if s.httpServer.IdleTimeout != cfg.Server.IdleTimeout {
 		t.Errorf("IdleTimeout = %v, want %v", s.httpServer.IdleTimeout, cfg.Server.IdleTimeout)
 	}
+	if s.httpServer.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want %v", s.httpServer.ReadHeaderTimeout, 5*time.Second)
+	}
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -99,15 +103,29 @@ func TestHealthEndpoint(t *testing.T) {
 func TestReadyEndpoint(t *testing.T) {
 	s := newTestServer(t)
 
+	// Before SetReady(true), should return 503.
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("before SetReady: status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "not ready") {
+		t.Errorf("before SetReady: body = %q, want containing %q", body, "not ready")
+	}
+
+	// After SetReady(true), should return 200.
+	s.SetReady(true)
+	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec = httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("after SetReady: status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if body := rec.Body.String(); body != "ready" {
-		t.Errorf("body = %q, want %q", body, "ready")
+		t.Errorf("after SetReady: body = %q, want %q", body, "ready")
 	}
 }
 
@@ -195,18 +213,19 @@ func TestRecoveryMiddleware(t *testing.T) {
 
 func TestGracefulShutdown(t *testing.T) {
 	cfg := defaultTestConfig()
-	cfg.Server.Port = 0 // let OS pick a port
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.RegisterRoutes(testRouteOptions())
 
-	// Start server in background.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	// Start server on the already-open listener (no sleep needed).
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- s.Start()
+		errCh <- s.Serve(ln)
 	}()
-
-	// Give the server a moment to start listening.
-	time.Sleep(50 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -217,7 +236,7 @@ func TestGracefulShutdown(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			t.Fatalf("Start returned unexpected error: %v", err)
+			t.Fatalf("Serve returned unexpected error: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("server did not stop within timeout")
