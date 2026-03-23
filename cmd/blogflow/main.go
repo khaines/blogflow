@@ -22,12 +22,26 @@ import (
 	"github.com/khaines/blogflow/internal/theme"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
+func versionString() string {
+	return fmt.Sprintf("blogflow version %s (commit: %s, built: %s)", version, commit, date)
+}
 
 func main() {
-	// Subcommand: healthcheck (must run before flag.Parse)
-	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		os.Exit(runHealthcheck(os.Args[2:]))
+	// Subcommands that must run before flag.Parse
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "healthcheck":
+			os.Exit(runHealthcheck(os.Args[2:]))
+		case "version":
+			fmt.Println(versionString())
+			os.Exit(0)
+		}
 	}
 
 	// CLI flags
@@ -40,7 +54,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("blogflow %s\n", version)
+		fmt.Println(versionString())
 		os.Exit(0)
 	}
 
