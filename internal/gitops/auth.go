@@ -16,6 +16,18 @@ const (
 	AuthToken
 )
 
+// String returns a human-readable label for the AuthMethod.
+func (m AuthMethod) String() string {
+	switch m {
+	case AuthSSH:
+		return "ssh"
+	case AuthToken:
+		return "token"
+	default:
+		return "none"
+	}
+}
+
 // AuthConfig holds git authentication settings derived from environment variables.
 type AuthConfig struct {
 	Method     AuthMethod
@@ -23,9 +35,31 @@ type AuthConfig struct {
 	Token      string // from BLOGFLOW_GIT_TOKEN
 }
 
+// String returns a human-readable representation with secrets redacted.
+func (a AuthConfig) String() string {
+	switch a.Method {
+	case AuthSSH:
+		return fmt.Sprintf("AuthConfig{Method:ssh, SSHKeyPath:%s}", a.SSHKeyPath)
+	case AuthToken:
+		return fmt.Sprintf("AuthConfig{Method:token, Token:[REDACTED]}")
+	default:
+		return "AuthConfig{Method:none}"
+	}
+}
+
+// LogValue implements slog.LogValuer to redact secrets in structured logs.
+func (a AuthConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("method", a.Method.String()),
+		slog.String("ssh_key_path", a.SSHKeyPath),
+		slog.String("token", "[REDACTED]"),
+	)
+}
+
 // LoadAuthFromEnv reads git authentication configuration from environment variables.
+// Returns an error if credentials are explicitly set but unusable.
 // Returns AuthNone if no credentials are configured.
-func LoadAuthFromEnv(logger *slog.Logger) *AuthConfig {
+func LoadAuthFromEnv(logger *slog.Logger) (*AuthConfig, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -33,24 +67,29 @@ func LoadAuthFromEnv(logger *slog.Logger) *AuthConfig {
 	// Check SSH key first (preferred)
 	if keyPath := os.Getenv("BLOGFLOW_GIT_SSH_KEY"); keyPath != "" {
 		if _, err := os.Stat(keyPath); err != nil {
-			logger.Warn("BLOGFLOW_GIT_SSH_KEY path not accessible", "path", keyPath, "error", err)
-		} else {
-			logger.Info("git auth: SSH key configured", "path", keyPath)
-			return &AuthConfig{Method: AuthSSH, SSHKeyPath: keyPath}
+			return nil, fmt.Errorf("gitops: BLOGFLOW_GIT_SSH_KEY set but not accessible: %w", err)
 		}
+		cfg := &AuthConfig{Method: AuthSSH, SSHKeyPath: keyPath}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		logger.Info("git auth: SSH key configured", "path", keyPath)
+		return cfg, nil
 	}
 
 	// Check token
 	if token := os.Getenv("BLOGFLOW_GIT_TOKEN"); token != "" {
-		if len(token) < 10 {
-			logger.Warn("BLOGFLOW_GIT_TOKEN appears too short — verify it's valid")
+		cfg := &AuthConfig{Method: AuthToken, Token: token}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
 		}
 		logger.Info("git auth: token configured")
-		return &AuthConfig{Method: AuthToken, Token: token}
+		return cfg, nil
 	}
 
 	logger.Debug("git auth: no credentials configured (public repos only)")
-	return &AuthConfig{Method: AuthNone}
+	cfg := &AuthConfig{Method: AuthNone}
+	return cfg, nil
 }
 
 // Validate checks the auth configuration is usable.
@@ -60,8 +99,12 @@ func (a *AuthConfig) Validate() error {
 		if a.SSHKeyPath == "" {
 			return fmt.Errorf("gitops: SSH auth configured but key path is empty")
 		}
-		if _, err := os.Stat(a.SSHKeyPath); err != nil {
+		info, err := os.Stat(a.SSHKeyPath)
+		if err != nil {
 			return fmt.Errorf("gitops: SSH key not accessible: %w", err)
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("gitops: SSH key %s has unsafe permissions %o; must be 0600 or 0400", a.SSHKeyPath, info.Mode().Perm())
 		}
 	case AuthToken:
 		if a.Token == "" {
@@ -69,6 +112,8 @@ func (a *AuthConfig) Validate() error {
 		}
 	case AuthNone:
 		// valid
+	default:
+		return fmt.Errorf("gitops: unknown auth method: %d", a.Method)
 	}
 	return nil
 }
