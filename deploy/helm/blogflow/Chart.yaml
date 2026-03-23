@@ -1,0 +1,15 @@
+apiVersion: v2
+name: blogflow
+description: A Helm chart for BlogFlow — a Git-powered static blog engine
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - blog
+  - static-site
+  - git-sync
+home: https://github.com/khaines/blogflow
+sources:
+  - https://github.com/khaines/blogflow
+maintainers:
+  - name: khaines

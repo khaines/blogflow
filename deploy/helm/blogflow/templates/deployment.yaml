@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "blogflow.fullname" . }}
+  labels:
+    {{- include "blogflow.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "blogflow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "blogflow.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: blogflow
+          image: {{ include "blogflow.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if or (eq .Values.sync.strategy "webhook") .Values.env }}
+          env:
+            {{- if eq .Values.sync.strategy "webhook" }}
+            - name: BLOGFLOW_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "blogflow.webhookSecretName" . }}
+                  key: BLOGFLOW_WEBHOOK_SECRET
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: content
+              mountPath: /data/content
+            - name: theme
+              mountPath: /data/theme
+            - name: config
+              mountPath: /data/config
+              readOnly: true
+            - name: cache
+              mountPath: /data/cache
+            - name: tmp
+              mountPath: /tmp
+        {{- if eq .Values.sync.strategy "sidecar" }}
+        - name: git-sync
+          image: "{{ .Values.sync.sidecar.image.repository }}:{{ .Values.sync.sidecar.image.tag }}"
+          imagePullPolicy: {{ .Values.sync.sidecar.image.pullPolicy }}
+          args:
+            - --repo={{ .Values.sync.sidecar.repo }}
+            - --ref={{ .Values.sync.sidecar.branch }}
+            - --root=/data/content
+            - --period={{ .Values.sync.sidecar.period }}
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.sync.sidecar.resources | nindent 12 }}
+          volumeMounts:
+            - name: content
+              mountPath: /data/content
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
+      volumes:
+        - name: content
+          {{- if eq .Values.sync.strategy "sidecar" }}
+          emptyDir: {}
+          {{- else if and .Values.persistence.content.enabled .Values.persistence.content.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.content.existingClaim }}
+          {{- else if .Values.persistence.content.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "blogflow.fullname" . }}-content
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: theme
+          {{- if and .Values.persistence.theme.enabled .Values.persistence.theme.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.theme.existingClaim }}
+          {{- else if .Values.persistence.theme.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "blogflow.fullname" . }}-theme
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "blogflow.fullname" . }}
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
