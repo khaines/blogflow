@@ -1,0 +1,17 @@
+# ClusterIP Service exposes BlogFlow inside the cluster on port 8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: blogflow
+  namespace: blogflow
+  labels:
+    app.kubernetes.io/name: blogflow
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: blogflow
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

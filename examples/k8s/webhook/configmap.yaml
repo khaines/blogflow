@@ -1,0 +1,63 @@
+# BlogFlow configuration — webhook strategy.
+# Replace every CHANGE-ME value with your own settings.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blogflow-config
+  namespace: blogflow
+  labels:
+    app.kubernetes.io/name: blogflow
+data:
+  site.yaml: |
+    # Site identity
+    site:
+      title: "CHANGE-ME"
+      description: "CHANGE-ME"
+      base_url: "https://CHANGE-ME.example.com"
+      language: en
+      author:
+        name: "CHANGE-ME"
+        email: "CHANGE-ME@example.com"
+
+    # Content directories (relative to /data/content)
+    content:
+      posts_dir: posts
+      pages_dir: pages
+      media_dir: media
+      posts_per_page: 10
+      date_format: "January 2, 2006"
+      summary_length: 200
+
+    # Theme
+    theme:
+      name: default
+      path: /data/theme
+
+    # HTTP server
+    server:
+      port: 8080
+      read_timeout: 5s
+      write_timeout: 10s
+      idle_timeout: 120s
+
+    # Rendered page cache
+    cache:
+      enabled: true
+      ttl: 1h
+      max_entries: 1000
+
+    # Sync — webhook pattern (BlogFlow pulls on push events)
+    sync:
+      strategy: webhook
+      webhook:
+        path: /api/webhook
+        allowed_events:
+          - push
+        branch_filter: main
+        rate_limit: 10
+
+    # RSS/Atom feed
+    feed:
+      enabled: true
+      type: atom
+      items: 20

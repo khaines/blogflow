@@ -1,0 +1,15 @@
+# Kustomize entrypoint for the sidecar deployment pattern.
+# Usage: kubectl apply -k examples/k8s/sidecar/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: blogflow
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: blogflow

@@ -1,0 +1,41 @@
+# Ingress exposes the webhook endpoint (and optionally the site) externally.
+# Adjust the annotations for your ingress controller (nginx, Traefik, etc.).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blogflow
+  namespace: blogflow
+  labels:
+    app.kubernetes.io/name: blogflow
+  annotations:
+    # TLS — uncomment and set the issuer for cert-manager, or use your own certs.
+    # cert-manager.io/cluster-issuer: "CHANGE-ME-issuer"
+    #
+    # nginx-specific — adjust or remove for other controllers.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx  # CHANGE-ME if using a different controller
+  tls:
+    - hosts:
+        - CHANGE-ME.example.com
+      secretName: blogflow-tls  # CHANGE-ME — TLS certificate Secret name
+  rules:
+    - host: CHANGE-ME.example.com
+      http:
+        paths:
+          # Webhook endpoint — receives push events from your Git host.
+          - path: /api/webhook
+            pathType: Exact
+            backend:
+              service:
+                name: blogflow
+                port:
+                  name: http
+          # Main site — serves the blog.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: blogflow
+                port:
+                  name: http
