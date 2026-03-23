@@ -504,6 +504,15 @@ func Validate(cfg *Config) error {
 				Message: "must be between 1 and 100",
 			})
 		}
+		// MaxBodySize: 0 means default (1 MB); if explicitly set, must be 1 B–10 MB.
+		const maxAllowedBodySize int64 = 10 << 20 // 10 MB
+		if cfg.Sync.Webhook.MaxBodySize < 0 || cfg.Sync.Webhook.MaxBodySize > maxAllowedBodySize {
+			errs = append(errs, FieldError{
+				Field:   "sync.webhook.max_body_size",
+				Value:   cfg.Sync.Webhook.MaxBodySize,
+				Message: "must be between 0 (default 1 MB) and 10485760 (10 MB)",
+			})
+		}
 	}
 
 	// Server.HSTSMaxAge: 0–63072000 (2 years); only emitted when TLSTerminated

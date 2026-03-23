@@ -97,7 +97,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		if err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				w.logger.Warn("body too large", "limit", limit)
+				w.logger.Warn("body too large", "limit", limit, "ip", ip)
 				http.Error(rw, "request body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
