@@ -1,0 +1,11 @@
+# Dev overrides — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  blogflow:
+    command: ["serve", "--content", "/data/content", "--config", "/data/config", "--dev"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./examples/content:/data/content
+      - ./examples/config:/data/config
+    read_only: false
+    restart: "no"
