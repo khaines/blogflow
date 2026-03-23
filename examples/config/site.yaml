@@ -1,0 +1,95 @@
+# BlogFlow Site Configuration
+# ===========================
+#
+# Place this file at the root of your config directory (or alongside your
+# content directory) as "site.yaml". BlogFlow merges these values with its
+# embedded defaults — you only need to specify what you want to override.
+#
+# Configuration priority (highest first):
+#   1. Environment variables (BLOGFLOW_*)
+#   2. This file (site.yaml)
+#   3. Embedded defaults
+#
+# Security note: NEVER put secrets (tokens, passwords, API keys) in this
+# file. BlogFlow scans YAML for secret patterns and rejects the config if
+# any are found. Use environment variables for sensitive values.
+
+# ---------------------------------------------------------------------------
+# Site identity — displayed in templates, feeds, and meta tags
+# ---------------------------------------------------------------------------
+site:
+  title: "My Blog"                          # Site title (appears in header and <title>)
+  description: "A blog powered by BlogFlow" # Meta description for SEO and feeds
+  base_url: "http://localhost:8080"          # Canonical base URL (set to HTTPS in production)
+                                             # Override: BLOGFLOW_SITE_BASE_URL
+  language: "en"                             # BCP 47 language code
+  author:
+    name: ""                                 # Default author name for posts without one
+    email: ""                                # Author email (used in feeds)
+
+# ---------------------------------------------------------------------------
+# Content — where posts and pages live, how they're displayed
+# ---------------------------------------------------------------------------
+content:
+  posts_dir: "posts"          # Directory for blog posts (relative to content root)
+  pages_dir: "pages"          # Directory for static pages (about, contact, etc.)
+  media_dir: "media"          # Directory for images and other media
+  posts_per_page: 10          # Number of posts on the index page (1–100)
+  date_format: "January 2, 2006"  # Go time format for displayed dates
+                                   # See: https://pkg.go.dev/time#pkg-constants
+  summary_length: 200         # Characters to extract for post summaries (50–1000)
+
+# ---------------------------------------------------------------------------
+# Theme — select and configure the visual theme
+# ---------------------------------------------------------------------------
+theme:
+  name: "default"             # Theme name (matches a theme directory or "default")
+  path: ""                    # Path to custom theme directory (leave empty for default)
+                              # When set, templates and static files from this path
+                              # overlay the embedded defaults
+
+# ---------------------------------------------------------------------------
+# Server — HTTP server tuning
+# ---------------------------------------------------------------------------
+server:
+  port: 8080                  # Listen port (1–65535). Override: BLOGFLOW_SERVER_PORT
+  read_timeout: "5s"          # Max time to read request (Go duration)
+  write_timeout: "10s"        # Max time to write response
+  idle_timeout: "120s"        # Max time for idle keep-alive connections
+
+# ---------------------------------------------------------------------------
+# Cache — in-memory rendered content cache
+# ---------------------------------------------------------------------------
+cache:
+  enabled: true               # Enable/disable the render cache
+                              # Override: BLOGFLOW_CACHE_ENABLED
+  ttl: "1h"                   # Time-to-live for cached entries (max 24h)
+  max_entries: 1000           # Maximum number of cached pages (0–100000)
+
+# ---------------------------------------------------------------------------
+# Sync — how BlogFlow detects content changes
+# ---------------------------------------------------------------------------
+sync:
+  strategy: "watch"           # Content sync strategy:
+                              #   "watch"   — fsnotify file watcher (local dev)
+                              #   "webhook" — GitHub/GitLab push webhook (planned)
+                              #   "sidecar" — git-sync sidecar (Kubernetes)
+                              # Override: BLOGFLOW_SYNC_STRATEGY
+
+  # NOTE: Webhook support is a planned feature and is not yet implemented.
+  webhook:
+    path: "/api/webhook"      # URL path for the webhook endpoint
+    allowed_events:           # GitHub events to accept
+      - push
+    # secret: (set via BLOGFLOW_WEBHOOK_SECRET env var, never here!)
+    #   Must be >= 32 bytes. Used for HMAC-SHA256 signature validation.
+    branch_filter: "main"     # Only process pushes to this branch
+    rate_limit: 10            # Max webhook requests per minute (1–100)
+
+# ---------------------------------------------------------------------------
+# Feed — RSS/Atom feed generation (planned — not yet implemented)
+# ---------------------------------------------------------------------------
+feed:
+  enabled: true               # Generate a feed at /feed.xml (or /feed.atom)
+  type: "atom"                # Feed format: "atom" or "rss"
+  items: 20                   # Number of posts to include in the feed (1–100)
