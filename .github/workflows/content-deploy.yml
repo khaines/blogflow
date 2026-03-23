@@ -14,18 +14,27 @@ jobs:
     name: Trigger BlogFlow Webhook
     runs-on: ubuntu-latest
     steps:
-      - name: Determine target environment
-        id: env
-        run: |
-          echo "url=${{ secrets.BLOGFLOW_WEBHOOK_URL }}" >> $GITHUB_OUTPUT
-
       - name: Trigger webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.BLOGFLOW_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.BLOGFLOW_WEBHOOK_SECRET }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
         run: |
-          # Build the webhook payload
-          PAYLOAD='{"ref":"refs/heads/${{ github.ref_name }}","repository":{"full_name":"${{ github.repository }}"},"head_commit":{"id":"${{ github.sha }}","message":"${{ github.event.head_commit.message }}"}}'
+          # Build payload safely via jq (prevents JSON injection)
+          PAYLOAD=$(jq -n \
+            --arg ref "refs/heads/$REF_NAME" \
+            --arg repo "$REPO_NAME" \
+            --arg sha "$COMMIT_SHA" \
+            --arg msg "$COMMIT_MSG" \
+            '{ref: $ref, repository: {full_name: $repo}, head_commit: {id: $sha, message: $msg}}')
 
           # Compute HMAC-SHA256 signature
-          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.BLOGFLOW_WEBHOOK_SECRET }}" | sed 's/.*= //')
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
 
           # Send webhook
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -33,9 +42,9 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
             -H "X-GitHub-Event: push" \
-            -H "X-GitHub-Delivery: ${{ github.run_id }}" \
+            -H "X-GitHub-Delivery: $RUN_ID" \
             -d "$PAYLOAD" \
-            "${{ steps.env.outputs.url }}")
+            "$WEBHOOK_URL")
 
           echo "Webhook response: $HTTP_CODE"
 
@@ -45,9 +54,5 @@ jobs:
           fi
 
           echo "✅ Content deploy triggered successfully"
-
-      - name: Verify content updated
-        if: always()
-        run: |
-          echo "📝 Content pushed: ${{ github.event.head_commit.message }}"
-          echo "🔗 Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+          echo "📝 Commit: $COMMIT_MSG"
+          echo "🔗 $SERVER_URL/$REPO_NAME/commit/$COMMIT_SHA"

@@ -17,8 +17,6 @@ sync:
   webhook:
     path: /api/webhook
     branch_filter: main
-    allowed_events:
-      - push
 ```
 
 Set the webhook secret:
