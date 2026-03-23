@@ -58,10 +58,25 @@ jobs:
           go test -coverprofile=coverage.out -covermode=atomic ./...
           go tool cover -func=coverage.out
 
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint
+        run: helm lint deploy/helm/blogflow/
+
+      - name: Helm template render
+        run: helm template blogflow deploy/helm/blogflow/ > /dev/null
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, helm-lint]
     steps:
       - uses: actions/checkout@v4
 
