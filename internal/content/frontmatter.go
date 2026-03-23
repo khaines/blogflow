@@ -79,8 +79,14 @@ func ParseFrontMatter(data []byte) (*FrontMatter, []byte, error) {
 	}
 
 	if fm.Template != "" {
-		if strings.Contains(fm.Template, "/") || strings.Contains(fm.Template, "\\") || strings.Contains(fm.Template, "..") {
+		if strings.Contains(fm.Template, "/") || strings.Contains(fm.Template, "\\") || strings.Contains(fm.Template, "..") || strings.Contains(fm.Template, "\x00") {
 			return nil, nil, fmt.Errorf("front matter: template must be a plain filename, got %q", fm.Template)
+		}
+	}
+
+	if fm.Slug != "" {
+		if strings.Contains(fm.Slug, "/") || strings.Contains(fm.Slug, "\\") || strings.Contains(fm.Slug, "..") || strings.Contains(fm.Slug, "\x00") {
+			return nil, nil, fmt.Errorf("front matter: slug must be a plain path segment, got %q", fm.Slug)
 		}
 	}
 

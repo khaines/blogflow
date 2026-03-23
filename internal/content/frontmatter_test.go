@@ -240,6 +240,22 @@ func TestParseFrontMatter_CRLF(t *testing.T) {
 	}
 }
 
+func TestParseFrontMatter_SlugTraversal(t *testing.T) {
+	data := []byte("---\ntitle: Test\nslug: \"../../admin\"\n---\nbody")
+	_, _, err := ParseFrontMatter(data)
+	if err == nil {
+		t.Fatal("expected error for path traversal in slug")
+	}
+}
+
+func TestParseFrontMatter_NullByteInTemplate(t *testing.T) {
+	data := []byte("---\ntitle: Test\ntemplate: \"post\x00.html\"\n---\nbody")
+	_, _, err := ParseFrontMatter(data)
+	if err == nil {
+		t.Fatal("expected error for null byte in template")
+	}
+}
+
 func TestParseFrontMatter_TemplatePathTraversal(t *testing.T) {
 	data := []byte("---\ntitle: Test\ntemplate: \"../../etc/passwd\"\n---\nbody")
 	_, _, err := ParseFrontMatter(data)
