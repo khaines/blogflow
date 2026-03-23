@@ -1,7 +1,7 @@
 services:
   blogflow:
     build: .
-    command: ["serve", "--content", "/data/content", "--config", "/data/config"]
+    command: ["--content", "/data/content", "--config", "/data/config"]
     ports:
       - "8080:8080"
     volumes:

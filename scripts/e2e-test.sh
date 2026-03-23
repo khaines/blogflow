@@ -21,7 +21,7 @@ trap cleanup EXIT
 check_status() {
   local description="$1" url="$2" expected_status="$3"
   local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+  status=$(curl -s -o /dev/null --connect-timeout 5 --max-time 10 -w "%{http_code}" "$url")
   if [ "$status" -eq "$expected_status" ]; then
     echo "  ✅ $description (HTTP $status)"
     PASS=$((PASS + 1))
@@ -34,7 +34,7 @@ check_status() {
 check_body() {
   local description="$1" url="$2" expected_status="$3" body_pattern="$4"
   local status body
-  body=$(curl -s -w "\n%{http_code}" "$url")
+  body=$(curl -s --connect-timeout 5 --max-time 10 -w "\n%{http_code}" "$url")
   status=$(echo "$body" | tail -n1)
   body=$(echo "$body" | sed '$d')
   if [ "$status" -ne "$expected_status" ]; then
@@ -53,9 +53,10 @@ check_body() {
 
 check_content_type() {
   local description="$1" url="$2" expected_status="$3" ct_pattern="$4"
-  local status ct
-  status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
-  ct=$(curl -sI "$url" | grep -i '^content-type:' | tr -d '\r')
+  local response status ct
+  response=$(curl -s -o /dev/null --connect-timeout 5 --max-time 10 -w "%{http_code} %{content_type}" "$url")
+  status=${response%% *}
+  ct=${response#* }
   if [ "$status" -ne "$expected_status" ]; then
     echo "  ❌ $description — expected HTTP $expected_status, got $status"
     FAIL=$((FAIL + 1))
@@ -77,7 +78,7 @@ docker compose -f "$COMPOSE_FILE" up -d --build
 
 echo "==> Waiting for service to be ready …"
 RETRIES=30
-until curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1; do
+until curl -sf --connect-timeout 2 --max-time 5 "${BASE_URL}/healthz" >/dev/null 2>&1; do
   RETRIES=$((RETRIES - 1))
   if [ "$RETRIES" -le 0 ]; then
     echo "❌ Service did not become healthy in time"
