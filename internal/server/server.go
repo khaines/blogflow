@@ -1,3 +1,5 @@
+// Package server provides BlogFlow's HTTP server with middleware,
+// routing, health checks, and graceful shutdown.
 package server
 
 import (
@@ -213,7 +215,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ok")
+	_, _ = fmt.Fprint(w, "ok")
 }
 
 // SetReady marks the server as ready (or not) for traffic.
@@ -224,11 +226,11 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.ready.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprint(w, "not ready")
+		_, _ = fmt.Fprint(w, "not ready")
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ready")
+	_, _ = fmt.Fprint(w, "ready")
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
