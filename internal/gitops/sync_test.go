@@ -173,6 +173,9 @@ func TestStrategy_StartStop(t *testing.T) {
 			if ws, ok := s.(*gitops.WatchStrategy); ok {
 				ws.SetDirs(t.TempDir())
 			}
+			if ss, ok := s.(*gitops.SidecarStrategy); ok {
+				ss.SetDir(t.TempDir())
+			}
 
 			if err := s.Start(ctx); err != nil {
 				t.Errorf("%s.Start() error: %v", tc.name, err)
@@ -209,6 +212,9 @@ func TestStrategy_DoubleStop(t *testing.T) {
 
 			if ws, ok := s.(*gitops.WatchStrategy); ok {
 				ws.SetDirs(t.TempDir())
+			}
+			if ss, ok := s.(*gitops.SidecarStrategy); ok {
+				ss.SetDir(t.TempDir())
 			}
 
 			if err := s.Start(ctx); err != nil {
