@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt docker clean run dev smoke-test e2e
+.PHONY: build test lint fmt docker clean run dev smoke-test e2e k8s-lint
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -87,6 +87,14 @@ e2e:
 clean:
 	rm -rf bin/ dist/ public/ coverage.out coverage.html
 	go clean -cache -testcache
+
+## k8s-lint: Validate K8s manifests and Helm chart with kubeconform
+k8s-lint:
+	kubeconform -strict -summary -ignore-filename-pattern 'kustomization.yaml' examples/k8s/
+	helm template blogflow deploy/helm/blogflow/ | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set sync.strategy=webhook --set sync.webhook.secret=ci-placeholder | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set sync.strategy=sidecar --set sync.sidecar.repo=https://github.com/example/content.git | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set ingress.enabled=true --set pdb.enabled=true | kubeconform -strict -summary
 
 ## help: Show this help
 help:
