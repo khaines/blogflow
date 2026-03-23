@@ -66,3 +66,15 @@ Webhook secret name — use existing or generated.
 {{- include "blogflow.fullname" . }}-webhook
 {{- end }}
 {{- end }}
+
+{{/*
+Validate sync configuration at render time.
+*/}}
+{{- define "blogflow.validateSync" -}}
+{{- if and (eq .Values.sync.strategy "webhook") (not .Values.sync.webhook.existingSecret) (not .Values.sync.webhook.secret) }}
+  {{- fail "sync.strategy is 'webhook' but neither sync.webhook.secret nor sync.webhook.existingSecret is set" }}
+{{- end }}
+{{- if and (eq .Values.sync.strategy "sidecar") (not .Values.sync.sidecar.repo) }}
+  {{- fail "sync.strategy is 'sidecar' but sync.sidecar.repo is not set" }}
+{{- end }}
+{{- end }}

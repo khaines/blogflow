@@ -1,3 +1,4 @@
+{{- include "blogflow.validateSync" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "blogflow.labels" . | nindent 8 }}
+        {{- include "blogflow.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
