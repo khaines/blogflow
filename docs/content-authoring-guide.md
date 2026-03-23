@@ -390,17 +390,17 @@ BlogFlow supports three sync strategies (configured via `sync.strategy`):
 | Strategy    | How it works                                           | Best for              |
 |-------------|-------------------------------------------------------|-----------------------|
 | `watch`     | Filesystem watcher (fsnotify) detects local changes.   | Local development     |
-| `webhook`   | GitHub webhook on push to `main` triggers a git pull.  | See warning below     |
+| `webhook`   | GitHub webhook on push to `main` triggers a git pull.  | Production (single-node) |
 | `sidecar`   | Kubernetes git-sync sidecar pulls content on a loop.   | Production (Kubernetes) |
 
 **Webhook sync**:
 
-> ⚠️ **Not yet implemented.** The webhook sync strategy is currently a stub. HMAC verification, git pull, and content reload are not functional. Use the `watch` strategy for local development. Webhook support is tracked in the project backlog.
-
-When complete, the webhook strategy will accept a GitHub `push` event at a
-configurable endpoint (default `/api/webhook`), verify the payload signature,
-and trigger a content reload. Configuration is accepted in `site.yaml` under
-`sync.webhook` but has no effect until the implementation is finished.
+The webhook strategy accepts a GitHub `push` event at a configurable endpoint
+(default `/api/webhook`), verifies the HMAC-SHA256 payload signature, and
+triggers a git pull followed by a content reload. It includes request body size
+limits, per-IP rate limiting, and branch filtering so only pushes to the
+configured branch trigger a reload. Configure it in `site.yaml` under
+`sync.webhook`.
 
 ### Cache Invalidation on Content Reload
 
