@@ -165,7 +165,7 @@ servr:
 
 // --- Load: secret in YAML rejected ---
 
-func TestLoad_SecretInYAML(t *testing.T) {
+func TestLoad_SecretInYAML(t *testing.T) { //nolint:gosec // test data intentionally contains secret patterns
 	tests := []struct {
 		name    string
 		content string

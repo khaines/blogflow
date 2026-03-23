@@ -1,3 +1,6 @@
+// Package config provides BlogFlow's configuration loading, validation,
+// and access. It reads YAML files through a 2-layer overlay (config + defaults),
+// applies environment variable overrides, and exposes an immutable Config struct.
 package config
 
 import (
@@ -17,6 +20,7 @@ type Config struct {
 	Feed    FeedConfig    `yaml:"feed"`
 }
 
+// SiteConfig holds site identity settings.
 type SiteConfig struct {
 	Title       string       `yaml:"title"`
 	Description string       `yaml:"description"`
