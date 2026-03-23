@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -37,14 +38,16 @@ func writeXMLCached(w http.ResponseWriter, r *http.Request, contentType string, 
 		w.Header().Set("Last-Modified", lastMod.UTC().Format(http.TimeFormat))
 	}
 
-	// Conditional: If-None-Match
-	if match := r.Header.Get("If-None-Match"); match == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	// Conditional: If-Modified-Since
-	if !lastMod.IsZero() {
+	// Conditional: If-None-Match takes precedence (RFC 7232 §3.2).
+	// When present, If-Modified-Since MUST be ignored (RFC 7232 §3.3).
+	if inm := r.Header.Get("If-None-Match"); inm != "" {
+		if etagMatches(inm, etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		// ETag did not match — serve fresh response; skip If-Modified-Since.
+	} else if !lastMod.IsZero() {
+		// Conditional: If-Modified-Since (only when If-None-Match is absent).
 		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
 			if t, err := http.ParseTime(ims); err == nil {
 				if !lastMod.UTC().Truncate(time.Second).After(t.UTC()) {
@@ -56,4 +59,22 @@ func writeXMLCached(w http.ResponseWriter, r *http.Request, contentType string, 
 	}
 
 	_, _ = w.Write(body)
+}
+
+// etagMatches reports whether the If-None-Match header value matches the
+// given ETag. It handles the wildcard "*" and comma-separated lists of ETags
+// per RFC 7232 §3.2.
+func etagMatches(inmHeader, etag string) bool {
+	if strings.TrimSpace(inmHeader) == "*" {
+		return true
+	}
+	for _, field := range strings.Split(inmHeader, ",") {
+		field = strings.TrimSpace(field)
+		// Strip weak prefix for comparison (RFC 7232 §2.3.2 weak comparison).
+		field = strings.TrimPrefix(field, "W/")
+		if field == etag {
+			return true
+		}
+	}
+	return false
 }
