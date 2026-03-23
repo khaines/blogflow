@@ -171,14 +171,14 @@ func TestLoad_SecretInYAML(t *testing.T) { //nolint:gosec // test data intention
 		content string
 		pattern string
 	}{
-		{
+		{ //nolint:gosec // G101: test data intentionally contains secret patterns
 			name:    "GitHub token",
-			content: "site:\n  title: \"ghp_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEE\"", //nolint:gosec // test data
+			content: "site:\n  title: \"ghp_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEE\"",
 			pattern: "ghp_",
 		},
-		{
+		{ //nolint:gosec // G101: test data intentionally contains secret patterns
 			name:    "Private key",
-			content: "site:\n  title: \"-----BEGIN RSA PRIVATE KEY-----\"", //nolint:gosec // test data
+			content: "site:\n  title: \"-----BEGIN RSA PRIVATE KEY-----\"",
 			pattern: "private key",
 		},
 		{
@@ -186,9 +186,9 @@ func TestLoad_SecretInYAML(t *testing.T) { //nolint:gosec // test data intention
 			content: "sync:\n  webhook:\n    path: \"${BLOGFLOW_WEBHOOK_SECRET}\"",
 			pattern: "env var placeholder",
 		},
-		{
+		{ //nolint:gosec // G101: test data intentionally contains secret patterns
 			name:    "AWS key",
-			content: "site:\n  title: \"AKIAIOSFODNN7EXAMPLE\"", //nolint:gosec // test data
+			content: "site:\n  title: \"AKIAIOSFODNN7EXAMPLE\"",
 			pattern: "AWS",
 		},
 	}
