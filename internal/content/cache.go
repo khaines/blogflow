@@ -33,7 +33,15 @@ type Cache struct {
 }
 
 // NewCache creates a Cache governed by cfg.
+// Defensive defaults are applied when MaxEntries or TTL are zero/negative.
 func NewCache(cfg config.CacheConfig) *Cache {
+	if cfg.MaxEntries <= 0 {
+		cfg.MaxEntries = 1000
+	}
+	if cfg.TTL <= 0 {
+		cfg.TTL = time.Hour
+	}
+
 	return &Cache{
 		entries: make(map[string]*CacheEntry),
 		cfg:     cfg,
@@ -51,10 +59,16 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 		return nil, false
 	}
 
-	return entry.HTML, true
+	return append([]byte(nil), entry.HTML...), true
 }
 
-// GetEntry returns the full CacheEntry for key if it exists and has not expired.
+// GetEntry returns a snapshot of the CacheEntry for key if it exists and has
+// not expired. The returned pointer is a shallow copy with a cloned HTML slice,
+// so callers may mutate it without affecting the cache.
+//
+// NOTE (relaxed consistency): the read lock is released before the snapshot is
+// built, so a concurrent Set on the same key may interleave. This is acceptable
+// for an HTTP cache where a slightly stale or refreshed response is harmless.
 func (c *Cache) GetEntry(key string) (*CacheEntry, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[key]
@@ -64,19 +78,27 @@ func (c *Cache) GetEntry(key string) (*CacheEntry, bool) {
 		return nil, false
 	}
 
-	return entry, true
+	snapshot := *entry
+	snapshot.HTML = append([]byte(nil), entry.HTML...)
+	return &snapshot, true
 }
 
 // Set stores rendered HTML under key with the configured TTL.
-// If the cache is at capacity, one random entry is evicted first.
+// The caller's slice is copied on ingest, so subsequent mutations to html
+// do not affect the cached data.
+// If the cache is at capacity, an expired entry is preferred for eviction;
+// otherwise one random entry is removed.
 func (c *Cache) Set(key string, html []byte) {
 	now := c.now()
 
-	h := sha256.Sum256(html)
+	buf := make([]byte, len(html))
+	copy(buf, html)
+
+	h := sha256.Sum256(buf)
 	etag := `"` + hex.EncodeToString(h[:16]) + `"`
 
 	entry := &CacheEntry{
-		HTML:     html,
+		HTML:     buf,
 		ETag:     etag,
 		Modified: now,
 		Expiry:   now.Add(c.cfg.TTL),
@@ -91,12 +113,16 @@ func (c *Cache) Set(key string, html []byte) {
 		return
 	}
 
-	// Evict one random entry when at capacity.
-	if c.cfg.MaxEntries > 0 && len(c.entries) >= c.cfg.MaxEntries {
-		for k := range c.entries {
-			delete(c.entries, k)
-			break
+	// Evict one entry when at capacity; prefer expired entries.
+	if len(c.entries) >= c.cfg.MaxEntries {
+		victim := ""
+		for k, e := range c.entries {
+			victim = k
+			if e.expired(now) {
+				break
+			}
 		}
+		delete(c.entries, victim)
 	}
 
 	c.entries[key] = entry
