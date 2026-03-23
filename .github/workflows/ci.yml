@@ -73,10 +73,32 @@ jobs:
       - name: Helm template render
         run: helm template blogflow deploy/helm/blogflow/ > /dev/null
 
+  k8s-lint:
+    name: K8s Manifest Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install kubeconform
+        run: go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Validate K8s manifests
+        run: kubeconform -strict -summary -ignore-filename-pattern 'kustomization.yaml' examples/k8s/
+
+      - name: Validate Helm template output
+        run: helm template blogflow deploy/helm/blogflow/ | kubeconform -strict -summary
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [lint, test, helm-lint]
+    needs: [lint, test, helm-lint, k8s-lint]
     steps:
       - uses: actions/checkout@v4
 
