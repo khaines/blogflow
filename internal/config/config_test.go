@@ -678,6 +678,24 @@ func TestValidate_FieldBounds(t *testing.T) {
 			},
 			"sync.webhook.rate_limit",
 		},
+		{
+			"webhook max_body_size negative",
+			func(c *Config) {
+				c.Sync.Strategy = "webhook"
+				c.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+				c.Sync.Webhook.MaxBodySize = -1
+			},
+			"sync.webhook.max_body_size",
+		},
+		{
+			"webhook max_body_size too large",
+			func(c *Config) {
+				c.Sync.Strategy = "webhook"
+				c.Sync.Webhook.Secret = "this-is-a-very-long-secret-that-is-at-least-32-bytes"
+				c.Sync.Webhook.MaxBodySize = 11 << 20 // 11 MB, over 10 MB cap
+			},
+			"sync.webhook.max_body_size",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
