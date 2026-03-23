@@ -3,6 +3,7 @@ module github.com/kenhaines/blogflow
 go 1.26.1
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-git/go-git/v5 v5.17.0
 	github.com/yuin/goldmark v1.7.17
 	golang.org/x/crypto v0.45.0
