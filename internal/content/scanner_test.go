@@ -371,6 +371,7 @@ func TestTruncateText(t *testing.T) {
 		{"truncate at word boundary", "the quick brown fox jumps over the lazy dog", 20, "the quick brown fox…"},
 		{"whitespace normalization", "  hello   world  ", 200, "hello world"},
 		{"empty string", "", 200, ""},
+		{"unicode rune boundary", "こんにちは世界のテスト", 5, "こんにちは…"},
 	}
 
 	for _, tt := range tests {
@@ -380,5 +381,94 @@ func TestTruncateText(t *testing.T) {
 				t.Errorf("truncateText(%q, %d) = %q, want %q", tt.text, tt.n, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestScan_DuplicateSlug(t *testing.T) {
+	fs := fstest.MapFS{
+		"posts/first.md": &fstest.MapFile{
+			Data: []byte(mkPost("First", "dupe", "2025-06-01", nil, false, "First.\n")),
+		},
+		"posts/second.md": &fstest.MapFile{
+			Data: []byte(mkPost("Second", "dupe", "2025-06-02", nil, false, "Second.\n")),
+		},
+	}
+
+	_, err := newTestScanner().Scan(fs)
+	if err == nil {
+		t.Fatal("expected error for duplicate slug, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate post slug") {
+		t.Errorf("error = %q, want it to mention duplicate post slug", err)
+	}
+}
+
+func TestScan_DuplicatePageSlug(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/first.md": &fstest.MapFile{
+			Data: []byte(mkPost("First", "dupe", "2025-06-01", nil, false, "First.\n")),
+		},
+		"pages/second.md": &fstest.MapFile{
+			Data: []byte(mkPost("Second", "dupe", "2025-06-02", nil, false, "Second.\n")),
+		},
+	}
+
+	_, err := newTestScanner().Scan(fs)
+	if err == nil {
+		t.Fatal("expected error for duplicate page slug, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate page slug") {
+		t.Errorf("error = %q, want it to mention duplicate page slug", err)
+	}
+}
+
+func TestScan_MissingDate(t *testing.T) {
+	fs := fstest.MapFS{
+		"posts/no-date.md": &fstest.MapFile{
+			Data: []byte("---\ntitle: \"No Date\"\nslug: \"no-date\"\n---\nContent.\n"),
+		},
+	}
+
+	_, err := newTestScanner().Scan(fs)
+	if err == nil {
+		t.Fatal("expected error for missing date, got nil")
+	}
+	if !strings.Contains(err.Error(), "requires a 'date' field") {
+		t.Errorf("error = %q, want it to mention date requirement", err)
+	}
+}
+
+func TestScan_PageAllowedWithoutDate(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte("---\ntitle: \"About\"\nslug: \"about\"\n---\nAbout page.\n"),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("pages should allow missing date, got error: %v", err)
+	}
+	if len(idx.Pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(idx.Pages))
+	}
+}
+
+func TestScan_EmptyTagSkipped(t *testing.T) {
+	fs := fstest.MapFS{
+		"posts/post.md": &fstest.MapFile{
+			Data: []byte(mkPost("Post", "post", "2025-06-01", []string{"go", " ", ""}, false, "Content.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := idx.ByTag[""]; ok {
+		t.Error("empty string tag should not be indexed")
+	}
+	if len(idx.ByTag["go"]) != 1 {
+		t.Errorf("expected 1 post tagged 'go', got %d", len(idx.ByTag["go"]))
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 )
@@ -77,13 +77,15 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 	}
 
 	// Sort posts by date descending
-	sort.Slice(idx.Posts, func(i, j int) bool {
+	sort.SliceStable(idx.Posts, func(i, j int) bool {
 		return idx.Posts[i].Date.After(idx.Posts[j].Date)
 	})
 
 	return idx, nil
 }
 
+// scanDir aborts on the first file error (fail-fast). Validate content
+// before deployment to avoid partial index builds.
 func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) error {
 	return fs.WalkDir(contentFS, dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -110,6 +112,10 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 		}
 		if fm.Draft {
 			return nil // skip drafts
+		}
+
+		if !isPage && fm.Date.IsZero() {
+			return fmt.Errorf("parsing %s: post requires a 'date' field", path)
 		}
 
 		// Render markdown
@@ -143,13 +149,22 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 		}
 
 		if isPage {
+			if existing, ok := idx.PageBySlug[slug]; ok {
+				return fmt.Errorf("duplicate page slug %q: %s conflicts with %s", slug, path, existing.Path)
+			}
 			idx.Pages = append(idx.Pages, post)
 			idx.PageBySlug[slug] = post
 		} else {
+			if existing, ok := idx.BySlug[slug]; ok {
+				return fmt.Errorf("duplicate post slug %q: %s conflicts with %s", slug, path, existing.Path)
+			}
 			idx.Posts = append(idx.Posts, post)
 			idx.BySlug[slug] = post
 			for _, tag := range fm.Tags {
 				tag = strings.ToLower(strings.TrimSpace(tag))
+				if tag == "" {
+					continue
+				}
 				idx.ByTag[tag] = append(idx.ByTag[tag], post)
 			}
 			idx.ByYear[fm.Date.Year()] = append(idx.ByYear[fm.Date.Year()], post)
@@ -160,9 +175,9 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 }
 
 // slugFromPath generates a slug from a file path by stripping directory and extension.
-func slugFromPath(path string) string {
-	base := filepath.Base(path)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+func slugFromPath(p string) string {
+	base := path.Base(p)
+	return strings.TrimSuffix(base, path.Ext(base))
 }
 
 // stripHTML removes HTML tags using a simple state-machine approach.
@@ -185,13 +200,14 @@ func stripHTML(s string) string {
 	return b.String()
 }
 
-// truncateText shortens text to n characters at a word boundary.
+// truncateText shortens text to n runes at a word boundary.
 func truncateText(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ") // normalize whitespace
-	if len(s) <= n {
+	s = strings.Join(strings.Fields(s), " ")
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	truncated := s[:n]
+	truncated := string(runes[:n])
 	if idx := strings.LastIndex(truncated, " "); idx > 0 {
 		truncated = truncated[:idx]
 	}
