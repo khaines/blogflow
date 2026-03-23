@@ -51,17 +51,23 @@ func TestSitemapHandler(t *testing.T) {
 		t.Fatalf("urls = %d, want 4", len(urlset.URLs))
 	}
 
-	// First URL is home page.
+	// First URL is home page with lastmod from most recent post.
 	if urlset.URLs[0].Loc != "https://example.com/" {
 		t.Errorf("home loc = %q", urlset.URLs[0].Loc)
 	}
 	if urlset.URLs[0].Priority != "1.0" {
 		t.Errorf("home priority = %q, want 1.0", urlset.URLs[0].Priority)
 	}
+	if urlset.URLs[0].LastMod != "2025-01-15" {
+		t.Errorf("home lastmod = %q, want 2025-01-15", urlset.URLs[0].LastMod)
+	}
 
 	// Posts.
 	if urlset.URLs[1].Loc != "https://example.com/posts/post-1" {
 		t.Errorf("post loc = %q", urlset.URLs[1].Loc)
+	}
+	if urlset.URLs[1].LastMod != "2025-01-15" {
+		t.Errorf("post-1 lastmod = %q, want 2025-01-15", urlset.URLs[1].LastMod)
 	}
 
 	// Page.

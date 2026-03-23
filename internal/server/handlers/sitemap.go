@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/xml"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/kenhaines/blogflow/internal/config"
@@ -38,10 +39,12 @@ func NewSitemapHandler(cfg *config.Config, index *content.Index) *SitemapHandler
 func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	baseURL := h.cfg.Site.BaseURL
 
-	// Start with the home page.
-	urls := []URL{
-		{Loc: baseURL + "/", ChangeFreq: "daily", Priority: "1.0"},
+	// Derive homepage lastmod from the most recent post.
+	homeURL := URL{Loc: baseURL + "/", ChangeFreq: "daily", Priority: "1.0"}
+	if len(h.index.Posts) > 0 && !h.index.Posts[0].Date.IsZero() {
+		homeURL.LastMod = h.index.Posts[0].Date.UTC().Format("2006-01-02")
 	}
+	urls := []URL{homeURL}
 
 	for _, p := range h.index.Posts {
 		u := URL{
@@ -67,11 +70,16 @@ func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		urls = append(urls, u)
 	}
 
+	const maxURLs = 50_000
+	if len(urls) > maxURLs {
+		slog.Warn("sitemap truncated", "total", len(urls), "max", maxURLs)
+		urls = urls[:maxURLs]
+	}
+
 	sitemap := URLSet{
 		XMLNS: "http://www.sitemaps.org/schemas/sitemap/0.9",
 		URLs:  urls,
 	}
 
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	writeXML(w, sitemap)
+	writeXML(w, "application/xml; charset=utf-8", sitemap)
 }

@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,7 +18,7 @@ type AtomFeed struct {
 	XMLName xml.Name    `xml:"feed"`
 	XMLNS   string      `xml:"xmlns,attr"`
 	Title   string      `xml:"title"`
-	Link    AtomLink    `xml:"link"`
+	Links   []AtomLink  `xml:"link"`
 	Updated string      `xml:"updated"`
 	Author  AtomAuthor  `xml:"author"`
 	ID      string      `xml:"id"`
@@ -125,9 +127,9 @@ func (h *FeedHandler) serveAtom(w http.ResponseWriter, posts []*content.Post) {
 	feed := AtomFeed{
 		XMLNS: "http://www.w3.org/2005/Atom",
 		Title: h.cfg.Site.Title,
-		Link: AtomLink{
-			Href: fmt.Sprintf("%s/feed.xml", baseURL),
-			Rel:  "self",
+		Links: []AtomLink{
+			{Href: baseURL + "/feed.xml", Rel: "self", Type: "application/atom+xml"},
+			{Href: baseURL + "/", Rel: "alternate", Type: "text/html"},
 		},
 		Updated: updated,
 		Author: AtomAuthor{
@@ -138,8 +140,7 @@ func (h *FeedHandler) serveAtom(w http.ResponseWriter, posts []*content.Post) {
 		Entries: entries,
 	}
 
-	w.Header().Set("Content-Type", "application/atom+xml; charset=utf-8")
-	writeXML(w, feed)
+	writeXML(w, "application/atom+xml; charset=utf-8", feed)
 }
 
 func (h *FeedHandler) serveRSS(w http.ResponseWriter, posts []*content.Post) {
@@ -173,15 +174,19 @@ func (h *FeedHandler) serveRSS(w http.ResponseWriter, posts []*content.Post) {
 		},
 	}
 
-	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
-	writeXML(w, feed)
+	writeXML(w, "application/rss+xml; charset=utf-8", feed)
 }
 
-func writeXML(w http.ResponseWriter, v any) {
-	w.Write([]byte(xml.Header)) //nolint:errcheck
-	enc := xml.NewEncoder(w)
+func writeXML(w http.ResponseWriter, contentType string, v any) {
+	var buf bytes.Buffer
+	buf.WriteString(xml.Header)
+	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		http.Error(w, "failed to encode feed", http.StatusInternalServerError)
+		slog.Error("XML encode failed", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = w.Write(buf.Bytes())
 }

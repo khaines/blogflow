@@ -84,6 +84,67 @@ func TestFeedHandler_Atom(t *testing.T) {
 	if feed.Entries[0].Link.Href != "https://example.com/posts/post-1" {
 		t.Errorf("first entry link = %q", feed.Entries[0].Link.Href)
 	}
+	if len(feed.Links) != 2 {
+		t.Fatalf("feed links = %d, want 2", len(feed.Links))
+	}
+	if feed.Links[0].Rel != "self" || feed.Links[0].Type != "application/atom+xml" {
+		t.Errorf("self link = %+v", feed.Links[0])
+	}
+	if feed.Links[1].Rel != "alternate" || feed.Links[1].Type != "text/html" {
+		t.Errorf("alternate link = %+v", feed.Links[1])
+	}
+}
+
+func TestFeedHandler_RSS(t *testing.T) {
+	cfg := testConfig()
+	cfg.Feed.Type = "rss"
+	idx := testIndex(3)
+	h := handlers.NewFeedHandler(cfg, idx)
+
+	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/rss+xml; charset=utf-8" {
+		t.Fatalf("unexpected Content-Type: %s", ct)
+	}
+
+	var feed handlers.RSSFeed
+	if err := xml.Unmarshal(rec.Body.Bytes(), &feed); err != nil {
+		t.Fatalf("invalid RSS XML: %v", err)
+	}
+	if feed.Version != "2.0" {
+		t.Errorf("version = %q, want 2.0", feed.Version)
+	}
+	if feed.Channel.Title != "Test Blog" {
+		t.Errorf("channel title = %q, want %q", feed.Channel.Title, "Test Blog")
+	}
+	if feed.Channel.Link != "https://example.com" {
+		t.Errorf("channel link = %q", feed.Channel.Link)
+	}
+	if len(feed.Channel.Items) != 3 {
+		t.Fatalf("items = %d, want 3", len(feed.Channel.Items))
+	}
+	for i, item := range feed.Channel.Items {
+		wantLink := fmt.Sprintf("https://example.com/posts/post-%d", i+1)
+		if item.Link != wantLink {
+			t.Errorf("item[%d] link = %q, want %q", i, item.Link, wantLink)
+		}
+		if item.GUID != wantLink {
+			t.Errorf("item[%d] guid = %q, want %q", i, item.GUID, wantLink)
+		}
+		if item.PubDate == "" {
+			t.Errorf("item[%d] pubDate is empty", i)
+		}
+		// Validate RFC1123Z format by parsing.
+		if _, err := time.Parse(time.RFC1123Z, item.PubDate); err != nil {
+			t.Errorf("item[%d] pubDate %q is not RFC1123Z: %v", i, item.PubDate, err)
+		}
+	}
 }
 
 func TestFeedHandler_EmptyIndex(t *testing.T) {
