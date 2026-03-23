@@ -64,11 +64,7 @@ func testDeps(t *testing.T, posts, pages []*content.Post) *handlers.Deps {
 	cfg := config.Default()
 	cfg.Content.PostsPerPage = 2
 
-	return &handlers.Deps{
-		Config: cfg,
-		Index:  idx,
-		Theme:  eng,
-	}
+	return handlers.NewDeps(cfg, idx, eng)
 }
 
 func makePost(slug, title string, tags []string) *content.Post {
@@ -392,11 +388,7 @@ func TestRenderTemplate_500(t *testing.T) {
 		PageBySlug: map[string]*content.Post{"about": pages[0]},
 	}
 
-	deps := &handlers.Deps{
-		Config: cfg,
-		Index:  idx,
-		Theme:  eng,
-	}
+	deps := handlers.NewDeps(cfg, idx, eng)
 
 	tests := []struct {
 		name    string

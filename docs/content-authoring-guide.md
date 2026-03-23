@@ -430,33 +430,31 @@ The cache exposes two invalidation methods:
 | `Invalidate(key)`| Removes a single entry by key.      |
 | `InvalidateAll()`| Drops every entry from the cache.   |
 
-#### Current Behavior: Cache Is Not Flushed on Reload
+#### Current Behavior: Cache Is Flushed on Reload
 
-> ⚠️ **Known gap.** As of this writing, none of the sync strategies
-> (watch, webhook, sidecar) call `InvalidateAll()` or `Invalidate()` when
-> content is reloaded. The render cache is flushed only by **TTL expiry**.
+When a sync strategy triggers a content reload, `InvalidateAll()` is called
+automatically after the content index is rebuilt. This ensures that stale
+rendered HTML is never served after a content change.
 
 This means that after a content reload:
 
-1. **Updated posts** may continue to serve stale rendered HTML until their cache
-   entries expire (up to `cache.ttl`, default 1 hour).
-2. **New posts** are immediately available because they have no prior cache entry.
-3. **Deleted posts** will return 404 once their cache entry expires, but may
-   briefly serve stale content if the entry is still valid.
+1. **Updated posts** are re-rendered on the next request with fresh content.
+2. **New posts** are immediately available (cache miss → rendered on demand).
+3. **Deleted posts** return 404 immediately because the cache entry is removed
+   and the content index no longer contains the post.
 
 #### TTL Expiry vs Reload-Triggered Flush
 
 | Scenario                     | Cache behavior                                    |
 |------------------------------|---------------------------------------------------|
-| Post edited, TTL not expired | **Stale content served** until TTL expires         |
-| Post edited, TTL expired     | Fresh content rendered and cached on next request  |
+| Post edited, reload triggers | Cache flushed → fresh render on next request       |
 | New post added               | Cache miss → rendered and cached immediately       |
-| Post deleted                 | Stale HTML served until TTL expiry, then 404       |
+| Post deleted                 | Cache flushed → 404 on next request                |
 | `cache.enabled` set to `false` | Every request re-renders (no caching)           |
 
 #### In-Flight Requests During a Flush
 
-If `InvalidateAll()` were called (e.g., by a future reload implementation):
+When `InvalidateAll()` is called during a content reload:
 
 - Requests that already retrieved a cache entry **before** the flush will
   complete normally with the (now-stale) data. The cache returns a defensive
@@ -468,30 +466,29 @@ If `InvalidateAll()` were called (e.g., by a future reload implementation):
 
 #### Operator Guidance
 
-**When to expect stale content:**
+**Cache behavior after content changes:**
 
-- After any content change delivered via watch, webhook, or sidecar, previously
-  rendered pages may remain stale for up to `cache.ttl`.
+- Content changes delivered via watch, webhook, or sidecar trigger an automatic
+  cache flush. No manual intervention is required.
 
-**How to minimize stale windows:**
+**Additional cache management options:**
 
 1. **Lower the TTL.** Set `cache.ttl` to a shorter duration (e.g., `"5m"`) if
-   freshness matters more than render performance:
+   you want cache entries to expire sooner between reloads:
    ```yaml
    cache:
      ttl: "5m"
    ```
 2. **Disable the cache entirely.** Set `cache.enabled: false` or
    `BLOGFLOW_CACHE_ENABLED=false`. Every request will re-render from the
-   content index, which is always up to date after a reload.
+   content index.
 3. **Restart the process.** A full restart rebuilds the content index and starts
-   with an empty cache. This is the most reliable way to guarantee zero stale
-   content.
+   with an empty cache.
 
-**Forcing a cache flush (workaround):**
+**Forcing a manual cache flush:**
 
-Until cache invalidation is wired into the reload path, the only way to force an
-immediate flush of all cached content is to restart the BlogFlow process:
+If you need to force a cache flush outside of the normal reload path, restart
+the BlogFlow process:
 
 ```bash
 # Docker

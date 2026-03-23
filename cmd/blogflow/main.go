@@ -15,6 +15,7 @@ import (
 	blogflow "github.com/khaines/blogflow"
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/gitops"
 	"github.com/khaines/blogflow/internal/overlayfs"
 	"github.com/khaines/blogflow/internal/server"
 	"github.com/khaines/blogflow/internal/server/handlers"
@@ -109,16 +110,30 @@ func main() {
 	}
 	logger.Info("theme engine initialized")
 
-	// 5. Create and configure HTTP server
-	srv := server.New(cfg, logger)
-
-	// 6. Build handler dependencies and register routes
-	deps := &handlers.Deps{
-		Config: cfg,
-		Index:  idx,
-		Theme:  themeEngine,
+	// 5. Initialize render cache (if enabled)
+	var renderCache *content.Cache
+	if cfg.Cache.Enabled {
+		renderCache = content.NewCache(cfg.Cache)
+		logger.Info("render cache initialized", "max_entries", cfg.Cache.MaxEntries, "ttl", cfg.Cache.TTL)
 	}
 
+	// 6. Create and configure HTTP server
+	srv := server.New(cfg, logger)
+
+	// 7. Build handler dependencies
+	deps := handlers.NewDeps(cfg, idx, themeEngine)
+
+	// 8. Content reloader for sync strategies
+	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, logger)
+
+	// 9. Initialize sync strategy
+	syncStrategy, err := gitops.NewStrategy(&cfg.Sync, reloader, logger)
+	if err != nil {
+		logger.Error("failed to create sync strategy", "error", err)
+		os.Exit(1)
+	}
+
+	// 10. Register routes
 	staticFS, fsErr := fs.Sub(contentOverlay, "static")
 	if fsErr != nil {
 		logger.Warn("static directory not available — /static/ routes will 404", "error", fsErr)
@@ -128,7 +143,7 @@ func main() {
 	feedHandler := handlers.NewFeedHandler(cfg, idx)
 	sitemapHandler := handlers.NewSitemapHandler(cfg, idx)
 
-	srv.RegisterRoutes(server.RouteOptions{
+	routeOpts := server.RouteOptions{
 		ListHandler:    handlers.ListHandler(deps),
 		PostHandler:    handlers.PostHandler(deps),
 		PageHandler:    handlers.PageHandler(deps),
@@ -136,9 +151,22 @@ func main() {
 		FeedHandler:    feedHandler.ServeHTTP,
 		SitemapHandler: sitemapHandler.ServeHTTP,
 		StaticFS:       staticFS,
-	})
+	}
+	if ws, ok := syncStrategy.(*gitops.WebhookStrategy); ok {
+		routeOpts.WebhookHandler = ws.Handler()
+	}
+	srv.RegisterRoutes(routeOpts)
 
-	// 7. Graceful shutdown on SIGINT/SIGTERM
+	// 11. Start sync strategy
+	syncCtx, syncCancel := context.WithCancel(context.Background())
+	if err := syncStrategy.Start(syncCtx); err != nil {
+		logger.Error("failed to start sync strategy", "error", err)
+		syncCancel()
+		os.Exit(1)
+	}
+	logger.Info("sync strategy started", "strategy", syncStrategy.Name())
+
+	// 12. Graceful shutdown on SIGINT/SIGTERM
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -146,6 +174,13 @@ func main() {
 		logger.Info("shutdown signal received", "signal", sig)
 
 		srv.SetReady(false)
+
+		syncCancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		if stopErr := syncStrategy.Stop(stopCtx); stopErr != nil {
+			logger.Error("sync strategy stop error", "error", stopErr)
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -155,7 +190,7 @@ func main() {
 		}
 	}()
 
-	// 8. Start server and mark ready after bind confirmation
+	// 13. Start server and mark ready after bind confirmation
 	logger.Info("server starting", "addr", fmt.Sprintf(":%d", cfg.Server.Port))
 
 	errCh := make(chan error, 1)
