@@ -232,6 +232,13 @@ func TestScan_TagIndex(t *testing.T) {
 	if len(idx.ByTag["programming"]) != 2 {
 		t.Errorf("expected 2 posts tagged 'programming', got %d", len(idx.ByTag["programming"]))
 	}
+
+	// Verify ByTag ordering matches sorted Posts (date descending)
+	progPosts := idx.ByTag["programming"]
+	if len(progPosts) == 2 && !progPosts[0].Date.After(progPosts[1].Date) {
+		t.Errorf("ByTag[programming] not sorted by date descending: %s (%s) should be after %s (%s)",
+			progPosts[0].Slug, progPosts[0].Date, progPosts[1].Slug, progPosts[1].Date)
+	}
 }
 
 func TestScan_YearIndex(t *testing.T) {
@@ -451,6 +458,25 @@ func TestScan_PageAllowedWithoutDate(t *testing.T) {
 	}
 	if len(idx.Pages) != 1 {
 		t.Fatalf("expected 1 page, got %d", len(idx.Pages))
+	}
+}
+
+func TestScan_PostPageSlugConflict(t *testing.T) {
+	fs := fstest.MapFS{
+		"posts/about.md": &fstest.MapFile{
+			Data: []byte(mkPost("About Blog", "about", "2025-06-01", nil, false, "Blog about.\n")),
+		},
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte(mkPost("About Page", "about", "2025-01-01", nil, false, "About page.\n")),
+		},
+	}
+
+	_, err := newTestScanner().Scan(fs)
+	if err == nil {
+		t.Fatal("expected error for post/page slug conflict, got nil")
+	}
+	if !strings.Contains(err.Error(), "slug conflict") {
+		t.Errorf("error = %q, want it to mention slug conflict", err)
 	}
 }
 
