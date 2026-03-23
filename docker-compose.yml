@@ -23,7 +23,7 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
-      - /data/cache:rw,size=128m
+      - /data/cache:rw,noexec,nosuid,size=128m
     logging:
       driver: json-file
       options:
