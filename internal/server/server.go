@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -111,7 +112,11 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 		if opts.WebhookHandler == nil {
 			panic("server: RegisterRoutes requires WebhookHandler when sync strategy is webhook")
 		}
-		s.mux.HandleFunc("POST "+s.config.Sync.Webhook.Path, opts.WebhookHandler)
+		webhookPath := s.config.Sync.Webhook.Path
+		if strings.ContainsAny(webhookPath, " \t") {
+			panic(fmt.Sprintf("server: webhook path %q contains spaces", webhookPath))
+		}
+		s.mux.HandleFunc("POST "+webhookPath, opts.WebhookHandler)
 	}
 }
 
@@ -156,7 +161,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 		s.logger.Info("request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", r.URL.RequestURI(),
 			"status", wrapped.statusCode,
 			"duration", time.Since(start),
 			"remote", r.RemoteAddr,
@@ -193,6 +198,10 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 					"path", r.URL.Path,
 					"stack", string(debug.Stack()),
 				)
+				if rw, ok := w.(*responseWriter); ok && rw.headerWritten {
+					// Headers already sent — can't send 500; close connection
+					return
+				}
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
@@ -202,6 +211,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
 }
@@ -211,6 +221,7 @@ func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.ready.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, "not ready")

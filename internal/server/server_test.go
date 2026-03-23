@@ -211,6 +211,31 @@ func TestRecoveryMiddleware(t *testing.T) {
 	}
 }
 
+func TestRecoveryMiddleware_HeadersAlreadySent(t *testing.T) {
+	cfg := defaultTestConfig()
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	panicOpts := testRouteOptions()
+	panicOpts.ListHandler = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "partial")
+		panic("late panic after headers sent")
+	}
+	s.RegisterRoutes(panicOpts)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	// Must not panic even when headers were already sent.
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	// Status should be the original 200 since headers were already flushed;
+	// the recovery middleware must not attempt http.Error.
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (headers already sent)", rec.Code, http.StatusOK)
+	}
+}
+
 func TestGracefulShutdown(t *testing.T) {
 	cfg := defaultTestConfig()
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -266,5 +291,68 @@ func TestStaticFileServing(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "color: red") {
 		t.Errorf("body = %q, want CSS content", body)
+	}
+}
+
+func TestWebhookPathWithSpaces_Panics(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Sync.Strategy = "webhook"
+	cfg.Sync.Webhook.Path = "/web hook"
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for webhook path with spaces")
+		}
+		msg := fmt.Sprintf("%v", r)
+		if !strings.Contains(msg, "contains spaces") {
+			t.Errorf("panic message = %q, want containing %q", msg, "contains spaces")
+		}
+	}()
+
+	s.RegisterRoutes(testRouteOptions())
+}
+
+func TestLoggingMiddleware_RequestURI(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	cfg := defaultTestConfig()
+	s := New(cfg, logger)
+	s.RegisterRoutes(testRouteOptions())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz?foo=bar", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "/healthz?foo=bar") {
+		t.Errorf("log should contain full RequestURI, got: %s", logged)
+	}
+}
+
+func TestHealthEndpoint_CacheControl(t *testing.T) {
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
+	}
+}
+
+func TestReadyEndpoint_CacheControl(t *testing.T) {
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
 	}
 }
