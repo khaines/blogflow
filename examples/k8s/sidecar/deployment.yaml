@@ -80,6 +80,14 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 5
 
+          # Startup probe — generous window for slow PVC mounts.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+
           volumeMounts:
             - name: content
               mountPath: /data/content
@@ -146,9 +154,10 @@ spec:
         - name: config
           configMap:
             name: blogflow-config
-        # Rendered page cache (ephemeral).
+        # Rendered page cache (ephemeral); capped to protect node storage.
         - name: cache
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 256Mi
         # Scratch space — memory-backed to avoid disk writes.
         - name: tmp
           emptyDir:

@@ -1,0 +1,17 @@
+# PodDisruptionBudget — ensures at least one pod stays available during
+# voluntary disruptions (node drains, cluster upgrades).
+# Only useful when replicas > 1; for single-replica deployments the PDB
+# will block drains entirely, which may or may not be desired.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: blogflow
+  namespace: blogflow
+  labels:
+    app.kubernetes.io/name: blogflow
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blogflow

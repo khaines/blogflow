@@ -40,6 +40,12 @@ spec:
               protocol: TCP
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- /* NOTE: BlogFlow currently reads the webhook secret from the
+               BLOGFLOW_WEBHOOK_SECRET env var only (config field has yaml:"-").
+               Until the app supports file-based secrets, operators must set the
+               env var separately or patch the app. The file mount is the
+               recommended target state because env vars are visible in
+               /proc/<pid>/environ to any process sharing the pid namespace. */}}
           {{- if or (eq .Values.sync.strategy "webhook") .Values.env }}
           env:
             {{- if eq .Values.sync.strategy "webhook" }}
@@ -47,11 +53,15 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "blogflow.webhookSecretName" . }}
-                  key: BLOGFLOW_WEBHOOK_SECRET
+                  key: webhook-secret
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- end }}
+          {{- if .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
           {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
@@ -71,6 +81,13 @@ spec:
               mountPath: /data/cache
             - name: tmp
               mountPath: /tmp
+            {{- if eq .Values.sync.strategy "webhook" }}
+            # Webhook secret mounted as a file — env vars are visible in
+            # /proc/<pid>/environ; file mounts are restricted by filesystem DAC.
+            - name: webhook-secret
+              mountPath: /etc/blogflow/secrets
+              readOnly: true
+            {{- end }}
         {{- if eq .Values.sync.strategy "sidecar" }}
         - name: git-sync
           image: "{{ .Values.sync.sidecar.image.repository }}:{{ .Values.sync.sidecar.image.tag }}"
@@ -124,11 +141,20 @@ spec:
           configMap:
             name: {{ include "blogflow.fullname" . }}
         - name: cache
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.cache.sizeLimit | default "256Mi" }}
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        {{- if eq .Values.sync.strategy "webhook" }}
+        - name: webhook-secret
+          secret:
+            secretName: {{ include "blogflow.webhookSecretName" . }}
+            items:
+              - key: webhook-secret
+                path: webhook-secret
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
