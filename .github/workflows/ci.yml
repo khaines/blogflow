@@ -76,15 +76,16 @@ jobs:
   k8s-lint:
     name: K8s Manifest Lint
     runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.7.0
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-
       - name: Install kubeconform
-        run: go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz
+          sudo mv kubeconform /usr/local/bin/
+          kubeconform -v
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -93,7 +94,21 @@ jobs:
         run: kubeconform -strict -summary -ignore-filename-pattern 'kustomization.yaml' examples/k8s/
 
       - name: Validate Helm template output
-        run: helm template blogflow deploy/helm/blogflow/ | kubeconform -strict -summary
+        run: |
+          helm template blogflow deploy/helm/blogflow/ \
+            | kubeconform -strict -summary
+          helm template blogflow deploy/helm/blogflow/ \
+            --set sync.strategy=webhook \
+            --set sync.webhook.secret=ci-placeholder \
+            | kubeconform -strict -summary
+          helm template blogflow deploy/helm/blogflow/ \
+            --set sync.strategy=sidecar \
+            --set sync.sidecar.repo=https://github.com/example/content.git \
+            | kubeconform -strict -summary
+          helm template blogflow deploy/helm/blogflow/ \
+            --set ingress.enabled=true \
+            --set pdb.enabled=true \
+            | kubeconform -strict -summary
 
   docker:
     name: Docker Build

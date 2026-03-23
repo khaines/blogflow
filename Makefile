@@ -92,6 +92,9 @@ clean:
 k8s-lint:
 	kubeconform -strict -summary -ignore-filename-pattern 'kustomization.yaml' examples/k8s/
 	helm template blogflow deploy/helm/blogflow/ | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set sync.strategy=webhook --set sync.webhook.secret=ci-placeholder | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set sync.strategy=sidecar --set sync.sidecar.repo=https://github.com/example/content.git | kubeconform -strict -summary
+	helm template blogflow deploy/helm/blogflow/ --set ingress.enabled=true --set pdb.enabled=true | kubeconform -strict -summary
 
 ## help: Show this help
 help:
