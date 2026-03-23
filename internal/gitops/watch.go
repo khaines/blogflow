@@ -87,12 +87,16 @@ func (w *WatchStrategy) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down the filesystem watcher.
 func (w *WatchStrategy) Stop(ctx context.Context) error {
+	w.mu.Lock()
+	watcher := w.watcher
+	w.mu.Unlock()
+
 	var stopErr error
 	w.stopOnce.Do(func() {
-		if w.watcher == nil {
+		if watcher == nil {
 			return
 		}
-		if err := w.watcher.Close(); err != nil {
+		if err := watcher.Close(); err != nil {
 			stopErr = fmt.Errorf("gitops: close watcher: %w", err)
 		}
 		select {
