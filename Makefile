@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt docker clean run dev
+.PHONY: build test lint fmt docker clean run dev smoke-test
 
 ## build: Compile blogflow binary
 build:
@@ -27,6 +27,50 @@ run: build
 ## dev: Run with local content directory for development
 dev: build
 	./bin/blogflow --dev $(if $(wildcard ./data/content),--content ./data/content) $(if $(wildcard ./data/theme),--theme ./data/theme)
+
+## smoke-test: Run container smoke tests locally (requires docker)
+smoke-test: docker
+	@set -e; \
+	CONTAINER="blogflow-smoke-$$$$"; \
+	BASE="http://localhost:8080"; \
+	PASS=0; FAIL=0; \
+	cleanup() { docker rm -f "$$CONTAINER" >/dev/null 2>&1 || true; }; \
+	trap cleanup EXIT; \
+	docker run -d --name "$$CONTAINER" -p 8080:8080 blogflow; \
+	echo "⏳ Waiting for container to be healthy..."; \
+	for i in $$(seq 1 20); do \
+		if curl -sf "$$BASE/healthz" >/dev/null 2>&1; then \
+			echo "✅ Container healthy"; break; \
+		fi; \
+		if [ "$$i" -eq 20 ]; then \
+			echo "❌ Container failed to become healthy"; docker logs "$$CONTAINER"; exit 1; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	check() { \
+		local url="$$1" expected_status="$$2" body_match="$$3" label="$$4"; \
+		local status body; \
+		status=$$(curl -s -o /dev/null -w '%{http_code}' "$$url"); \
+		body=$$(curl -sf "$$url" 2>/dev/null || true); \
+		if [ "$$status" != "$$expected_status" ]; then \
+			echo "❌ $$label — expected $$expected_status, got $$status"; \
+			FAIL=$$((FAIL + 1)); return; \
+		fi; \
+		if [ -n "$$body_match" ] && ! echo "$$body" | grep -qi "$$body_match"; then \
+			echo "❌ $$label — response body missing '$$body_match'"; \
+			FAIL=$$((FAIL + 1)); return; \
+		fi; \
+		echo "✅ $$label"; PASS=$$((PASS + 1)); \
+	}; \
+	echo ""; echo "🧪 Running smoke tests..."; \
+	check "$$BASE/healthz"     200 "ok"       "GET /healthz → 200"; \
+	check "$$BASE/readyz"      200 "ok"       "GET /readyz → 200"; \
+	check "$$BASE/"            200 "BlogFlow" "GET / → 200 (home page)"; \
+	check "$$BASE/feed.xml"    200 "xml"      "GET /feed.xml → 200 (feed)"; \
+	check "$$BASE/metrics"     200 "go_"      "GET /metrics → 200 (prometheus)"; \
+	check "$$BASE/nonexistent" 404 ""         "GET /nonexistent → 404"; \
+	echo ""; echo "Results: $$PASS passed, $$FAIL failed"; \
+	if [ "$$FAIL" -gt 0 ]; then docker logs "$$CONTAINER"; exit 1; fi
 
 ## clean: Remove build artifacts
 clean:
