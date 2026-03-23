@@ -1,0 +1,11 @@
+services:
+  blogflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["serve", "--content", "/data/content", "--config", "/data/config", "--dev"]
+    volumes:
+      - ./examples/content:/data/content
+      - ./examples/config:/data/config
+    environment:
+      - BLOGFLOW_SERVER_PORT=8080
