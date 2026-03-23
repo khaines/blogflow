@@ -40,8 +40,8 @@ Open [http://localhost:8080](http://localhost:8080) — that's it.
 - **Secure by default** — distroless container, rootless (UID 65532), read-only root FS
 - **< 15 MB container** — single static binary on `gcr.io/distroless/static-debian12:nonroot`
 - **Git-driven content** — git-sync sidecar or fsnotify for live reload
-- **HMAC-SHA256 webhooks** (planned) — constant-time signature validation, branch filtering, rate limiting
-- **Atom/RSS feeds** (planned) — auto-generated with configurable item count
+- **HMAC-SHA256 webhooks** — constant-time signature validation, branch filtering, rate limiting
+- **Atom/RSS feeds** — auto-generated with configurable item count
 - **Rendered content cache** — in-memory LRU with configurable TTL
 
 ## Configuration
@@ -83,7 +83,7 @@ cache:
   max_entries: 1000
 
 feed:
-  enabled: true       # (coming soon) feed generation is a planned feature
+  enabled: true
   type: "atom"
   items: 20
 ```
@@ -102,10 +102,10 @@ See [`examples/config/site.yaml`](examples/config/site.yaml) for a fully documen
 | `BLOGFLOW_SERVER_WRITE_TIMEOUT` | Write timeout |
 | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | Idle timeout |
 | `BLOGFLOW_CACHE_ENABLED` | Enable/disable cache (`true`/`false`) |
-| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook` (planned), `sidecar` |
-| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (planned) (≥ 32 bytes, **never in YAML**) |
-| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook rate limit (planned) (1–100 req/min) |
-| `BLOGFLOW_FEED_TYPE` | Feed format (planned): `atom` or `rss` |
+| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar` |
+| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (≥ 32 bytes, **never in YAML**) |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook rate limit (1–100 req/min) |
+| `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` |
 
 ## Progressive Customization
 
