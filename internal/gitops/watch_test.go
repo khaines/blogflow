@@ -195,6 +195,54 @@ func TestWatchStrategy_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestWatchStrategy_RecursiveSubdir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	var called atomic.Int32
+	reloader := ContentReloader(func() error {
+		called.Add(1)
+		return nil
+	})
+
+	w := NewWatchStrategy(reloader, watchTestLogger(), dir)
+	w.debounce = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := w.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Stop(context.Background()) }()
+
+	// Let the watcher settle before creating the subdirectory.
+	time.Sleep(100 * time.Millisecond)
+
+	sub := filepath.Join(dir, "posts")
+	if err := os.Mkdir(sub, 0o750); err != nil { //nolint:gosec // G301: test directory
+		t.Fatal(err)
+	}
+
+	// Give the watcher time to pick up the new directory.
+	time.Sleep(200 * time.Millisecond)
+
+	if err := os.WriteFile(filepath.Join(sub, "new-post.md"), []byte("# New Post"), 0o644); err != nil { //nolint:gosec // G306: test files
+		t.Fatal(err)
+	}
+
+	// Wait for the debounce to fire.
+	deadline := time.After(3 * time.Second)
+	for called.Load() < 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("reloader not called within timeout; called %d times, want ≥1", called.Load())
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}
+
 func TestWatchStrategy_ConcurrentStartStop(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
