@@ -6,18 +6,20 @@
 package theme
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // Engine loads and caches templates from the overlay FS.
 type Engine struct {
 	fs    fs.FS
-	tmpl  *template.Template
+	tmpl  atomic.Pointer[template.Template]
 	funcs template.FuncMap
 }
 
@@ -35,8 +37,14 @@ func NewEngine(fsys fs.FS) (*Engine, error) {
 }
 
 // Render renders a named template to the writer with the given data.
+// Output is buffered so that partial content is never written on error.
 func (e *Engine) Render(w io.Writer, name string, data any) error {
-	return e.tmpl.ExecuteTemplate(w, name, data)
+	var buf bytes.Buffer
+	if err := e.tmpl.Load().ExecuteTemplate(&buf, name, data); err != nil {
+		return err
+	}
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 // RenderToString renders a named template to a string.
@@ -84,7 +92,7 @@ func (e *Engine) loadTemplates() error {
 		return fmt.Errorf("loading templates: %w", err)
 	}
 
-	e.tmpl = tmpl
+	e.tmpl.Store(tmpl)
 	return nil
 }
 
@@ -100,13 +108,18 @@ func defaultFuncMap() template.FuncMap {
 		"lower": strings.ToLower,
 		"upper": strings.ToUpper,
 		"truncate": func(s string, n int) string {
-			if len(s) <= n {
+			if n <= 0 {
+				return ""
+			}
+			runes := []rune(s)
+			if len(runes) <= n {
 				return s
 			}
-			if idx := strings.LastIndex(s[:n], " "); idx > 0 {
-				return s[:idx] + "…"
+			truncated := string(runes[:n])
+			if idx := strings.LastIndex(truncated, " "); idx > 0 {
+				return truncated[:idx] + "…"
 			}
-			return s[:n] + "…"
+			return truncated + "…"
 		},
 		"readingTime": func(content string) int {
 			words := len(strings.Fields(content))
@@ -115,13 +128,9 @@ func defaultFuncMap() template.FuncMap {
 			}
 			return 1
 		},
-		// WARNING: safeHTML bypasses html/template auto-escaping.
-		// Only use for content that has already been sanitized by the
-		// goldmark render pipeline (which strips raw HTML by default).
-		// Never pass user-supplied strings through this function.
-		"safeHTML": func(s string) template.HTML {
-			return template.HTML(s)
-		},
+		// safeHTML was intentionally removed — content from the scanner is
+		// already typed as template.HTML, so a conversion helper is unnecessary
+		// and would widen the XSS attack surface.
 		"urlize": func(s string) string {
 			s = strings.ToLower(s)
 			s = strings.ReplaceAll(s, " ", "-")
@@ -135,12 +144,15 @@ func defaultFuncMap() template.FuncMap {
 		},
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
-		"seq": func(start, end int) []int {
-			var s []int
+		"seq": func(start, end int) ([]int, error) {
+			if end-start > 10000 || end-start < 0 {
+				return nil, fmt.Errorf("seq: range %d exceeds maximum 10000", end-start)
+			}
+			s := make([]int, 0, end-start+1)
 			for i := start; i <= end; i++ {
 				s = append(s, i)
 			}
-			return s
+			return s, nil
 		},
 	}
 }

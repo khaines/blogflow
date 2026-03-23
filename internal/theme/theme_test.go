@@ -2,6 +2,7 @@ package theme
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -274,6 +275,31 @@ func TestReload(t *testing.T) {
 	if got != "v2" {
 		t.Errorf("after reload: got %q, want %q", got, "v2")
 	}
+}
+
+func TestReload_ConcurrentWithRender(t *testing.T) {
+	m := fstest.MapFS{"templates/t.html": &fstest.MapFile{Data: []byte("v1")}}
+	e, err := NewEngine(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				e.RenderToString("templates/t.html", nil)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				e.Reload()
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestNewEngine_NoTemplatesDir(t *testing.T) {
