@@ -113,7 +113,7 @@ func TestWatchStrategy_IgnoresTempFiles(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	_ = os.WriteFile(filepath.Join(dir, ".post.md.swp"), []byte("swap"), 0o644) //nolint:gosec // G306: test files
-	_ = os.WriteFile(filepath.Join(dir, "draft.tmp"), []byte("temp"), 0o644) //nolint:gosec // G306: test files
+	_ = os.WriteFile(filepath.Join(dir, "draft.tmp"), []byte("temp"), 0o644)    //nolint:gosec // G306: test files
 	_ = os.WriteFile(filepath.Join(dir, "backup.md~"), []byte("backup"), 0o644) //nolint:gosec // G306: test files
 
 	time.Sleep(300 * time.Millisecond)
