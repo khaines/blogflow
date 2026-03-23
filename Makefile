@@ -20,13 +20,13 @@ fmt:
 docker:
 	docker build -t blogflow .
 
-## run: Run blogflow server locally
+## run: Run blogflow with defaults only (no external content needed)
 run: build
-	./bin/blogflow --dev --content ./data/content --theme ./data/theme
+	./bin/blogflow --dev
 
-## dev: Run with live reload (requires content directory)
+## dev: Run with local content directory for development
 dev: build
-	./bin/blogflow --dev --content ./data/content
+	./bin/blogflow --dev $(if $(wildcard ./data/content),--content ./data/content) $(if $(wildcard ./data/theme),--theme ./data/theme)
 
 ## clean: Remove build artifacts
 clean:
