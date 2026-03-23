@@ -227,6 +227,11 @@ func TestWatchStrategy_RecursiveSubdir(t *testing.T) {
 	// Give the watcher time to pick up the new directory.
 	time.Sleep(200 * time.Millisecond)
 
+	// Directory creation must not trigger the reloader by itself.
+	if got := called.Load(); got != 0 {
+		t.Fatalf("reloader called %d times after mkdir, want 0", got)
+	}
+
 	if err := os.WriteFile(filepath.Join(sub, "new-post.md"), []byte("# New Post"), 0o644); err != nil { //nolint:gosec // G306: test files
 		t.Fatal(err)
 	}
