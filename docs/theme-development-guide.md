@@ -108,9 +108,9 @@ The base template defines named blocks that child templates override:
   <title>{{ block "title" . }}{{ .Site.Title }}{{ end }}</title>
 </head>
 <body>
-  {{ template "header" . }}
+  {{ template "partials/header.html" . }}
   <main>{{ block "content" . }}{{ end }}</main>
-  {{ template "footer" . }}
+  {{ template "partials/footer.html" . }}
 </body>
 </html>
 ```
@@ -131,8 +131,8 @@ The base template defines named blocks that child templates override:
 ### Including Partials
 
 ```html
-{{ template "header" . }}
-{{ template "footer" . }}
+{{ template "partials/header.html" . }}
+{{ template "partials/footer.html" . }}
 {{ template "post-meta" .Post }}
 {{ template "pagination" . }}
 ```
@@ -273,23 +273,25 @@ action. The template name is the `{{define "name"}}` identifier inside the
 file — **not** the file path:
 
 ```html
-{{ template "header" . }}
+{{ template "partials/header.html" . }}
 ```
 
 ### Default Partials
 
 BlogFlow ships these partials in the embedded defaults:
 
-| `{{define}}` Name | File                         | Purpose                                              |
-|-------------------|------------------------------|------------------------------------------------------|
-| `header`          | `partials/header.html`       | Site header with navigation and title link.           |
-| `footer`          | `partials/footer.html`       | Site footer with copyright and attribution.           |
-| `post-meta`       | `partials/post-meta.html`    | Post metadata: date, reading time, tag links.         |
-| `pagination`      | `partials/pagination.html`   | Previous / next page navigation with aria labels.     |
+| `{{define}}` Name          | File                         | Purpose                                              |
+|----------------------------|------------------------------|------------------------------------------------------|
+| `partials/header.html`     | `partials/header.html`       | Site header with navigation and title link.           |
+| `partials/footer.html`     | `partials/footer.html`       | Site footer with copyright and attribution.           |
+| `post-meta`                | `partials/post-meta.html`    | Post metadata: date, reading time, tag links.         |
+| `pagination`               | `partials/pagination.html`   | Previous / next page navigation with aria labels.     |
 
-> **Naming convention**: Partial template names match the filename stem (e.g.,
-> `header.html` defines `"header"`). When creating custom partials, follow the
-> same pattern — define the template with a short name, not a file path.
+> **Naming convention**: The `{{define}}` name must match exactly what
+> `{{template}}` uses. The default header and footer use full-path names
+> (`partials/header.html`, `partials/footer.html`), while post-meta and
+> pagination use short names. When overriding a partial, keep the same
+> `{{define}}` name so existing `{{template}}` calls continue to resolve.
 
 ### Creating Custom Partials
 

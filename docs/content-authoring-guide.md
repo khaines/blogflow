@@ -67,6 +67,10 @@ Dates in front matter accept:
 Display format is controlled by `content.date_format` in `site.yaml` (default:
 `"January 2, 2006"`, following Go time layout conventions).
 
+> **Note:** The default `post-meta.html` partial currently uses a hardcoded
+> format (`January 2, 2006`). Custom themes should read this config value via a
+> template function.
+
 ### Tags and Categories
 
 ```yaml
