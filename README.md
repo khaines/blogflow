@@ -1,5 +1,7 @@
 # BlogFlow
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 A compact, efficient blog engine written in Go. Ship a single binary with sensible
 defaults — just add markdown.
 
@@ -257,4 +259,4 @@ feature branches and pull requests.
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)
