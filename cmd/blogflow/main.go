@@ -24,6 +24,11 @@ import (
 var version = "dev"
 
 func main() {
+	// Subcommand: healthcheck (must run before flag.Parse)
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck(os.Args[2:]))
+	}
+
 	// CLI flags
 	contentPath := flag.String("content", "", "Path to content directory")
 	themePath := flag.String("theme", "", "Path to custom theme directory")

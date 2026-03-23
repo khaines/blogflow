@@ -10,4 +10,5 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /app ./cmd/blogflow
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /app /app
 USER nonroot:nonroot
+HEALTHCHECK --interval=30s --timeout=3s CMD ["/app", "healthcheck"]
 ENTRYPOINT ["/app"]
