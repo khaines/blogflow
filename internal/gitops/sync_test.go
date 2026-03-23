@@ -34,7 +34,7 @@ func TestNewStrategy_Webhook(t *testing.T) {
 
 	cfg := &config.SyncConfig{
 		Strategy: "webhook",
-		Webhook:  config.WebhookConfig{Path: "/_hook"},
+		Webhook:  config.WebhookConfig{Path: "/_hook", Secret: "test-secret"},
 	}
 
 	s, err := gitops.NewStrategy(cfg, noop, logger())
@@ -133,7 +133,7 @@ func TestStrategy_Name(t *testing.T) {
 
 			cfg := &config.SyncConfig{Strategy: tc.strategy}
 			if tc.strategy == "webhook" {
-				cfg.Webhook = config.WebhookConfig{Path: "/_hook"}
+				cfg.Webhook = config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}
 			}
 
 			s, err := gitops.NewStrategy(cfg, noop, logger())
@@ -156,7 +156,7 @@ func TestStrategy_StartStop(t *testing.T) {
 		cfg  *config.SyncConfig
 	}{
 		{"watch", &config.SyncConfig{Strategy: "watch"}},
-		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook"}}},
+		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
 		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
 	}
 
@@ -189,7 +189,7 @@ func TestStrategy_DoubleStop(t *testing.T) {
 		cfg  *config.SyncConfig
 	}{
 		{"watch", &config.SyncConfig{Strategy: "watch"}},
-		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook"}}},
+		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
 		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
 	}
 
