@@ -137,6 +137,7 @@ spec:
         - name: webhook-secret
           secret:
             secretName: blogflow-webhook-secret
+            defaultMode: 0400
             items:
               - key: webhook-secret
                 path: webhook-secret
