@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,6 +17,7 @@ import (
 	"github.com/kenhaines/blogflow/internal/content"
 	"github.com/kenhaines/blogflow/internal/overlayfs"
 	"github.com/kenhaines/blogflow/internal/server"
+	"github.com/kenhaines/blogflow/internal/server/handlers"
 	"github.com/kenhaines/blogflow/internal/theme"
 )
 
@@ -104,27 +104,32 @@ func main() {
 	}
 	logger.Info("theme engine initialized")
 
-	// Suppress unused warnings — real handlers PR will consume these.
-	_ = idx
-	_ = themeEngine
-
 	// 5. Create and configure HTTP server
 	srv := server.New(cfg, logger)
 
-	// 6. Register routes (placeholder handlers until content-handlers PR)
+	// 6. Build handler dependencies and register routes
+	deps := &handlers.Deps{
+		Config: cfg,
+		Index:  idx,
+		Theme:  themeEngine,
+	}
+
 	staticFS, fsErr := fs.Sub(contentOverlay, "static")
 	if fsErr != nil {
 		logger.Warn("static directory not available — /static/ routes will 404", "error", fsErr)
 		staticFS = nil
 	}
 
+	feedHandler := handlers.NewFeedHandler(cfg, idx)
+	sitemapHandler := handlers.NewSitemapHandler(cfg, idx)
+
 	srv.RegisterRoutes(server.RouteOptions{
-		ListHandler:    placeholderHandler("list", logger),
-		PostHandler:    placeholderHandler("post", logger),
-		PageHandler:    placeholderHandler("page", logger),
-		TagHandler:     placeholderHandler("tag", logger),
-		FeedHandler:    placeholderHandler("feed", logger),
-		SitemapHandler: placeholderHandler("sitemap", logger),
+		ListHandler:    handlers.ListHandler(deps),
+		PostHandler:    handlers.PostHandler(deps),
+		PageHandler:    handlers.PageHandler(deps),
+		TagHandler:     handlers.TagHandler(deps),
+		FeedHandler:    feedHandler.ServeHTTP,
+		SitemapHandler: sitemapHandler.ServeHTTP,
 		StaticFS:       staticFS,
 	})
 
@@ -169,11 +174,4 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("server stopped")
-}
-
-func placeholderHandler(name string, logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = fmt.Fprintf(w, "blogflow: %s handler (placeholder)\n", name)
-	}
 }

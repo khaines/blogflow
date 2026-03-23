@@ -541,6 +541,10 @@ func checkSymlinkSafe(root, name string) error {
 	fullPath := filepath.Join(root, filepath.FromSlash(name))
 	resolved, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
+		// Path doesn't exist in this layer — not a symlink issue, allow fallthrough
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	// Verify resolved path is still under root

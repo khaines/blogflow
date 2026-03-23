@@ -2,7 +2,7 @@
 {{define "og_title"}}{{.Post.Title}}{{end}}
 {{define "og_description"}}{{.Post.Description}}{{end}}
 {{define "og_type"}}article{{end}}
-{{define "og_url"}}{{.Post.URL}}{{end}}
+{{define "og_url"}}{{.Site.BaseURL}}/posts/{{.Post.Slug}}{{end}}
 {{define "meta_description"}}{{.Post.Description}}{{end}}
 
 {{define "content"}}
@@ -13,7 +13,7 @@
         {{template "post-meta" .Post}}
     </header>
     <div class="post-content">
-        {{.Content}}
+        {{.Post.Content}}
     </div>
 </article>
 {{end}}
