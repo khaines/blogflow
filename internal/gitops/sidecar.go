@@ -80,11 +80,12 @@ func (w *SidecarStrategy) Stop(ctx context.Context) error {
 	watcher := w.watcher
 	w.mu.Unlock()
 
+	if watcher == nil {
+		return nil
+	}
+
 	var stopErr error
 	w.stopOnce.Do(func() {
-		if watcher == nil {
-			return
-		}
 		if err := watcher.Close(); err != nil {
 			stopErr = fmt.Errorf("gitops: close sidecar watcher: %w", err)
 		}
@@ -120,7 +121,6 @@ func (w *SidecarStrategy) loop(ctx context.Context) {
 			if timer != nil {
 				timer.Stop()
 			}
-			_ = w.watcher.Close()
 			return
 
 		case event, ok := <-w.watcher.Events:
