@@ -1,0 +1,190 @@
+# -- Number of BlogFlow replicas
+replicaCount: 1
+
+image:
+  # -- BlogFlow container image repository
+  repository: ghcr.io/khaines/blogflow
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (default is the chart appVersion)
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Content sync strategy: "watch" (filesystem watcher), "sidecar" (git-sync), or "webhook"
+sync:
+  strategy: watch
+
+  # -- git-sync sidecar configuration (used when sync.strategy == sidecar)
+  sidecar:
+    image:
+      repository: registry.k8s.io/git-sync/git-sync
+      tag: v4.4.0
+      pullPolicy: IfNotPresent
+    # -- Git repository URL to sync content from
+    repo: ""
+    # -- Branch to sync
+    branch: main
+    # -- Sync interval
+    period: 60s
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+  # -- Webhook configuration (used when sync.strategy == webhook)
+  webhook:
+    # -- Webhook endpoint path
+    path: /api/webhook
+    # -- Name of an existing Secret containing the webhook secret under key BLOGFLOW_WEBHOOK_SECRET
+    existingSecret: ""
+    # -- Webhook secret value (ignored if existingSecret is set; stored in a generated Secret)
+    secret: ""
+    # -- Allowed webhook events
+    allowedEvents:
+      - push
+    # -- Branch filter for webhook events
+    branchFilter: main
+    # -- Maximum webhook requests per second
+    rateLimit: 10
+
+# -- BlogFlow site configuration rendered into a ConfigMap and mounted at /data/config/site.yaml
+siteConfig:
+  site:
+    title: "My Blog"
+    description: "A blog powered by BlogFlow"
+    base_url: "http://localhost:8080"
+    language: en
+    author:
+      name: ""
+      email: ""
+  content:
+    posts_dir: posts
+    pages_dir: pages
+    media_dir: media
+    posts_per_page: 10
+    date_format: "January 2, 2006"
+    summary_length: 200
+  theme:
+    name: default
+  server:
+    port: 8080
+    read_timeout: 5s
+    write_timeout: 10s
+    idle_timeout: 120s
+  cache:
+    enabled: true
+    ttl: 1h
+    max_entries: 1000
+  sync:
+    strategy: watch
+    webhook:
+      path: /api/webhook
+      allowed_events:
+        - push
+      branch_filter: main
+      rate_limit: 10
+  feed:
+    enabled: true
+    type: atom
+    items: 20
+
+service:
+  # -- Kubernetes Service type
+  type: ClusterIP
+  # -- Service port
+  port: 8080
+
+ingress:
+  # -- Enable ingress resource
+  enabled: false
+  # -- Ingress class name
+  className: ""
+  # -- Ingress annotations
+  annotations: {}
+  hosts:
+    - host: blogflow.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# -- Pod-level security context
+podSecurityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# -- Liveness probe configuration
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# -- Readiness probe configuration
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+# -- Additional environment variables for the BlogFlow container
+env: []
+
+# -- Annotations to add to the pod
+podAnnotations: {}
+
+# -- Labels to add to the pod
+podLabels: {}
+
+# -- Node selector constraints
+nodeSelector: {}
+
+# -- Tolerations for pod scheduling
+tolerations: []
+
+# -- Affinity rules for pod scheduling
+affinity: {}
+
+# -- Disable automatic mounting of the service account token
+automountServiceAccountToken: false
+
+# -- Persistent volume claim for content (used when sync.strategy != sidecar)
+persistence:
+  content:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    size: 1Gi
+  theme:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    size: 256Mi
