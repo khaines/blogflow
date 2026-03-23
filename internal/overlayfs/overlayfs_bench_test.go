@@ -47,6 +47,7 @@ func benchReadDirOverlay(entriesPerLayer int) *OverlayFS {
 
 func BenchmarkOpen_TopLayer(b *testing.B) {
 	ofs := benchOverlay(50)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		f, err := ofs.Open("layer0/file0.txt")
@@ -59,6 +60,7 @@ func BenchmarkOpen_TopLayer(b *testing.B) {
 
 func BenchmarkOpen_BottomLayer(b *testing.B) {
 	ofs := benchOverlay(50)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		f, err := ofs.Open("layer3/file0.txt")
@@ -71,6 +73,7 @@ func BenchmarkOpen_BottomLayer(b *testing.B) {
 
 func BenchmarkOpen_NotExist(b *testing.B) {
 	ofs := benchOverlay(50)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		_, err := ofs.Open("does/not/exist.txt")
@@ -91,6 +94,7 @@ func BenchmarkOpen_NegCacheHit(b *testing.B) {
 	}
 	_ = f.Close()
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		f, err := ofs.Open("layer3/file0.txt")
@@ -103,6 +107,7 @@ func BenchmarkOpen_NegCacheHit(b *testing.B) {
 
 func BenchmarkReadDir_Union(b *testing.B) {
 	ofs := benchReadDirOverlay(25)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		_, err := fs.ReadDir(ofs, "dir")
@@ -115,12 +120,14 @@ func BenchmarkReadDir_Union(b *testing.B) {
 func BenchmarkOpen_Parallel(b *testing.B) {
 	ofs := benchOverlay(50)
 	b.SetParallelism(8)
+	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			f, err := ofs.Open("shared.txt")
 			if err != nil {
-				b.Fatal(err)
+				b.Error(err)
+				return
 			}
 			_ = f.Close()
 		}
