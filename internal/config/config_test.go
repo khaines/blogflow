@@ -649,6 +649,8 @@ func TestValidate_FieldBounds(t *testing.T) {
 		{"cache max_entries too high", func(c *Config) { c.Cache.MaxEntries = 100001 }, "cache.max_entries"},
 		{"feed items too low", func(c *Config) { c.Feed.Items = 0 }, "feed.items"},
 		{"feed items too high", func(c *Config) { c.Feed.Items = 101 }, "feed.items"},
+		{"hsts_max_age negative", func(c *Config) { c.Server.HSTSMaxAge = -1 }, "server.hsts_max_age"},
+		{"hsts_max_age too high", func(c *Config) { c.Server.HSTSMaxAge = 63072001 }, "server.hsts_max_age"},
 		{
 			"webhook path no leading slash",
 			func(c *Config) {

@@ -53,10 +53,12 @@ type ThemeConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port         int           `yaml:"port"`
-	ReadTimeout  time.Duration `yaml:"read_timeout"`
-	WriteTimeout time.Duration `yaml:"write_timeout"`
-	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	Port          int           `yaml:"port"`
+	ReadTimeout   time.Duration `yaml:"read_timeout"`
+	WriteTimeout  time.Duration `yaml:"write_timeout"`
+	IdleTimeout   time.Duration `yaml:"idle_timeout"`
+	TLSTerminated bool          `yaml:"tls_terminated"`
+	HSTSMaxAge    int           `yaml:"hsts_max_age"`
 }
 
 // CacheConfig holds rendered content cache settings.
@@ -112,10 +114,12 @@ func Default() *Config {
 			Name: "default",
 		},
 		Server: ServerConfig{
-			Port:         8080,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 10 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			Port:          8080,
+			ReadTimeout:   5 * time.Second,
+			WriteTimeout:  10 * time.Second,
+			IdleTimeout:   120 * time.Second,
+			TLSTerminated: false,
+			HSTSMaxAge:    63072000, // 2 years
 		},
 		Cache: CacheConfig{
 			Enabled:    true,

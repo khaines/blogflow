@@ -280,6 +280,22 @@ var envMap = map[string]func(*Config, string) error{
 		c.Feed.Type = v
 		return nil
 	},
+	"BLOGFLOW_SERVER_TLS_TERMINATED": func(c *Config, v string) error {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_TLS_TERMINATED as bool: %w", err)
+		}
+		c.Server.TLSTerminated = b
+		return nil
+	},
+	"BLOGFLOW_SERVER_HSTS_MAX_AGE": func(c *Config, v string) error {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_HSTS_MAX_AGE as int: %w", err)
+		}
+		c.Server.HSTSMaxAge = n
+		return nil
+	},
 }
 
 func applyEnvOverrides(cfg *Config) error {
@@ -488,6 +504,15 @@ func Validate(cfg *Config) error {
 				Message: "must be between 1 and 100",
 			})
 		}
+	}
+
+	// Server.HSTSMaxAge: 0–63072000 (2 years); only emitted when TLSTerminated
+	if cfg.Server.HSTSMaxAge < 0 || cfg.Server.HSTSMaxAge > 63072000 {
+		errs = append(errs, FieldError{
+			Field:   "server.hsts_max_age",
+			Value:   cfg.Server.HSTSMaxAge,
+			Message: "must be between 0 and 63072000 (2 years)",
+		})
 	}
 
 	// Feed validation only when feed is enabled
