@@ -23,7 +23,7 @@ fmt:
 
 ## docker: Build Docker image
 docker:
-	docker build -t blogflow .
+	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t blogflow .
 
 ## run: Run blogflow with defaults only (no external content needed)
 run: build
