@@ -6,7 +6,7 @@ BlogFlow is a compact, highly efficient blog engine written in Go. All configura
 
 ## Architecture Summary
 
-- **Single Go binary** (< 15 MB container) built on `gcr.io/distroless/static-debian12:nonroot`
+- **Single Go binary** (< 25 MB container) built on `gcr.io/distroless/static-debian12:nonroot`
 - **Overlay filesystem** (`io/fs.FS`) — external disk files override embedded defaults
 - **Content pipeline**: goldmark (Markdown) → Go `html/template` → cached HTML
 - **Git operations**: go-git (pure Go, no external binary) with SSH/PAT/GitHub App auth

@@ -37,7 +37,7 @@ What is **not** present in the image:
 | Compilers / interpreters | No on-host code compilation or scripting |
 
 The final image is a statically-linked Go binary (`CGO_ENABLED=0`) on a
-minimal scratch-like base, typically under **15 MB** total.
+minimal scratch-like base, typically under **25 MB** total.
 
 ```dockerfile
 # Runtime stage — distroless, rootless, no shell

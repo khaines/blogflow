@@ -147,7 +147,7 @@ docker run -p 8080:8080 \
   blogflow --content /data/content --config /data/config
 ```
 
-The resulting image is under 15 MB and runs rootless on a distroless base.
+The resulting image is under 25 MB and runs rootless on a distroless base.
 
 ## What's Next?
 

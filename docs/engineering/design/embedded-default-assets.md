@@ -460,9 +460,9 @@ No scaling needed. Embedded assets are compiled into every replica of the BlogFl
 | CPU | Negligible | In-memory reads, no computation |
 | Memory | < 100 KB | Total size of all embedded assets (CSS ~15 KB, templates ~20 KB, config ~1 KB, favicon ~2 KB, about page ~1 KB) |
 | Storage | 0 (in binary) | Assets are compiled into the binary; no runtime storage |
-| Binary size impact | < 100 KB | Acceptable for a 15 MB binary (< 1% increase) |
+| Binary size impact | < 100 KB | Acceptable for an 18 MB binary (< 1% increase) |
 
-**Binary size CI enforcement:** CI validates that the compiled binary with embedded defaults does not exceed 15 MB. The embedded assets budget is < 100 KB. A CI step runs `du -sh defaults/` and fails if it exceeds 500 KB (generous headroom for future additions like more themes). The 100 KB unit test enforces the current single-theme asset budget; the 500 KB CI check is the hard ceiling planned for future theme additions. Raising the unit test threshold requires a PR comment citing the architectural decision. Additionally, the following test enforces the budget:
+**Binary size CI enforcement:** CI validates that the compiled binary with embedded defaults does not exceed 20 MB. The embedded assets budget is < 100 KB. A CI step runs `du -sh defaults/` and fails if it exceeds 500 KB (generous headroom for future additions like more themes). The 100 KB unit test enforces the current single-theme asset budget; the 500 KB CI check is the hard ceiling planned for future theme additions. Raising the unit test threshold requires a PR comment citing the architectural decision. Additionally, the following test enforces the budget:
 
 ```go
 func TestEmbeddedTotalSize(t *testing.T) {
