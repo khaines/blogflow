@@ -1,6 +1,6 @@
 {{define "post-meta"}}
 <div class="post-meta">
-    <time datetime="{{.Date.Format "2006-01-02"}}">{{.Date.Format $.Site.DateFormat}}</time>
+    <time datetime="{{.Date.Format "2006-01-02"}}">{{.Date.Format "January 2, 2006"}}</time>
     {{if .ReadingTime}}
     <span class="post-meta-sep" aria-hidden="true">·</span>
     <span>{{.ReadingTime}} min read</span>

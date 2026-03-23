@@ -613,3 +613,11 @@ main {
         page-break-after: avoid;
     }
 }
+
+/* --------------------------------------------------------------------------
+   16. Reduced Motion
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .tag { transition: none; }
+}

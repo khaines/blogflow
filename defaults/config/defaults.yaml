@@ -4,7 +4,7 @@
 site:
   title: "My Blog"
   description: "A blog powered by BlogFlow"
-  base_url: "https://localhost:8080"
+  base_url: "http://localhost:8080"  # Override in production with your actual HTTPS URL
   language: "en"
   author:
     name: ""
@@ -39,6 +39,7 @@ sync:
     path: "/api/webhook"
     allowed_events:
       - push
+    # secret: Set via BLOGFLOW_WEBHOOK_SECRET env var (never in YAML files)
     branch_filter: "main"
     ip_allowlist: true
     rate_limit: 10

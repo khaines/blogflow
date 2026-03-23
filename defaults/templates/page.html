@@ -1,6 +1,7 @@
 {{define "title"}}{{.Page.Title}} — {{.Site.Title}}{{end}}
 
 {{define "content"}}
+{{/* .Content must be template.HTML — caller is responsible for sanitizing markdown output before wrapping. */}}
 <article class="page">
     <h1>{{.Page.Title}}</h1>
     <div class="page-content">
