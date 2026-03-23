@@ -26,7 +26,7 @@ func mkPost(title, slug, date string, tags []string, draft bool, body string) st
 }
 
 func newTestScanner() *Scanner {
-	return NewScanner(NewRenderer(), "", "", 200)
+	return NewScanner(NewRenderer(), "", "", 200, nil)
 }
 
 func TestScan_BasicPost(t *testing.T) {
@@ -436,12 +436,12 @@ func TestScan_MissingDate(t *testing.T) {
 		},
 	}
 
-	_, err := newTestScanner().Scan(fs)
-	if err == nil {
-		t.Fatal("expected error for missing date, got nil")
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "requires a 'date' field") {
-		t.Errorf("error = %q, want it to mention date requirement", err)
+	if len(idx.Posts) != 0 {
+		t.Errorf("expected 0 posts (missing date skipped), got %d", len(idx.Posts))
 	}
 }
 
