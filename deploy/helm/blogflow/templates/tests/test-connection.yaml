@@ -8,14 +8,19 @@ metadata:
     "helm.sh/hook": test
 spec:
   restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: wget
-      image: busybox:1.37
+      image: busybox:1.37@sha256:b3255e7dfbcd10cb367af0d409747d511aeb66dfac98cf30e97e87e4207dd76f
       command: ['wget']
       args: ['--spider', 'http://{{ include "blogflow.fullname" . }}:{{ .Values.service.port }}/healthz']
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534
         readOnlyRootFilesystem: true
         allowPrivilegeEscalation: false
         capabilities:
