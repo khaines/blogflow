@@ -453,7 +453,7 @@ This means that after a content reload:
 | Post edited, TTL expired     | Fresh content rendered and cached on next request  |
 | New post added               | Cache miss → rendered and cached immediately       |
 | Post deleted                 | Stale HTML served until TTL expiry, then 404       |
-| `cache.ttl` set to `"0s"`   | Every request re-renders (no caching)              |
+| `cache.enabled` set to `false` | Every request re-renders (no caching)           |
 
 #### In-Flight Requests During a Flush
 
