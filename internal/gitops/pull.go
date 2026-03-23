@@ -3,8 +3,10 @@ package gitops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -23,6 +25,10 @@ type Puller struct {
 
 // NewPuller creates a git puller with the given auth configuration.
 func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
+	if authCfg == nil {
+		authCfg = &AuthConfig{Method: AuthNone}
+	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -51,13 +57,23 @@ func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
 // Returns true if content changed, false if already up-to-date.
 func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath string) (changed bool, err error) {
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
-		return p.pull(ctx, destPath, branch)
+		return p.pull(ctx, repoURL, branch, destPath)
 	}
 	return true, p.clone(ctx, repoURL, branch, destPath)
 }
 
+// sanitizeURL strips embedded credentials from a URL for safe logging.
+func sanitizeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
+
 func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) error {
-	p.logger.Info("cloning repository", "url", repoURL, "branch", branch, "dest", destPath)
+	p.logger.Info("cloning repository", "url", sanitizeURL(repoURL), "branch", branch, "dest", destPath)
 
 	opts := &git.CloneOptions{
 		URL:           repoURL,
@@ -69,14 +85,14 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 
 	_, err := git.PlainCloneContext(ctx, destPath, false, opts)
 	if err != nil {
-		return fmt.Errorf("gitops: clone %s: %w", repoURL, err)
+		return fmt.Errorf("gitops: clone %s: %w", sanitizeURL(repoURL), err)
 	}
 
-	p.logger.Info("clone complete", "url", repoURL)
+	p.logger.Info("clone complete", "url", sanitizeURL(repoURL))
 	return nil
 }
 
-func (p *Puller) pull(ctx context.Context, destPath, branch string) (bool, error) {
+func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bool, error) {
 	p.logger.Debug("pulling repository", "dest", destPath, "branch", branch)
 
 	repo, err := git.PlainOpen(destPath)
@@ -103,8 +119,18 @@ func (p *Puller) pull(ctx context.Context, destPath, branch string) (bool, error
 		Force:         true,
 	})
 
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return false, fmt.Errorf("gitops: pull %s: %w", destPath, err)
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		// Shallow clone + pull is a known go-git limitation.
+		// Fall back to delete and re-clone.
+		p.logger.Warn("pull failed, falling back to re-clone",
+			"dest", destPath, "error", err)
+		if removeErr := os.RemoveAll(destPath); removeErr != nil {
+			return false, fmt.Errorf("gitops: failed to clear for re-clone %s: %w", destPath, removeErr)
+		}
+		if cloneErr := p.clone(ctx, repoURL, branch, destPath); cloneErr != nil {
+			return false, cloneErr
+		}
+		return true, nil
 	}
 
 	headAfter, err := repo.Head()

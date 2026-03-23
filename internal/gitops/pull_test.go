@@ -58,6 +58,43 @@ func newBareRepoWithCommit(t *testing.T) string {
 	return bareDir
 }
 
+// addCommitToBareRepo pushes a new commit to a bare repo by cloning it,
+// committing a file, and pushing back.
+func addCommitToBareRepo(t *testing.T, bareDir, filename, content string) {
+	t.Helper()
+
+	tmpDir := filepath.Join(t.TempDir(), "push-src")
+	repo, err := git.PlainClone(tmpDir, false, &git.CloneOptions{URL: bareDir})
+	if err != nil {
+		t.Fatalf("clone for push: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, filename), []byte(content), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add(filename); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := wt.Commit("add "+filename, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := repo.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+}
+
 // generateTempSSHKey writes a PEM-encoded Ed25519 private key to a temp file
 // and returns its path.
 func generateTempSSHKey(t *testing.T) string {
@@ -88,6 +125,16 @@ func TestNewPuller_AuthNone(t *testing.T) {
 	}
 	if p.auth != nil {
 		t.Fatal("expected nil auth for AuthNone")
+	}
+}
+
+func TestNewPuller_NilAuthConfig(t *testing.T) {
+	p, err := NewPuller(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.auth != nil {
+		t.Fatal("expected nil auth when authCfg is nil (defaults to AuthNone)")
 	}
 }
 
@@ -189,5 +236,64 @@ func TestCloneOrPull_ContextCancel(t *testing.T) {
 	_, err = p.CloneOrPull(ctx, bareRepo, "master", destDir)
 	if err == nil {
 		t.Fatal("expected error on cancelled context")
+	}
+}
+
+func TestCloneOrPull_PullWithNewCommit(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "pull-new-commit")
+
+	// Initial clone.
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+
+	// Push a second commit to the bare repo.
+	addCommitToBareRepo(t, bareRepo, "second.txt", "new content\n")
+
+	// Pull should detect the change.
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("pull after new commit: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true after new commit was pushed")
+	}
+
+	// Verify the new file is present.
+	data, err := os.ReadFile(filepath.Join(destDir, "second.txt"))
+	if err != nil {
+		t.Fatalf("read new file: %v", err)
+	}
+	if string(data) != "new content\n" {
+		t.Fatalf("unexpected content: %q", data)
+	}
+}
+
+func TestSanitizeURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no creds", "https://github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"with token", "https://token@github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"with user+pass", "https://user:pass@github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"local path", "/tmp/bare-repo", "/tmp/bare-repo"},
+		{"ssh url", "git@github.com:org/repo.git", "git@github.com:org/repo.git"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeURL(tt.in)
+			if got != tt.want {
+				t.Errorf("sanitizeURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
