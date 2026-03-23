@@ -364,6 +364,101 @@ func TestNotFoundHandler(t *testing.T) {
 	}
 }
 
+func TestRenderTemplate_500(t *testing.T) {
+	// Engine with base.html but NO page templates — Render returns an error
+	// for every page template, exercising the 500 path in renderTemplate.
+	tmplFS := fstest.MapFS{
+		"templates/base.html": &fstest.MapFile{
+			Data: []byte(`{{block "content" .}}{{end}}`),
+		},
+	}
+	eng, err := theme.NewEngine(tmplFS)
+	if err != nil {
+		t.Fatalf("creating theme engine: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Content.PostsPerPage = 2
+
+	posts := []*content.Post{makePost("hello", "Hello", []string{"go"})}
+	pages := []*content.Post{makePage("about", "About")}
+
+	idx := &content.Index{
+		Posts:      posts,
+		BySlug:     map[string]*content.Post{"hello": posts[0]},
+		ByTag:      map[string][]*content.Post{"go": posts},
+		ByYear:     make(map[int][]*content.Post),
+		Pages:      pages,
+		PageBySlug: map[string]*content.Post{"about": pages[0]},
+	}
+
+	deps := &handlers.Deps{
+		Config: cfg,
+		Index:  idx,
+		Theme:  eng,
+	}
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		path    string
+		setup   func(r *http.Request)
+	}{
+		{
+			name:    "ListHandler",
+			handler: handlers.ListHandler(deps),
+			path:    "/",
+		},
+		{
+			name:    "PostHandler",
+			handler: handlers.PostHandler(deps),
+			path:    "/posts/hello",
+			setup:   func(r *http.Request) { r.SetPathValue("slug", "hello") },
+		},
+		{
+			name:    "PageHandler",
+			handler: handlers.PageHandler(deps),
+			path:    "/pages/about",
+			setup:   func(r *http.Request) { r.SetPathValue("slug", "about") },
+		},
+		{
+			name:    "TagHandler",
+			handler: handlers.TagHandler(deps),
+			path:    "/tags/go",
+			setup:   func(r *http.Request) { r.SetPathValue("tag", "go") },
+		},
+		{
+			name:    "NotFoundHandler",
+			handler: handlers.NotFoundHandler(deps),
+			path:    "/nonexistent",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.setup != nil {
+				tc.setup(req)
+			}
+			rec := httptest.NewRecorder()
+			tc.handler(rec, req)
+
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("expected 500, got %d", rec.Code)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, "Internal Server Error") {
+				t.Errorf("expected 'Internal Server Error' body, got: %s", body)
+			}
+			// Verify no partial template content leaked (buffered rendering).
+			if strings.Contains(body, "posts=") || strings.Contains(body, "post:") ||
+				strings.Contains(body, "page:") || strings.Contains(body, "404:") {
+				t.Errorf("partial template content leaked into 500 response: %s", body)
+			}
+		})
+	}
+}
+
 func TestTagHandler_Paginated(t *testing.T) {
 	posts := []*content.Post{
 		makePost("a", "Alpha", []string{"go"}),
