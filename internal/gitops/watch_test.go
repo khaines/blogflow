@@ -194,3 +194,19 @@ func TestWatchStrategy_ContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWatchStrategy_ConcurrentStartStop(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	w := NewWatchStrategy(func() error { return nil }, watchTestLogger(), dir)
+
+	// Run with -race to detect the data race on w.watcher.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = w.Start(context.Background())
+	}()
+	_ = w.Stop(context.Background())
+	<-done
+}
