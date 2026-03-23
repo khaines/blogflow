@@ -134,8 +134,8 @@ HTML:
 
 | Metric | Value |
 |---|---:|
-| Binary size | ~8 MB |
-| Container image | < 15 MB |
+| Binary size | ~18 MB |
+| Container image | < 25 MB |
 | Startup time | < 100 ms |
 | Memory (idle) | ~10 MB |
 
