@@ -1,11 +1,14 @@
 package theme
 
 import (
+	"html/template"
 	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/khaines/blogflow/internal/content"
 )
 
 func testFS(files map[string]string) fstest.MapFS {
@@ -346,6 +349,78 @@ func TestRender_HTMLEscaping(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Errorf("output %q does not contain %q", got, want)
 	}
+}
+
+// TestRender_HTMLEscaping_TemplateHTML verifies that the content pipeline's
+// sanitizer — not html/template auto-escaping — is what prevents XSS.
+// In production, Post.Content is template.HTML (bypasses auto-escaping).
+// This test proves that goldmark's renderer strips dangerous tags before
+// the content reaches the template engine.
+func TestRender_HTMLEscaping_TemplateHTML(t *testing.T) {
+	fs := testFS(map[string]string{
+		"templates/page.html": `{{define "content"}}<div>{{.Content}}</div>{{end}}`,
+	})
+
+	e, err := NewEngine(fs)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	r := content.NewRenderer()
+
+	// Simulate the production pipeline: render markdown containing dangerous
+	// HTML through the content renderer, then pass as template.HTML.
+	xssVectors := []struct {
+		name      string
+		input     string
+		forbidden string
+	}{
+		{"script_tag", "<script>alert('xss')</script>", "<script>"},
+		{"event_handler_onerror", `<img src=x onerror="alert('xss')">`, "onerror"},
+		{"event_handler_onload", `<svg onload="alert(1)">`, "onload"},
+		{"iframe", `<iframe src="javascript:alert(1)"></iframe>`, "<iframe"},
+	}
+
+	for _, tt := range xssVectors {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitized, err := r.RenderString(tt.input)
+			if err != nil {
+				t.Fatalf("RenderString: %v", err)
+			}
+
+			data := struct{ Content template.HTML }{
+				Content: template.HTML(sanitized), //nolint:gosec // testing that sanitizer already stripped the tag
+			}
+			got, err := e.RenderToString("templates/page.html", data)
+			if err != nil {
+				t.Fatalf("RenderToString: %v", err)
+			}
+
+			if strings.Contains(got, tt.forbidden) {
+				t.Errorf("template.HTML content contains %q; sanitizer did not strip it: %s", tt.forbidden, got)
+			}
+		})
+	}
+
+	// Prove that template.HTML actually bypasses auto-escaping: safe HTML
+	// tags rendered by goldmark must appear unescaped in the output.
+	// If they were escaped we'd see &lt;p&gt; instead of <p>.
+	t.Run("safe_html_unescaped", func(t *testing.T) {
+		safeMD, err := r.RenderString("hello **world**")
+		if err != nil {
+			t.Fatalf("RenderString: %v", err)
+		}
+		safeData := struct{ Content template.HTML }{
+			Content: template.HTML(safeMD), //nolint:gosec // safe content
+		}
+		safeGot, err := e.RenderToString("templates/page.html", safeData)
+		if err != nil {
+			t.Fatalf("RenderToString: %v", err)
+		}
+		if !strings.Contains(safeGot, "<strong>world</strong>") {
+			t.Errorf("template.HTML content was re-escaped; expected raw <strong> tag in: %s", safeGot)
+		}
+	})
 }
 
 func TestRenderToString(t *testing.T) {
