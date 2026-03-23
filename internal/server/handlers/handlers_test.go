@@ -76,7 +76,7 @@ func makePost(slug, title string, tags []string) *content.Post {
 			Date:  time.Now(),
 		},
 		Slug:    slug,
-		Content: template.HTML("<p>" + title + "</p>"),
+		Content: template.HTML("<p>" + title + "</p>"), //nolint:gosec // test data,
 	}
 }
 
@@ -86,7 +86,7 @@ func makePage(slug, title string) *content.Post {
 			Title: title,
 		},
 		Slug:    slug,
-		Content: template.HTML("<p>" + title + "</p>"),
+		Content: template.HTML("<p>" + title + "</p>"), //nolint:gosec // test data,
 	}
 }
 
