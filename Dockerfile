@@ -7,7 +7,8 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /app ./cmd/blogflow
 
 # Runtime stage — distroless, rootless, no shell
-FROM gcr.io/distroless/static-debian12:nonroot
+# gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12@sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1 AS runtime
 COPY --from=build /app /app
 USER nonroot:nonroot
 ENTRYPOINT ["/app"]
