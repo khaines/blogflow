@@ -158,14 +158,17 @@ func main() {
 		errCh <- srv.Start()
 	}()
 
-	// Brief wait to detect immediate bind failures
+	// Wait for listener to bind or an immediate failure
 	select {
 	case err := <-errCh:
 		logger.Error("server failed to start", "error", err)
 		os.Exit(1)
-	case <-time.After(100 * time.Millisecond):
+	case <-srv.Ready():
 		srv.SetReady(true)
 		logger.Info("server ready")
+	case <-time.After(5 * time.Second):
+		logger.Error("server did not become ready within timeout")
+		os.Exit(1)
 	}
 
 	// Wait for server to finish (shutdown or error)
