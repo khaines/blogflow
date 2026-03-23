@@ -94,17 +94,52 @@ func TestRender_Footnotes(t *testing.T) {
 
 func TestRender_CodeBlocks(t *testing.T) {
 	r := NewRenderer()
-	md := "```go\nfmt.Println(\"hello\")\n```"
-	got, err := r.RenderString(md)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "<code") {
-		t.Errorf("expected code block, got %q", got)
-	}
-	if !strings.Contains(got, "language-go") {
-		t.Errorf("expected language-go class, got %q", got)
-	}
+
+	t.Run("known_language", func(t *testing.T) {
+		md := "```go\nfmt.Println(\"hello\")\n```"
+		got, err := r.RenderString(md)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "<code") {
+			t.Errorf("expected code block, got %q", got)
+		}
+		// Chroma adds CSS classes for syntax tokens.
+		if !strings.Contains(got, `class="chroma"`) {
+			t.Errorf("expected chroma class for syntax highlighting, got %q", got)
+		}
+		if !strings.Contains(got, `class="nx"`) && !strings.Contains(got, `class="nf"`) {
+			t.Errorf("expected chroma token classes (nx/nf), got %q", got)
+		}
+	})
+
+	t.Run("unknown_language", func(t *testing.T) {
+		md := "```notareallang\nsome code here\n```"
+		got, err := r.RenderString(md)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "<pre") {
+			t.Errorf("expected pre block for unknown language, got %q", got)
+		}
+		if !strings.Contains(got, "some code here") {
+			t.Errorf("expected code content preserved, got %q", got)
+		}
+	})
+
+	t.Run("no_language", func(t *testing.T) {
+		md := "```\nplain code\n```"
+		got, err := r.RenderString(md)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "<pre") {
+			t.Errorf("expected pre block, got %q", got)
+		}
+		if !strings.Contains(got, "plain code") {
+			t.Errorf("expected code content preserved, got %q", got)
+		}
+	})
 }
 
 func TestRender_SecureDefault(t *testing.T) {
