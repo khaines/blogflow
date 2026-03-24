@@ -14,7 +14,11 @@ func newMetricsOverlay(reg *prometheus.Registry, layers ...fs.FS) *OverlayFS {
 	for i := range layers {
 		names[i] = layerName(i)
 	}
-	return NewOverlayFS(layers...).WithLayerNames(names).WithOptions(WithMetrics(reg))
+	ofs, err := NewOverlayFS(layers...).WithLayerNames(names).WithOptions(WithMetrics(reg))
+	if err != nil {
+		panic(err)
+	}
+	return ofs
 }
 
 func counterValue(reg *prometheus.Registry, name string, labels map[string]string) float64 {
@@ -126,9 +130,12 @@ func TestMetrics_LayerHitCounter(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	theme := fstest.MapFS{"style.css": {Data: []byte("theme-css")}}
 	defaults := fstest.MapFS{"base.css": {Data: []byte("default-css")}}
-	ofs := NewOverlayFS(theme, defaults).
+	ofs, err := NewOverlayFS(theme, defaults).
 		WithLayerNames([]string{"theme", "defaults"}).
 		WithOptions(WithMetrics(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Hit theme layer
 	f, err := ofs.Open("style.css")
@@ -290,4 +297,21 @@ func TestMetrics_NoPanicWhenDisabled(t *testing.T) {
 	_, _ = ofs.ReadDir(".")
 	_, _ = ofs.Stat("a.txt")
 	ofs.InvalidateAll()
+}
+
+func TestMetrics_DuplicateRegistrationReturnsError(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	layer := fstest.MapFS{"a.txt": {Data: []byte("a")}}
+
+	// First registration succeeds.
+	_, err := NewOverlayFS([]fs.FS{layer}, []string{"l0"}, WithMetrics(reg))
+	if err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+
+	// Second registration with the same registry must return an error, not panic.
+	_, err = NewOverlayFS([]fs.FS{layer}, []string{"l1"}, WithMetrics(reg))
+	if err == nil {
+		t.Fatal("expected error on duplicate metric registration")
+	}
 }

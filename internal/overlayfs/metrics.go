@@ -1,6 +1,8 @@
 package overlayfs
 
 import (
+	"fmt"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -15,7 +17,7 @@ type overlayMetrics struct {
 	pathRejected    *prometheus.CounterVec
 }
 
-func newOverlayMetrics(reg prometheus.Registerer) *overlayMetrics {
+func newOverlayMetrics(reg prometheus.Registerer) (*overlayMetrics, error) {
 	m := &overlayMetrics{
 		resolveDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -59,26 +61,33 @@ func newOverlayMetrics(reg prometheus.Registerer) *overlayMetrics {
 		),
 	}
 
-	reg.MustRegister(
-		m.resolveDuration,
-		m.layerHitTotal,
-		m.missTotal,
-		m.negCacheHit,
-		m.negCacheSize,
-		m.pathRejected,
-	)
+	collectors := []prometheus.Collector{
+		m.resolveDuration, m.layerHitTotal, m.missTotal,
+		m.negCacheHit, m.negCacheSize, m.pathRejected,
+	}
+	for _, c := range collectors {
+		if err := reg.Register(c); err != nil {
+			return nil, fmt.Errorf("overlayfs: register metric: %w", err)
+		}
+	}
 
-	return m
+	return m, nil
 }
 
 // Option configures an OverlayFS instance.
-type Option func(*OverlayFS)
+type Option func(*OverlayFS) error
 
 // WithMetrics enables Prometheus metrics collection on the overlay filesystem.
 // When not set, all instrumentation is a no-op with zero overhead.
+// Returns an error if metric registration fails (e.g., duplicate registration).
 func WithMetrics(reg prometheus.Registerer) Option {
-	return func(o *OverlayFS) {
-		o.metrics = newOverlayMetrics(reg)
+	return func(o *OverlayFS) error {
+		m, err := newOverlayMetrics(reg)
+		if err != nil {
+			return err
+		}
+		o.metrics = m
+		return nil
 	}
 }
 
@@ -90,7 +99,7 @@ func classifyInvalidPath(name string) string {
 	for i := 0; i < len(name); i++ {
 		if name[i] == '.' && (i == 0 || name[i-1] == '/') {
 			rest := name[i:]
-			if rest == ".." || len(rest) > 2 && rest[1] == '.' && rest[2] == '/' {
+			if rest == ".." || (len(rest) > 2 && rest[1] == '.' && rest[2] == '/') {
 				return "traversal"
 			}
 		}

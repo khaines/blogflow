@@ -268,7 +268,6 @@ func TestReadDir_PartialLayers(t *testing.T) {
 // §3.2 #10: Nil layer in constructor
 func TestNewOverlayFS_NilLayers(t *testing.T) {
 	defaults := fstest.MapFS{"test.txt": {Data: []byte("hello")}}
-	// After nil-filtering only one layer survives, so pass one name.
 	ofs := NewOverlayFS(nil, defaults, nil).WithLayerNames([]string{"defaults"})
 
 	if ofs.LayerCount() != 1 {

@@ -94,11 +94,13 @@ func NewOverlayFS(layers ...fs.FS) *OverlayFS {
 
 // WithOptions applies functional options to the OverlayFS.
 // This is used with options like WithMetrics.
-func (o *OverlayFS) WithOptions(opts ...Option) *OverlayFS {
+func (o *OverlayFS) WithOptions(opts ...Option) (*OverlayFS, error) {
 	for _, opt := range opts {
-		opt(o)
+		if err := opt(o); err != nil {
+			return nil, fmt.Errorf("overlayfs: apply option: %w", err)
+		}
 	}
-	return o
+	return o, nil
 }
 
 // WithLayerNames sets human-readable names for the overlay layers.
