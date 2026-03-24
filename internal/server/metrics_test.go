@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -114,10 +113,12 @@ func TestMetricsMiddlewareSkipsMetricsPath(t *testing.T) {
 }
 
 func TestMetricsMiddlewareInFlightGauge(t *testing.T) {
-	t.Parallel()
+	// Not parallel: the global in-flight gauge is shared with other tests
+	// that call MetricsMiddleware, so concurrent mutations cause flakes.
 
 	started := make(chan struct{})
 	release := make(chan struct{})
+	done := make(chan struct{})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
@@ -130,27 +131,21 @@ func TestMetricsMiddlewareInFlightGauge(t *testing.T) {
 	before := gaugeValue(t, "blogflow_http_requests_in_flight")
 
 	go func() {
+		defer close(done)
 		req := httptest.NewRequest(http.MethodGet, "/in-flight-test", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 	}()
 
-	<-started // wait until the handler is executing
+	<-started // handler is executing, Inc() has been called
 
 	during := gaugeValue(t, "blogflow_http_requests_in_flight")
-	if during-before != 1 {
-		t.Fatalf("expected in-flight gauge to increase by 1 during request, got delta %f", during-before)
+	if during != before+1 {
+		t.Fatalf("expected in-flight gauge to increase by 1 during request, before=%f during=%f", before, during)
 	}
 
 	close(release) // let the handler finish
-
-	// Give the goroutine a moment to complete defer.
-	for range 100 {
-		if gaugeValue(t, "blogflow_http_requests_in_flight") == before {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	<-done         // wait for goroutine to fully complete (including defer Dec)
 
 	after := gaugeValue(t, "blogflow_http_requests_in_flight")
 	if after != before {
