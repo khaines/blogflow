@@ -17,7 +17,7 @@ func newTestContextOverlay(logger *slog.Logger, layers ...fs.FS) *ContextOverlay
 	for i := range layers {
 		names[i] = layerName(i)
 	}
-	return NewContextOverlayFS(NewOverlayFS(layers, names), logger)
+	return NewContextOverlayFS(NewOverlayFS(layers...).WithLayerNames(names), logger)
 }
 
 // --- Context cancellation aborts resolution ---
@@ -278,7 +278,7 @@ func TestContextOpen_NotFound(t *testing.T) {
 
 func TestContextOpen_NilLogger(t *testing.T) {
 	layer := fstest.MapFS{"file.txt": {Data: []byte("data")}}
-	cfs := NewContextOverlayFS(NewOverlayFS([]fs.FS{layer}, []string{"test"}), nil)
+	cfs := NewContextOverlayFS(NewOverlayFS(layer).WithLayerNames([]string{"test"}), nil)
 
 	f, err := cfs.Open(context.Background(), "file.txt")
 	if err != nil {
@@ -288,7 +288,7 @@ func TestContextOpen_NilLogger(t *testing.T) {
 }
 
 func TestContextOpen_NilLoggerPathTraversal(t *testing.T) {
-	cfs := NewContextOverlayFS(NewOverlayFS([]fs.FS{fstest.MapFS{}}, []string{"test"}), nil)
+	cfs := NewContextOverlayFS(NewOverlayFS(fstest.MapFS{}).WithLayerNames([]string{"test"}), nil)
 
 	_, err := cfs.Open(context.Background(), "../etc/passwd")
 	if err == nil {
@@ -385,7 +385,7 @@ func TestNewContextOverlayFS_NilInnerPanics(t *testing.T) {
 // --- Inner accessor ---
 
 func TestContextInner_ReturnsSameOverlayFS(t *testing.T) {
-	inner := NewOverlayFS([]fs.FS{fstest.MapFS{}}, []string{"test"})
+	inner := NewOverlayFS(fstest.MapFS{}).WithLayerNames([]string{"test"})
 	cfs := NewContextOverlayFS(inner, nil)
 
 	if got := cfs.Inner(); got != inner {

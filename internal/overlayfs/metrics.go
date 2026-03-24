@@ -1,0 +1,99 @@
+package overlayfs
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// overlayMetrics holds all Prometheus metrics for the overlay filesystem.
+// When nil on OverlayFS, all instrumentation is a no-op (zero overhead).
+type overlayMetrics struct {
+	resolveDuration *prometheus.HistogramVec
+	layerHitTotal   *prometheus.CounterVec
+	missTotal       prometheus.Counter
+	negCacheHit     prometheus.Counter
+	negCacheSize    prometheus.Gauge
+	pathRejected    *prometheus.CounterVec
+}
+
+func newOverlayMetrics(reg prometheus.Registerer) *overlayMetrics {
+	m := &overlayMetrics{
+		resolveDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "blogflow_overlay_resolve_duration_seconds",
+				Help:    "Time to resolve a file through the layer stack.",
+				Buckets: []float64{0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1},
+			},
+			[]string{"op"},
+		),
+		layerHitTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "blogflow_overlay_layer_hit_total",
+				Help: "Number of times each layer served a file.",
+			},
+			[]string{"layer"},
+		),
+		missTotal: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "blogflow_overlay_miss_total",
+				Help: "Files not found in any layer.",
+			},
+		),
+		negCacheHit: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "blogflow_overlay_negcache_hit_total",
+				Help: "Negative cache hits (avoided layer checks).",
+			},
+		),
+		negCacheSize: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "blogflow_overlay_negcache_size",
+				Help: "Current number of entries in the negative cache.",
+			},
+		),
+		pathRejected: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "blogflow_overlay_path_rejected_total",
+				Help: "Path validation rejections.",
+			},
+			[]string{"reason"},
+		),
+	}
+
+	reg.MustRegister(
+		m.resolveDuration,
+		m.layerHitTotal,
+		m.missTotal,
+		m.negCacheHit,
+		m.negCacheSize,
+		m.pathRejected,
+	)
+
+	return m
+}
+
+// Option configures an OverlayFS instance.
+type Option func(*OverlayFS)
+
+// WithMetrics enables Prometheus metrics collection on the overlay filesystem.
+// When not set, all instrumentation is a no-op with zero overhead.
+func WithMetrics(reg prometheus.Registerer) Option {
+	return func(o *OverlayFS) {
+		o.metrics = newOverlayMetrics(reg)
+	}
+}
+
+// classifyInvalidPath returns a reason label for a rejected path.
+func classifyInvalidPath(name string) string {
+	if len(name) > 0 && name[0] == '/' {
+		return "absolute"
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '.' && (i == 0 || name[i-1] == '/') {
+			rest := name[i:]
+			if rest == ".." || len(rest) > 2 && rest[1] == '.' && rest[2] == '/' {
+				return "traversal"
+			}
+		}
+	}
+	return "invalid"
+}
