@@ -27,7 +27,7 @@ func TestSitemapHandler(t *testing.T) {
 	idx.Pages = append(idx.Pages, page)
 	idx.PageBySlug["about"] = page
 
-	h := handlers.NewSitemapHandler(cfg, idx)
+	h := handlers.NewSitemapHandler(handlers.NewDeps(cfg, idx, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
 	rec := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func TestSitemapHandler(t *testing.T) {
 func TestSitemapHandler_Empty(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(0)
-	h := handlers.NewSitemapHandler(cfg, idx)
+	h := handlers.NewSitemapHandler(handlers.NewDeps(cfg, idx, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
 	rec := httptest.NewRecorder()

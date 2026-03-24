@@ -77,39 +77,39 @@ type RSSItem struct {
 
 // FeedHandler serves an Atom or RSS 2.0 feed from the content index.
 type FeedHandler struct {
-	cfg   *config.Config
-	index *content.Index
+	deps *Deps
 }
 
-// NewFeedHandler creates a FeedHandler.
-func NewFeedHandler(cfg *config.Config, index *content.Index) *FeedHandler {
-	return &FeedHandler{cfg: cfg, index: index}
+// NewFeedHandler creates a FeedHandler backed by the shared Deps.
+func NewFeedHandler(deps *Deps) *FeedHandler {
+	return &FeedHandler{deps: deps}
 }
 
 func (h *FeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	posts := h.limitedPosts()
+	cfg := h.deps.LoadConfig()
+	posts := h.limitedPosts(cfg)
 
-	if h.cfg.Feed.Type == "rss" {
-		h.serveRSS(w, r, posts)
+	if cfg.Feed.Type == "rss" {
+		h.serveRSS(w, r, cfg, posts)
 		return
 	}
-	h.serveAtom(w, r, posts)
+	h.serveAtom(w, r, cfg, posts)
 }
 
-func (h *FeedHandler) limitedPosts() []*content.Post {
-	limit := h.cfg.Feed.Items
+func (h *FeedHandler) limitedPosts(cfg *config.Config) []*content.Post {
+	limit := cfg.Feed.Items
 	if limit <= 0 {
 		limit = 20
 	}
-	posts := h.index.Posts
+	posts := h.deps.LoadIndex().Posts
 	if len(posts) > limit {
 		posts = posts[:limit]
 	}
 	return posts
 }
 
-func (h *FeedHandler) serveAtom(w http.ResponseWriter, r *http.Request, posts []*content.Post) {
-	baseURL := h.cfg.Site.BaseURL
+func (h *FeedHandler) serveAtom(w http.ResponseWriter, r *http.Request, cfg *config.Config, posts []*content.Post) {
+	baseURL := cfg.Site.BaseURL
 
 	var lastMod time.Time
 	updated := time.Now().UTC().Format(time.RFC3339)
@@ -134,15 +134,15 @@ func (h *FeedHandler) serveAtom(w http.ResponseWriter, r *http.Request, posts []
 
 	feed := AtomFeed{
 		XMLNS: "http://www.w3.org/2005/Atom",
-		Title: h.cfg.Site.Title,
+		Title: cfg.Site.Title,
 		Links: []AtomLink{
 			{Href: baseURL + "/feed.xml", Rel: "self", Type: "application/atom+xml"},
 			{Href: baseURL + "/", Rel: "alternate", Type: "text/html"},
 		},
 		Updated: updated,
 		Author: AtomAuthor{
-			Name:  h.cfg.Site.Author.Name,
-			Email: h.cfg.Site.Author.Email,
+			Name:  cfg.Site.Author.Name,
+			Email: cfg.Site.Author.Email,
 		},
 		ID:      baseURL + "/",
 		Entries: entries,
@@ -151,8 +151,8 @@ func (h *FeedHandler) serveAtom(w http.ResponseWriter, r *http.Request, posts []
 	writeXMLCached(w, r, "application/atom+xml; charset=utf-8", feed, lastMod)
 }
 
-func (h *FeedHandler) serveRSS(w http.ResponseWriter, r *http.Request, posts []*content.Post) {
-	baseURL := h.cfg.Site.BaseURL
+func (h *FeedHandler) serveRSS(w http.ResponseWriter, r *http.Request, cfg *config.Config, posts []*content.Post) {
+	baseURL := cfg.Site.BaseURL
 
 	var lastMod time.Time
 	var pubDate string
@@ -175,10 +175,10 @@ func (h *FeedHandler) serveRSS(w http.ResponseWriter, r *http.Request, posts []*
 	feed := RSSFeed{
 		Version: "2.0",
 		Channel: RSSChannel{
-			Title:       h.cfg.Site.Title,
+			Title:       cfg.Site.Title,
 			Link:        baseURL,
-			Description: h.cfg.Site.Description,
-			Language:    h.cfg.Site.Language,
+			Description: cfg.Site.Description,
+			Language:    cfg.Site.Language,
 			PubDate:     pubDate,
 			Items:       items,
 		},

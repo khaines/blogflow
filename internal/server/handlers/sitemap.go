@@ -6,9 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/khaines/blogflow/internal/config"
-	"github.com/khaines/blogflow/internal/content"
 )
 
 // Sitemap XML structures per sitemaps.org protocol.
@@ -30,26 +27,27 @@ type URL struct {
 
 // SitemapHandler serves a sitemap.xml from the content index.
 type SitemapHandler struct {
-	cfg   *config.Config
-	index *content.Index
+	deps *Deps
 }
 
-// NewSitemapHandler creates a SitemapHandler.
-func NewSitemapHandler(cfg *config.Config, index *content.Index) *SitemapHandler {
-	return &SitemapHandler{cfg: cfg, index: index}
+// NewSitemapHandler creates a SitemapHandler backed by the shared Deps.
+func NewSitemapHandler(deps *Deps) *SitemapHandler {
+	return &SitemapHandler{deps: deps}
 }
 
 func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	baseURL := h.cfg.Site.BaseURL
+	cfg := h.deps.LoadConfig()
+	idx := h.deps.LoadIndex()
+	baseURL := cfg.Site.BaseURL
 
 	// Derive homepage lastmod from the most recent post.
 	homeURL := URL{Loc: baseURL + "/", ChangeFreq: "daily", Priority: "1.0"}
-	if len(h.index.Posts) > 0 && !h.index.Posts[0].Date.IsZero() {
-		homeURL.LastMod = h.index.Posts[0].Date.UTC().Format("2006-01-02")
+	if len(idx.Posts) > 0 && !idx.Posts[0].Date.IsZero() {
+		homeURL.LastMod = idx.Posts[0].Date.UTC().Format("2006-01-02")
 	}
 	urls := []URL{homeURL}
 
-	for _, p := range h.index.Posts {
+	for _, p := range idx.Posts {
 		u := URL{
 			Loc:        fmt.Sprintf("%s/posts/%s", baseURL, p.Slug),
 			ChangeFreq: "weekly",
@@ -61,7 +59,7 @@ func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		urls = append(urls, u)
 	}
 
-	for _, p := range h.index.Pages {
+	for _, p := range idx.Pages {
 		u := URL{
 			Loc:        fmt.Sprintf("%s/%s", baseURL, p.Slug),
 			ChangeFreq: "monthly",
@@ -85,12 +83,12 @@ func (h *SitemapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var lastMod time.Time
-	for _, p := range h.index.Posts {
+	for _, p := range idx.Posts {
 		if p.Date.After(lastMod) {
 			lastMod = p.Date
 		}
 	}
-	for _, p := range h.index.Pages {
+	for _, p := range idx.Pages {
 		if p.Date.After(lastMod) {
 			lastMod = p.Date
 		}

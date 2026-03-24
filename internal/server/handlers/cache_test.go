@@ -14,7 +14,7 @@ import (
 func TestFeedHandler_CacheHeaders(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	rec := httptest.NewRecorder()
@@ -39,7 +39,7 @@ func TestFeedHandler_CacheHeaders(t *testing.T) {
 func TestFeedHandler_ETag304(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// First request to obtain ETag.
 	req1 := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
@@ -68,7 +68,7 @@ func TestFeedHandler_ETag304(t *testing.T) {
 func TestFeedHandler_IfModifiedSince304(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// Newest post date is 2025-01-15 12:00:00 UTC (from testIndex).
 	future := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -86,7 +86,7 @@ func TestFeedHandler_IfModifiedSince304(t *testing.T) {
 func TestFeedHandler_IfModifiedSince200WhenNewer(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// Date well before the newest post.
 	old := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -106,7 +106,7 @@ func TestFeedHandler_IfModifiedSince200WhenNewer(t *testing.T) {
 func TestSitemapHandler_CacheHeaders(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(2)
-	h := handlers.NewSitemapHandler(cfg, idx)
+	h := handlers.NewSitemapHandler(handlers.NewDeps(cfg, idx, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
 	rec := httptest.NewRecorder()
@@ -129,7 +129,7 @@ func TestSitemapHandler_CacheHeaders(t *testing.T) {
 func TestSitemapHandler_ETag304(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(2)
-	h := handlers.NewSitemapHandler(cfg, idx)
+	h := handlers.NewSitemapHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// First request to obtain ETag.
 	req1 := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
@@ -155,7 +155,7 @@ func TestSitemapHandler_ETag304(t *testing.T) {
 func TestSitemapHandler_IfModifiedSince304(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(2)
-	h := handlers.NewSitemapHandler(cfg, idx)
+	h := handlers.NewSitemapHandler(handlers.NewDeps(cfg, idx, nil))
 
 	future := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
 
@@ -174,7 +174,7 @@ func TestSitemapHandler_IfModifiedSince304(t *testing.T) {
 func TestFeedHandler_IfNoneMatchMultiValue(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// Get the real ETag.
 	req1 := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
@@ -196,7 +196,7 @@ func TestFeedHandler_IfNoneMatchMultiValue(t *testing.T) {
 func TestFeedHandler_IfNoneMatchWildcard(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	req.Header.Set("If-None-Match", "*")
@@ -211,7 +211,7 @@ func TestFeedHandler_IfNoneMatchWildcard(t *testing.T) {
 func TestFeedHandler_IfNoneMatchMiss_IgnoresIfModifiedSince(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	h := handlers.NewFeedHandler(handlers.NewDeps(cfg, idx, nil))
 
 	// Send mismatched ETag AND a future If-Modified-Since.
 	// Per RFC 7232 §3.3, If-Modified-Since MUST be ignored when
