@@ -118,8 +118,13 @@ func main() {
 	logger.Info("configuration loaded", "port", cfg.Server.Port, "theme", cfg.Theme.Name)
 
 	// 2b. Content bootstrap: clone repo before scanning
+	var (
+		bootstrapPuller *gitops.Puller
+		repoBranch      string
+		repoDest        string
+	)
 	if cfg.Sync.Repo != "" {
-		bootstrapContent(cfg, *contentPath, logger)
+		bootstrapPuller, repoBranch, repoDest = bootstrapContent(cfg, *contentPath, logger)
 	}
 
 	// 3. Initialize content pipeline
@@ -167,6 +172,15 @@ func main() {
 	// Wire up content directory for file-watching sync
 	if ws, ok := syncStrategy.(*gitops.WatchStrategy); ok && *contentPath != "" {
 		ws.SetDirs(*contentPath)
+	}
+
+	// Wire up puller for poll sync (reuse bootstrap's Puller to avoid duplicate auth)
+	if ps, ok := syncStrategy.(*gitops.PollStrategy); ok && cfg.Sync.Repo != "" {
+		if bootstrapPuller != nil {
+			ps.SetPuller(bootstrapPuller, cfg.Sync.Repo, repoBranch, repoDest)
+		} else {
+			logger.Warn("poll sync not activated — git puller unavailable (check auth config)")
+		}
 	}
 
 	// 10. Register routes

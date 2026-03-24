@@ -17,16 +17,19 @@ func safeRepoURL(raw string) string { return gitops.SanitizeURL(raw) }
 // cold-start problem for webhook deployments where no content exists until
 // the first push event.
 //
+// Returns the configured Puller (nil on auth/creation failure) plus the
+// resolved branch and dest so callers can reuse them (e.g. poll wiring).
+//
 // Clone failures are logged but non-fatal — the server continues with
 // embedded defaults for graceful degradation.
-func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logger) {
+func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logger) (puller *gitops.Puller, branch, dest string) {
 	repoURL := cfg.Sync.Repo
-	branch := cfg.Sync.Branch
+	branch = cfg.Sync.Branch
 	if branch == "" {
 		branch = "main"
 	}
 
-	dest := contentPath
+	dest = contentPath
 	if dest == "" {
 		dest = "content"
 	}
@@ -36,13 +39,13 @@ func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logge
 	authCfg, err := gitops.LoadAuthFromEnv(logger)
 	if err != nil {
 		logger.Error("content bootstrap: failed to load git auth", "error", err)
-		return
+		return nil, branch, dest
 	}
 
-	puller, err := gitops.NewPuller(authCfg, logger, gitops.WithCloneDepth(cfg.Sync.CloneDepth))
+	puller, err = gitops.NewPuller(authCfg, logger, gitops.WithCloneDepth(cfg.Sync.CloneDepth))
 	if err != nil {
 		logger.Error("content bootstrap: failed to create git puller", "error", err)
-		return
+		return nil, branch, dest
 	}
 	puller.SparseDirs = cfg.Sync.SparseDirs
 
@@ -53,7 +56,7 @@ func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logge
 	if err != nil {
 		logger.Error("content bootstrap: clone/pull failed — continuing with defaults",
 			"repo", safeRepoURL(repoURL), "error", err)
-		return
+		return puller, branch, dest
 	}
 
 	if changed {
@@ -61,4 +64,5 @@ func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logge
 	} else {
 		logger.Info("content bootstrap: repository already up to date", "repo", safeRepoURL(repoURL), "branch", branch)
 	}
+	return puller, branch, dest
 }

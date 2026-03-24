@@ -67,7 +67,16 @@ func TestBootstrapContent_ClonesRepo(t *testing.T) {
 
 	logger := slog.Default()
 
-	bootstrapContent(cfg, destDir, logger)
+	puller, branch, dest := bootstrapContent(cfg, destDir, logger)
+	if puller == nil {
+		t.Fatal("expected non-nil puller after successful bootstrap")
+	}
+	if branch != "master" {
+		t.Errorf("expected branch %q, got %q", "master", branch)
+	}
+	if dest != destDir {
+		t.Errorf("expected dest %q, got %q", destDir, dest)
+	}
 
 	// Verify the cloned content exists.
 	postPath := filepath.Join(destDir, "posts", "test.md")
@@ -92,7 +101,9 @@ func TestBootstrapContent_CloneFailureIsNonFatal(t *testing.T) {
 	logger := slog.Default()
 
 	// Should not panic — clone failure is logged but non-fatal.
-	bootstrapContent(cfg, destDir, logger)
+	puller, _, _ := bootstrapContent(cfg, destDir, logger)
+	// Puller may be non-nil (auth succeeded) even if clone failed, or nil if auth failed.
+	_ = puller
 
 	// Dest dir may or may not exist; the important thing is no panic/crash.
 	if _, err := os.Stat(filepath.Join(destDir, ".git")); err == nil {
@@ -114,7 +125,10 @@ func TestBootstrapContent_DefaultBranch(t *testing.T) {
 
 	// "main" branch doesn't exist in our test repo (it uses "master"),
 	// so this should fail gracefully.
-	bootstrapContent(cfg, destDir, logger)
+	_, branch, _ := bootstrapContent(cfg, destDir, logger)
+	if branch != "main" {
+		t.Errorf("expected default branch %q, got %q", "main", branch)
+	}
 
 	// Non-fatal: server would continue.
 }
@@ -142,7 +156,10 @@ func TestBootstrapContent_DefaultContentPath(t *testing.T) {
 	logger := slog.Default()
 
 	// Empty contentPath should default to "content".
-	bootstrapContent(cfg, "", logger)
+	_, _, dest := bootstrapContent(cfg, "", logger)
+	if dest != "content" {
+		t.Errorf("expected default dest %q, got %q", "content", dest)
+	}
 
 	postPath := filepath.Join(tmpDir, "content", "posts", "test.md")
 	if _, err := os.Stat(postPath); err != nil {
@@ -163,10 +180,10 @@ func TestBootstrapContent_PullExisting(t *testing.T) {
 	logger := slog.Default()
 
 	// First clone.
-	bootstrapContent(cfg, destDir, logger)
+	bootstrapContent(cfg, destDir, logger) //nolint:dogsled
 
 	// Second call should pull (not re-clone) and succeed.
-	bootstrapContent(cfg, destDir, logger)
+	bootstrapContent(cfg, destDir, logger) //nolint:dogsled
 
 	postPath := filepath.Join(destDir, "posts", "test.md")
 	if _, err := os.Stat(postPath); err != nil {
