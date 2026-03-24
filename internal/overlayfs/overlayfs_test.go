@@ -13,7 +13,7 @@ func newTestOverlay(layers ...fs.FS) *OverlayFS {
 	for i := range layers {
 		names[i] = layerName(i)
 	}
-	return NewOverlayFS(layers, names)
+	return NewOverlayFS(layers...).WithLayerNames(names)
 }
 
 func layerName(i int) string {
@@ -268,7 +268,7 @@ func TestReadDir_PartialLayers(t *testing.T) {
 // §3.2 #10: Nil layer in constructor
 func TestNewOverlayFS_NilLayers(t *testing.T) {
 	defaults := fstest.MapFS{"test.txt": {Data: []byte("hello")}}
-	ofs := NewOverlayFS([]fs.FS{nil, defaults, nil}, []string{"nil1", "defaults", "nil2"})
+	ofs := NewOverlayFS(nil, defaults, nil).WithLayerNames([]string{"nil1", "defaults", "nil2"})
 
 	if ofs.LayerCount() != 1 {
 		t.Errorf("LayerCount() = %d, want 1 (nil layers should be skipped)", ofs.LayerCount())
@@ -277,7 +277,7 @@ func TestNewOverlayFS_NilLayers(t *testing.T) {
 
 // §3.2 #11: Zero layers
 func TestNewOverlayFS_ZeroLayers(t *testing.T) {
-	ofs := NewOverlayFS(nil, nil)
+	ofs := NewOverlayFS()
 	_, err := ofs.Open("anything.txt")
 	if err == nil {
 		t.Fatal("expected error with zero layers")

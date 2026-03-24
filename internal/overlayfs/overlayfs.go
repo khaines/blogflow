@@ -71,17 +71,13 @@ type resolution struct {
 // NewOverlayFS creates a new overlay with the given layers.
 // Layers are in priority order: layers[0] is checked first.
 // Nil layers are silently skipped.
-func NewOverlayFS(layers []fs.FS, names []string) *OverlayFS {
+func NewOverlayFS(layers ...fs.FS) *OverlayFS {
 	var filtered []fs.FS
 	var filteredNames []string
 	for i, l := range layers {
 		if l != nil {
 			filtered = append(filtered, l)
-			if i < len(names) {
-				filteredNames = append(filteredNames, names[i])
-			} else {
-				filteredNames = append(filteredNames, fmt.Sprintf("layer-%d", i))
-			}
+			filteredNames = append(filteredNames, fmt.Sprintf("layer-%d", i))
 		}
 	}
 	return &OverlayFS{
@@ -90,6 +86,19 @@ func NewOverlayFS(layers []fs.FS, names []string) *OverlayFS {
 		layerMeta:          make([]layerMeta, len(filtered)),
 		maxNegCacheEntries: 100_000,
 	}
+}
+
+// WithLayerNames sets human-readable names for the overlay layers.
+// Names correspond positionally to the non-nil layers passed to NewOverlayFS.
+// If fewer names than layers are provided, remaining layers keep their
+// default "layer-N" names.
+func (o *OverlayFS) WithLayerNames(names []string) *OverlayFS {
+	for i, n := range names {
+		if i < len(o.layerNames) {
+			o.layerNames[i] = n
+		}
+	}
+	return o
 }
 
 // NewFromPaths constructs the standard 4-layer BlogFlow overlay.
@@ -139,7 +148,7 @@ func NewFromPaths(themePath, contentPath, configPath string, defaults fs.FS) (*O
 		names = append(names, "defaults")
 	}
 
-	ofs := NewOverlayFS(layers, names)
+	ofs := NewOverlayFS(layers...).WithLayerNames(names)
 	for i, rp := range resolvedPaths {
 		if i < len(ofs.layerMeta) {
 			ofs.layerMeta[i] = layerMeta{rootPath: rp, isDisk: true}
@@ -155,7 +164,7 @@ func NewFromEmbed(defaults embed.FS, prefix string) (*OverlayFS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("overlayfs: fs.Sub(%q): %w", prefix, err)
 	}
-	return NewOverlayFS([]fs.FS{sub}, []string{"defaults"}), nil
+	return NewOverlayFS(sub).WithLayerNames([]string{"defaults"}), nil
 }
 
 // Open implements fs.FS. Returns the file from the highest-priority
