@@ -12,6 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Engine loads and caches templates from the overlay FS.
@@ -160,19 +163,9 @@ func defaultFuncMap() template.FuncMap {
 			}
 			return 1
 		},
-		"urlize": func(s string) string {
-			s = strings.ToLower(s)
-			s = strings.ReplaceAll(s, " ", "-")
-			var b strings.Builder
-			for _, r := range s {
-				if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-					b.WriteRune(r)
-				}
-			}
-			return b.String()
-		},
-		"add": func(a, b int) int { return a + b },
-		"sub": func(a, b int) int { return a - b },
+		"urlize": urlize,
+		"add":    func(a, b int) int { return a + b },
+		"sub":    func(a, b int) int { return a - b },
 		"seq": func(start, end int) ([]int, error) {
 			if end-start > 10000 || end-start < 0 {
 				return nil, fmt.Errorf("seq: range %d exceeds maximum 10000", end-start)
@@ -184,4 +177,36 @@ func defaultFuncMap() template.FuncMap {
 			return s, nil
 		},
 	}
+}
+
+// urlize converts a human-readable title into a URL-safe slug.
+//
+// It lowercases the input, decomposes Unicode characters via NFKD normalization,
+// strips combining marks (diacritics) so that e.g. "é"→"e", and keeps non-Latin
+// scripts (CJK, Arabic, etc.) intact so browsers can percent-encode them.
+func urlize(s string) string {
+	s = strings.ToLower(s)
+
+	// NFKD decomposition splits characters like "é" into "e" + combining accent.
+	s = norm.NFKD.String(s)
+
+	s = strings.ReplaceAll(s, " ", "-")
+
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-':
+			b.WriteRune(r)
+		case unicode.Is(unicode.Mn, r):
+			// Drop combining marks (diacritics) left over from NFKD.
+		default:
+			// Keep non-Latin scripts (CJK, Cyrillic, Arabic, etc.) as-is.
+			if unicode.IsLetter(r) || unicode.IsNumber(r) {
+				b.WriteRune(r)
+			}
+		}
+	}
+
+	// NFC recomposition restores Hangul Jamo sequences back into syllable blocks.
+	return norm.NFC.String(b.String())
 }
