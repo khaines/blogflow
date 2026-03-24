@@ -21,12 +21,13 @@
 BlogFlow supports three content sync strategies plus an in-process git puller.
 Choose a deployment pattern based on your environment and update-latency needs:
 
-| Pattern | Strategy | Trigger | Latency | Network requirement |
-|---|---|---|---|---|
-| Local dev | `watch` | fsnotify file events | Instant (< 1 s) | None |
-| K8s sidecar | `sidecar` | git-sync symlink swap | Poll interval (default 60 s) | Egress to git remote |
-| K8s webhook | `webhook` | GitHub push webhook | Instant on push | Ingress (webhook) + egress (git clone) |
-| Docker prod | `webhook` | GitHub push webhook | Instant on push | Ingress (webhook) + egress (git clone) |
+| Pattern | Strategy | Trigger | Latency | Replicas | Network requirement |
+|---|---|---|---|---|---|
+| Local dev | `watch` | fsnotify file events | Instant (< 1 s) | 1 | None |
+| K8s sidecar | `sidecar` | git-sync symlink swap | ≤ poll period (default 60 s) | 1+ (**recommended for HA**) | Egress to git remote |
+| K8s webhook | `webhook` | GitHub push webhook | Instant on push | 1 | Ingress (webhook) + egress (git clone) |
+| K8s webhook + poll | `webhook` | Webhook + `poll_interval` | Instant (1 pod) / up to `poll_interval` (others) | 2+ (if sidecar not possible) | Ingress (webhook) + egress (git clone) |
+| Docker prod | `webhook` | GitHub push webhook | Instant on push | 1 | Ingress (webhook) + egress (git clone) |
 
 All patterns share the same binary and container image. Only the `sync.strategy`
 config value and surrounding infrastructure differ.
@@ -34,11 +35,14 @@ config value and surrounding infrastructure differ.
 ```mermaid
 graph TD
     Start{{Which environment?}} -->|Local / dev| P1["Pattern 1: watch\n(fsnotify)"]
-    Start -->|Kubernetes| K8s{{Inbound webhook\navailable?}}
+    Start -->|Kubernetes| K8s{{How many replicas?}}
     Start -->|Docker / VM| P4["Pattern 4: Docker webhook\n(go-git pull)"]
 
-    K8s -->|"No (restricted network)"| P2["Pattern 2: git-sync sidecar\n(outbound poll)"]
-    K8s -->|"Yes"| P3["Pattern 3: K8s webhook\n(go-git pull, instant)"]
+    K8s -->|"1 replica"| Single{{Inbound webhook\navailable?}}
+    K8s -->|"2+ replicas (HA)"| P2["✅ Pattern 2: git-sync sidecar\n(recommended for HA)"]
+
+    Single -->|"Yes"| P3["Pattern 3: K8s webhook\n(instant updates)"]
+    Single -->|"No"| P2
 ```
 
 ---
@@ -517,6 +521,135 @@ defaults to `AuthNone`.
   controller and egress to DNS (UDP/TCP 53) and HTTPS (TCP 443) to git remotes.
   See the [Container Security Guide](engineering/container-security.md#network-policy)
   for a ready-to-use NetworkPolicy manifest.
+
+### High Availability (Multi-Replica Deployments)
+
+#### Decision matrix
+
+| Replicas | Recommended strategy | Update latency | Content staleness | Complexity |
+|----------|---------------------|----------------|-------------------|------------|
+| 1 | **Webhook** | Instant | None | Low — single container, no sidecar |
+| 2+ | **Sidecar** ✅ | ≤ `--period` (default 60 s) | None — all pods converge | Low — git-sync is battle-tested |
+| 2+ (sidecar not possible) | Webhook + `poll_interval` | Instant (1 pod), up to `poll_interval` (others) | Up to `poll_interval` for N−1 pods | Medium — must accept staleness window |
+
+#### ⚠️ What does NOT work
+
+> **Do NOT use webhook alone with multiple replicas.** A GitHub webhook POST
+> reaches exactly one pod (whichever the Service selects). The remaining
+> replicas never receive the event and will serve stale content **indefinitely**
+> — until a pod restart or another webhook happens to land on them.
+
+```mermaid
+graph LR
+    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub"]
+    GH -->|"POST /api/webhook"| Svc["K8s Service"]
+    Svc -->|"routed to one pod"| Pod1["Pod 1 ✅\n(instant update)"]
+
+    Pod2["Pod 2 ❌\n(stale indefinitely)"] -.->|"never receives webhook"| Pod2
+    Pod3["Pod 3 ❌\n(stale indefinitely)"] -.->|"never receives webhook"| Pod3
+```
+
+---
+
+#### ✅ Recommended: Sidecar for multi-replica HA
+
+The [sidecar pattern](#pattern-2-kubernetes--git-sync-sidecar) is **the
+recommended strategy** for multi-replica deployments:
+
+- **Every pod** runs its own git-sync sidecar that independently polls the git
+  remote — no webhook routing concerns.
+- **All replicas converge** within the git-sync `--period` (typically 60 s).
+- **No shared storage** — each pod uses its own `emptyDir` volume.
+- **No inbound endpoint** required — only outbound HTTPS to the git remote.
+- **Self-healing** — pod restarts automatically get a fresh clone on startup.
+
+```mermaid
+graph LR
+    Git["Git Remote"] -- "poll every 60s" --> GS1["git-sync"]
+    Git -- "poll every 60s" --> GS2["git-sync"]
+    Git -- "poll every 60s" --> GS3["git-sync"]
+
+    subgraph Pod1 ["Pod 1"]
+        GS1 --> BF1["BlogFlow"]
+    end
+    subgraph Pod2 ["Pod 2"]
+        GS2 --> BF2["BlogFlow"]
+    end
+    subgraph Pod3 ["Pod 3"]
+        GS3 --> BF3["BlogFlow"]
+    end
+
+    BF1 & BF2 & BF3 --> Svc["K8s Service\n:8080"]
+```
+
+No additional configuration is needed beyond the standard
+[sidecar deployment](#pattern-2-kubernetes--git-sync-sidecar). Set
+`replicas: N` in your Deployment and each pod independently stays current.
+
+---
+
+#### Webhook is best for single-replica deployments
+
+For **single-replica** deployments, webhook is the best choice:
+
+- **Instant updates** — content reloads the moment GitHub pushes, with zero
+  polling delay.
+- **Simpler** — no sidecar container needed; BlogFlow handles git directly.
+- The single-replica problem (only one pod gets the webhook) does not apply.
+
+See the [webhook pattern above](#pattern-3-kubernetes--webhook--go-git-pull)
+for full setup instructions.
+
+---
+
+#### Alternative: Webhook + poll (multi-replica with documented staleness)
+
+If you **cannot use the sidecar pattern** (e.g., you need sub-second update
+latency on at least one pod and are willing to accept staleness on others),
+you can combine webhook with `poll_interval`:
+
+- The pod that receives the webhook updates **instantly**.
+- All other pods poll on `poll_interval` and will catch up within that window.
+- **Staleness window = `poll_interval`** (e.g., 5 minutes).
+
+This is a **tradeoff, not a recommendation.** Use the sidecar pattern if
+consistent convergence across all pods matters more than instant latency on
+a single pod.
+
+**Example site.yaml (webhook + poll):**
+
+```yaml
+sync:
+  strategy: webhook
+  webhook:
+    path: "/api/webhook"
+    branch_filter: "main"
+  poll_interval: "5m"           # other pods catch up within 5 minutes
+```
+
+> **Staleness guarantee:** With `poll_interval: 5m`, the worst-case staleness
+> for pods that did not receive the webhook is 5 minutes. Reduce this value
+> for tighter convergence at the cost of more git remote traffic.
+
+**Fan-out alternative:** Instead of polling, use a CI step or CronJob that
+curls each pod's webhook endpoint individually (via pod IPs or a headless
+Service) to ensure all replicas receive the event. This eliminates staleness
+but adds operational complexity.
+
+---
+
+#### Kubernetes considerations for multi-replica deployments
+
+- **Egress** — Each pod needs egress to the git remote. Ensure your
+  NetworkPolicy allows HTTPS (TCP 443) outbound.
+- **Auth** — Pass git credentials via `BLOGFLOW_GIT_TOKEN` environment variable
+  sourced from a Kubernetes Secret.
+- **Storage** — For webhook multi-replica, use a StatefulSet so each replica
+  gets its own PVC, or switch to `emptyDir` volumes (content is re-cloned on
+  restart). The sidecar pattern already uses `emptyDir` by default.
+- **Readiness probes** — Use the `/readyz` endpoint so traffic is not routed
+  to pods that haven't completed their initial content load. The probe returns
+  `200 OK` when ready and `503 Service Unavailable` during startup.
 
 ---
 
