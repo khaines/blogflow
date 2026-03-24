@@ -44,6 +44,7 @@ func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logge
 		logger.Error("content bootstrap: failed to create git puller", "error", err)
 		return
 	}
+	puller.SparseDirs = cfg.Sync.SparseDirs
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
