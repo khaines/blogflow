@@ -69,6 +69,24 @@ func TestNewStrategy_Unknown(t *testing.T) {
 	}
 }
 
+func TestNewStrategy_Poll(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.SyncConfig{
+		Strategy:     "poll",
+		PollInterval: "5m",
+	}
+
+	s, err := gitops.NewStrategy(cfg, noop, logger())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := s.(*gitops.PollStrategy); !ok {
+		t.Fatalf("expected *PollStrategy, got %T", s)
+	}
+}
+
 func TestNewStrategy_NilConfig(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +143,7 @@ func TestStrategy_Name(t *testing.T) {
 		{"watch", "watch"},
 		{"webhook", "webhook"},
 		{"sidecar", "sidecar"},
+		{"poll", "poll"},
 	}
 
 	for _, tc := range cases {
@@ -134,6 +153,9 @@ func TestStrategy_Name(t *testing.T) {
 			cfg := &config.SyncConfig{Strategy: tc.strategy}
 			if tc.strategy == "webhook" {
 				cfg.Webhook = config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}
+			}
+			if tc.strategy == "poll" {
+				cfg.PollInterval = "5m"
 			}
 
 			s, err := gitops.NewStrategy(cfg, noop, logger())
@@ -158,6 +180,7 @@ func TestStrategy_StartStop(t *testing.T) {
 		{"watch", &config.SyncConfig{Strategy: "watch"}},
 		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
 		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
+		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}},
 	}
 
 	for _, tc := range strategies {
@@ -175,6 +198,9 @@ func TestStrategy_StartStop(t *testing.T) {
 			}
 			if ss, ok := s.(*gitops.SidecarStrategy); ok {
 				ss.SetDir(t.TempDir())
+			}
+			if ps, ok := s.(*gitops.PollStrategy); ok {
+				ps.SetPuller(&fakePuller{}, "https://example.com/repo.git", "main", t.TempDir())
 			}
 
 			if err := s.Start(ctx); err != nil {
@@ -198,6 +224,7 @@ func TestStrategy_DoubleStop(t *testing.T) {
 		{"watch", &config.SyncConfig{Strategy: "watch"}},
 		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
 		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
+		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}},
 	}
 
 	for _, tc := range strategies {
@@ -215,6 +242,9 @@ func TestStrategy_DoubleStop(t *testing.T) {
 			}
 			if ss, ok := s.(*gitops.SidecarStrategy); ok {
 				ss.SetDir(t.TempDir())
+			}
+			if ps, ok := s.(*gitops.PollStrategy); ok {
+				ps.SetPuller(&fakePuller{}, "https://example.com/repo.git", "main", t.TempDir())
 			}
 
 			if err := s.Start(ctx); err != nil {
