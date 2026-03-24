@@ -18,8 +18,27 @@ func TestUrlize(t *testing.T) {
 		// Latin diacritics — decompose + strip combining marks.
 		{name: "cafe acute", input: "café", want: "cafe"},
 		{name: "german umlauts", input: "Ärger über Öl", want: "arger-uber-ol"},
+		{name: "german eszett", input: "Straße", want: "strasse"},
 		{name: "spanish enye", input: "Año Nuevo", want: "ano-nuevo"},
 		{name: "mixed diacritics", input: "Crème Brûlée", want: "creme-brulee"},
+
+		// Non-decomposable Latin characters — explicit transliteration.
+		{name: "ae ligature", input: "Ærodynamik", want: "aerodynamik"},
+		{name: "oe ligature", input: "Œuvre", want: "oeuvre"},
+		{name: "danish oe", input: "Ørsted", want: "orsted"},
+		{name: "polish l stroke", input: "Łódź", want: "lodz"},
+		{name: "icelandic thorn", input: "Þór", want: "thor"},
+		{name: "icelandic eth", input: "Norðurland", want: "nordurland"},
+
+		// Turkish İ — combining dot above must be stripped after NFKD.
+		{name: "turkish dotted I", input: "İstanbul", want: "istanbul"},
+
+		// Zero-width / invisible characters — must be stripped.
+		{name: "zero-width space", input: "hello\u200Bworld", want: "helloworld"},
+		{name: "zero-width joiner", input: "hello\u200Dworld", want: "helloworld"},
+		{name: "zero-width non-joiner", input: "hello\u200Cworld", want: "helloworld"},
+		{name: "soft hyphen", input: "break\u00ADpoint", want: "breakpoint"},
+		{name: "BOM", input: "\uFEFFtitle", want: "title"},
 
 		// CJK — characters preserved as-is.
 		{name: "chinese title", input: "你好世界", want: "你好世界"},

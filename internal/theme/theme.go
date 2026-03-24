@@ -179,16 +179,31 @@ func defaultFuncMap() template.FuncMap {
 	}
 }
 
+// latinTranslit maps non-decomposable Latin characters to ASCII equivalents.
+// NFKD handles most diacritics (é→e, ü→u) but these characters have no
+// Unicode decomposition and must be transliterated explicitly.
+var latinTranslit = map[rune]string{
+	'ß': "ss", 'æ': "ae", 'œ': "oe",
+	'ø': "o", 'đ': "d", 'ł': "l",
+	'þ': "th", 'ð': "d",
+}
+
 // urlize converts a human-readable title into a URL-safe slug.
 //
 // It lowercases the input, decomposes Unicode characters via NFKD normalization,
-// strips combining marks (diacritics) so that e.g. "é"→"e", and keeps non-Latin
+// strips combining marks (diacritics) so that e.g. "é"→"e", transliterates
+// non-decomposable Latin characters (ß→ss, æ→ae), and keeps non-Latin
 // scripts (CJK, Arabic, etc.) intact so browsers can percent-encode them.
 func urlize(s string) string {
 	s = strings.ToLower(s)
 
 	// NFKD decomposition splits characters like "é" into "e" + combining accent.
 	s = norm.NFKD.String(s)
+
+	// Transliterate Latin characters that NFKD does not decompose.
+	for old, repl := range latinTranslit {
+		s = strings.ReplaceAll(s, string(old), repl)
+	}
 
 	s = strings.ReplaceAll(s, " ", "-")
 
