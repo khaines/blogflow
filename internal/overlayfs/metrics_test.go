@@ -304,13 +304,13 @@ func TestMetrics_DuplicateRegistrationReturnsError(t *testing.T) {
 	layer := fstest.MapFS{"a.txt": {Data: []byte("a")}}
 
 	// First registration succeeds.
-	_, err := NewOverlayFS([]fs.FS{layer}, []string{"l0"}, WithMetrics(reg))
+	_, err := NewOverlayFS(layer).WithLayerNames([]string{"l0"}).WithOptions(WithMetrics(reg))
 	if err != nil {
 		t.Fatalf("first registration: %v", err)
 	}
 
 	// Second registration with the same registry must return an error, not panic.
-	_, err = NewOverlayFS([]fs.FS{layer}, []string{"l1"}, WithMetrics(reg))
+	_, err = NewOverlayFS(layer).WithLayerNames([]string{"l1"}).WithOptions(WithMetrics(reg))
 	if err == nil {
 		t.Fatal("expected error on duplicate metric registration")
 	}

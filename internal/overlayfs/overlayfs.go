@@ -578,6 +578,9 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 		}
 		return true
 	})
+	if o.metrics != nil {
+		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+	}
 	return nil
 }
 

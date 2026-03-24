@@ -65,10 +65,16 @@ func newOverlayMetrics(reg prometheus.Registerer) (*overlayMetrics, error) {
 		m.resolveDuration, m.layerHitTotal, m.missTotal,
 		m.negCacheHit, m.negCacheSize, m.pathRejected,
 	}
+	var registered []prometheus.Collector
 	for _, c := range collectors {
 		if err := reg.Register(c); err != nil {
+			// Roll back previously registered collectors.
+			for _, r := range registered {
+				reg.Unregister(r)
+			}
 			return nil, fmt.Errorf("overlayfs: register metric: %w", err)
 		}
+		registered = append(registered, c)
 	}
 
 	return m, nil
