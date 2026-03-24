@@ -72,6 +72,8 @@ type CacheConfig struct {
 // SyncConfig holds content sync strategy settings.
 type SyncConfig struct {
 	Strategy string        `yaml:"strategy"`
+	Repo     string        `yaml:"repo"`
+	Branch   string        `yaml:"branch"`
 	Webhook  WebhookConfig `yaml:"webhook"`
 }
 
@@ -130,6 +132,7 @@ func Default() *Config {
 		},
 		Sync: SyncConfig{
 			Strategy: "watch",
+			Branch:   "main",
 			Webhook: WebhookConfig{
 				Path:          "/api/webhook",
 				AllowedEvents: []string{"push"},

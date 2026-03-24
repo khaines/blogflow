@@ -329,6 +329,14 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.Strategy = v
 		return nil
 	},
+	"BLOGFLOW_SYNC_REPO": func(c *Config, v string) error {
+		c.Sync.Repo = v
+		return nil
+	},
+	"BLOGFLOW_SYNC_BRANCH": func(c *Config, v string) error {
+		c.Sync.Branch = v
+		return nil
+	},
 	"BLOGFLOW_WEBHOOK_SECRET": func(c *Config, v string) error {
 		c.Sync.Webhook.Secret = v
 		return nil
