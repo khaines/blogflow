@@ -366,6 +366,33 @@ func TestContextString_Missing(t *testing.T) {
 	}
 }
 
+// --- Constructor panics on nil inner ---
+
+func TestNewContextOverlayFS_NilInnerPanics(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for nil inner OverlayFS")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "nil OverlayFS") {
+			t.Errorf("unexpected panic value: %v", r)
+		}
+	}()
+	NewContextOverlayFS(nil, nil)
+}
+
+// --- Inner accessor ---
+
+func TestContextInner_ReturnsSameOverlayFS(t *testing.T) {
+	inner := NewOverlayFS([]fs.FS{fstest.MapFS{}}, []string{"test"})
+	cfs := NewContextOverlayFS(inner, nil)
+
+	if got := cfs.Inner(); got != inner {
+		t.Errorf("Inner() returned different pointer")
+	}
+}
+
 // --- Permission error propagates (does not fall through) ---
 
 func TestContextOpen_PermissionError(t *testing.T) {

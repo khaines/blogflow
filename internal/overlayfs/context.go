@@ -36,8 +36,18 @@ type ContextOverlayFS struct {
 
 // NewContextOverlayFS creates a context-aware overlay wrapping the given OverlayFS.
 // A nil logger is safe — logging will be silently skipped.
+// Panics if inner is nil (programming error).
 func NewContextOverlayFS(inner *OverlayFS, logger *slog.Logger) *ContextOverlayFS {
+	if inner == nil {
+		panic("overlayfs: NewContextOverlayFS called with nil OverlayFS")
+	}
 	return &ContextOverlayFS{inner: inner, logger: logger}
+}
+
+// Inner returns the underlying OverlayFS for callers that need a plain
+// fs.FS (e.g., html/template.ParseFS).
+func (c *ContextOverlayFS) Inner() *OverlayFS {
+	return c.inner
 }
 
 // Open opens a file with context support. Checks ctx.Done() before each
