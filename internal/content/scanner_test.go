@@ -632,3 +632,33 @@ func TestScan_PagesWeightAndTitleCombined(t *testing.T) {
 		}
 	}
 }
+
+func TestScan_PagesTitleTiebreakerCaseInsensitive(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/ios.md": &fstest.MapFile{
+			Data: []byte(mkPage("iOS Guide", "ios-guide", 0, "Content.\n")),
+		},
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte(mkPage("About", "about", 0, "Content.\n")),
+		},
+		"pages/zebra.md": &fstest.MapFile{
+			Data: []byte(mkPage("zebra", "zebra", 0, "Content.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 3 {
+		t.Fatalf("expected 3 pages, got %d", len(idx.Pages))
+	}
+
+	// Case-insensitive: about < ios guide < zebra
+	want := []string{"about", "ios-guide", "zebra"}
+	for i, slug := range want {
+		if idx.Pages[i].Slug != slug {
+			t.Errorf("pages[%d].Slug = %q, want %q", i, idx.Pages[i].Slug, slug)
+		}
+	}
+}

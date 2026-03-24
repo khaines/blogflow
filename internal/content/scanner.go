@@ -123,7 +123,7 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 		if idx.Pages[i].Weight != idx.Pages[j].Weight {
 			return idx.Pages[i].Weight < idx.Pages[j].Weight
 		}
-		return idx.Pages[i].Title < idx.Pages[j].Title
+		return strings.ToLower(idx.Pages[i].Title) < strings.ToLower(idx.Pages[j].Title)
 	})
 
 	// Rebuild secondary indexes from sorted Posts for deterministic ordering
