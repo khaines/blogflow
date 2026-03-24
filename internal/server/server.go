@@ -18,16 +18,23 @@ import (
 	"github.com/khaines/blogflow/internal/config"
 )
 
+// ContentChecker reports how many posts are available. Implementations must
+// be safe for concurrent use (the handler calls PostCount on every request).
+type ContentChecker interface {
+	PostCount() int
+}
+
 // Server is the BlogFlow HTTP server.
 type Server struct {
-	httpServer *http.Server
-	mux        *http.ServeMux
-	config     *config.Config
-	logger     *slog.Logger
-	ready      atomic.Bool
-	readyCh    chan struct{}
-	readyOnce  sync.Once
-	ipResolver *ClientIPResolver
+	httpServer     *http.Server
+	mux            *http.ServeMux
+	config         *config.Config
+	logger         *slog.Logger
+	ready          atomic.Bool
+	readyCh        chan struct{}
+	readyOnce      sync.Once
+	ipResolver     *ClientIPResolver
+	contentChecker atomic.Pointer[ContentChecker]
 }
 
 // New creates a new BlogFlow server.
@@ -116,6 +123,7 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	// Health checks
 	s.mux.HandleFunc("GET /healthz", s.healthHandler)
 	s.mux.HandleFunc("GET /readyz", s.readyHandler)
+	s.mux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 
 	// Prometheus metrics (registered directly on the mux, outside metrics middleware)
 	s.mux.Handle("GET /metrics", MetricsHandler())
@@ -266,6 +274,10 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 // SetReady marks the server as ready (or not) for traffic.
 func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 
+// SetContentChecker installs a ContentChecker used by /readyz and
+// /readyz/content to report content availability. Safe for concurrent use.
+func (s *Server) SetContentChecker(cc ContentChecker) { s.contentChecker.Store(&cc) }
+
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Cache-Control", "no-store")
@@ -274,8 +286,33 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, "not ready")
 		return
 	}
+
+	strict := r.URL.Query().Get("strict") == "true"
+	if cc := s.contentChecker.Load(); cc != nil && (*cc).PostCount() == 0 {
+		if strict {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprint(w, "not ready (no content)")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "ready (no content)")
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, "ready")
+}
+
+func (s *Server) contentReadyHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
+	if cc := s.contentChecker.Load(); cc != nil && (*cc).PostCount() > 0 {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "content available")
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = fmt.Fprint(w, "no content")
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.

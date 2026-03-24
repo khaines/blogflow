@@ -37,6 +37,15 @@ func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
 // SetIndex atomically replaces the content index. Safe for concurrent use.
 func (d *Deps) SetIndex(idx *content.Index) { d.index.Store(idx) }
 
+// PostCount returns the number of posts in the current index.
+// Implements server.ContentChecker.
+func (d *Deps) PostCount() int {
+	if idx := d.index.Load(); idx != nil {
+		return len(idx.Posts)
+	}
+	return 0
+}
+
 // PageData is the top-level data passed to all templates.
 type PageData struct {
 	Site       config.SiteConfig
