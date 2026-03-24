@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/khaines/blogflow/internal/envfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -157,7 +158,7 @@ func (l *Loader) Load() (*Config, error) {
 		l.logger.Debug("no config file found, using defaults")
 	}
 
-	applied, envErr := applyEnvOverrides(cfg)
+	applied, envErr := applyEnvOverrides(cfg, l.logger)
 	if envErr != nil {
 		return nil, fmt.Errorf("applying environment overrides: %w", envErr)
 	}
@@ -403,10 +404,27 @@ var secretEnvVars = map[string]bool{
 	"BLOGFLOW_WEBHOOK_SECRET": true,
 }
 
-func applyEnvOverrides(cfg *Config) ([]string, error) {
+func applyEnvOverrides(cfg *Config, logger ...*slog.Logger) ([]string, error) {
+	var log *slog.Logger
+	if len(logger) > 0 {
+		log = logger[0]
+	}
+
 	var applied []string
 	for name, setter := range envMap {
-		v, ok := os.LookupEnv(name)
+		var v string
+		var ok bool
+
+		if secretEnvVars[name] {
+			var err error
+			v, ok, err = envfile.ReadEnvOrFile(name, log)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			v, ok = os.LookupEnv(name)
+		}
+
 		if !ok {
 			continue
 		}

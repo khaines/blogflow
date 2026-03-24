@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+
+	"github.com/khaines/blogflow/internal/envfile"
 )
 
 // AuthMethod represents a git authentication configuration.
@@ -86,8 +88,12 @@ func LoadAuthFromEnv(logger *slog.Logger) (*AuthConfig, error) {
 		return cfg, nil
 	}
 
-	// Check token
-	if token := os.Getenv("BLOGFLOW_GIT_TOKEN"); token != "" {
+	// Check token (supports _FILE suffix for mounted secrets)
+	token, tokenSet, err := envfile.ReadEnvOrFile("BLOGFLOW_GIT_TOKEN", logger)
+	if err != nil {
+		return nil, fmt.Errorf("gitops: reading git token: %w", err)
+	}
+	if tokenSet && token != "" {
 		cfg := &AuthConfig{Method: AuthToken, Token: token}
 		if err := cfg.Validate(); err != nil {
 			return nil, err
