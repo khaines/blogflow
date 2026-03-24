@@ -51,6 +51,8 @@ func main() {
 	port := flag.Int("port", 0, "HTTP port (overrides config)")
 	dev := flag.Bool("dev", false, "Development mode (verbose logging)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
+	contentRepo := flag.String("content-repo", "", "Git repository URL for content bootstrap")
+	contentBranch := flag.String("content-branch", "", "Branch to clone for content bootstrap (default: main)")
 	flag.Parse()
 
 	if *showVersion {
@@ -103,7 +105,22 @@ func main() {
 		cfgCopy.Server.Port = *port
 		cfg = &cfgCopy
 	}
+	if *contentRepo != "" || *contentBranch != "" {
+		cfgCopy := *cfg
+		if *contentRepo != "" {
+			cfgCopy.Sync.Repo = *contentRepo
+		}
+		if *contentBranch != "" {
+			cfgCopy.Sync.Branch = *contentBranch
+		}
+		cfg = &cfgCopy
+	}
 	logger.Info("configuration loaded", "port", cfg.Server.Port, "theme", cfg.Theme.Name)
+
+	// 2b. Content bootstrap: clone repo before scanning
+	if cfg.Sync.Repo != "" {
+		bootstrapContent(cfg, *contentPath, logger)
+	}
 
 	// 3. Initialize content pipeline
 	renderer := content.NewRenderer()
