@@ -9,6 +9,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// blogBuckets provides histogram buckets tuned for blog serving workloads.
+// Most responses complete in < 10 ms, so we add fine granularity from 500 µs
+// to 1 s instead of using the default Prometheus buckets (5 ms – 10 s).
+var blogBuckets = []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0}
+
 var (
 	httpRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -22,15 +27,23 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "blogflow_http_request_duration_seconds",
 			Help:    "Duration of HTTP requests in seconds.",
-			Buckets: prometheus.DefBuckets,
+			Buckets: blogBuckets,
 		},
-		[]string{"method", "path"},
+		[]string{"method", "path", "status"},
+	)
+
+	httpRequestsInFlight = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "blogflow_http_requests_in_flight",
+			Help: "Number of HTTP requests currently being served.",
+		},
 	)
 )
 
 func init() {
 	prometheus.MustRegister(httpRequestsTotal)
 	prometheus.MustRegister(httpRequestDuration)
+	prometheus.MustRegister(httpRequestsInFlight)
 }
 
 // MetricsHandler returns the Prometheus metrics HTTP handler.
@@ -50,6 +63,9 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		httpRequestsInFlight.Inc()
+		defer httpRequestsInFlight.Dec()
+
 		start := time.Now()
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
@@ -63,8 +79,26 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start).Seconds()
 		status := strconv.Itoa(wrapped.statusCode)
+		statusBucket := statusBucketLabel(wrapped.statusCode)
 
 		httpRequestsTotal.WithLabelValues(r.Method, pattern, status).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, pattern).Observe(duration)
+		httpRequestDuration.WithLabelValues(r.Method, pattern, statusBucket).Observe(duration)
 	})
+}
+
+// statusBucketLabel maps an HTTP status code to a low-cardinality bucket
+// string ("2xx", "3xx", "4xx", "5xx"). Codes outside 200–599 return "other".
+func statusBucketLabel(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 300 && code < 400:
+		return "3xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	case code >= 500 && code < 600:
+		return "5xx"
+	default:
+		return "other"
+	}
 }
