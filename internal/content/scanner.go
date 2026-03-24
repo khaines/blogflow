@@ -30,7 +30,7 @@ type Index struct {
 	BySlug     map[string]*Post   // O(1) slug lookup
 	ByTag      map[string][]*Post // posts by tag
 	ByYear     map[int][]*Post    // posts by year
-	Pages      []*Post            // static pages (from pages/ dir)
+	Pages      []*Post            // static pages (from pages/ dir), sorted by weight asc then title
 	PageBySlug map[string]*Post   // O(1) page slug lookup
 }
 
