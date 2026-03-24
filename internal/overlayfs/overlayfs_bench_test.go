@@ -24,7 +24,7 @@ func benchOverlay(filesPerLayer int) *OverlayFS {
 		layers[li] = m
 	}
 
-	return NewOverlayFS(layers, names)
+	return NewOverlayFS(layers...).WithLayerNames(names)
 }
 
 // benchReadDirOverlay builds an overlay where each layer contributes
@@ -42,7 +42,7 @@ func benchReadDirOverlay(entriesPerLayer int) *OverlayFS {
 		layers[li] = m
 	}
 
-	return NewOverlayFS(layers, names)
+	return NewOverlayFS(layers...).WithLayerNames(names)
 }
 
 func BenchmarkOpen_TopLayer(b *testing.B) {

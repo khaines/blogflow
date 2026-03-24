@@ -13,7 +13,7 @@ func newTestOverlay(layers ...fs.FS) *OverlayFS {
 	for i := range layers {
 		names[i] = layerName(i)
 	}
-	return NewOverlayFS(layers, names)
+	return NewOverlayFS(layers...).WithLayerNames(names)
 }
 
 func layerName(i int) string {
@@ -268,16 +268,82 @@ func TestReadDir_PartialLayers(t *testing.T) {
 // §3.2 #10: Nil layer in constructor
 func TestNewOverlayFS_NilLayers(t *testing.T) {
 	defaults := fstest.MapFS{"test.txt": {Data: []byte("hello")}}
-	ofs := NewOverlayFS([]fs.FS{nil, defaults, nil}, []string{"nil1", "defaults", "nil2"})
+	// After nil-filtering only one layer survives, so pass one name.
+	ofs := NewOverlayFS(nil, defaults, nil).WithLayerNames([]string{"defaults"})
 
 	if ofs.LayerCount() != 1 {
 		t.Errorf("LayerCount() = %d, want 1 (nil layers should be skipped)", ofs.LayerCount())
 	}
+
+	res, err := ofs.resolveInfo("test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LayerName != "defaults" {
+		t.Errorf("LayerName = %q, want %q", res.LayerName, "defaults")
+	}
+}
+
+// WithLayerNames: full, partial, and excess name lists
+func TestWithLayerNames(t *testing.T) {
+	a := fstest.MapFS{"a.txt": {Data: []byte("a")}}
+	b := fstest.MapFS{"b.txt": {Data: []byte("b")}}
+	c := fstest.MapFS{"c.txt": {Data: []byte("c")}}
+
+	t.Run("exact", func(t *testing.T) {
+		ofs := NewOverlayFS(a, b, c).WithLayerNames([]string{"alpha", "beta", "gamma"})
+		for _, tc := range []struct {
+			file, wantName string
+			wantIdx        int
+		}{
+			{"a.txt", "alpha", 0},
+			{"b.txt", "beta", 1},
+			{"c.txt", "gamma", 2},
+		} {
+			res, err := ofs.resolveInfo(tc.file)
+			if err != nil {
+				t.Fatalf("resolveInfo(%q): %v", tc.file, err)
+			}
+			if res.LayerName != tc.wantName {
+				t.Errorf("resolveInfo(%q).LayerName = %q, want %q", tc.file, res.LayerName, tc.wantName)
+			}
+			if res.LayerIndex != tc.wantIdx {
+				t.Errorf("resolveInfo(%q).LayerIndex = %d, want %d", tc.file, res.LayerIndex, tc.wantIdx)
+			}
+		}
+	})
+
+	t.Run("fewer_names", func(t *testing.T) {
+		ofs := NewOverlayFS(a, b, c).WithLayerNames([]string{"alpha"})
+		res, err := ofs.resolveInfo("a.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.LayerName != "alpha" {
+			t.Errorf("LayerName = %q, want %q", res.LayerName, "alpha")
+		}
+		// Unnamed layers keep their default "layer-N" name.
+		res, err = ofs.resolveInfo("c.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.LayerName != "layer-2" {
+			t.Errorf("LayerName = %q, want %q", res.LayerName, "layer-2")
+		}
+	})
+
+	t.Run("excess_names", func(t *testing.T) {
+		// More names than layers should not panic.
+		ofs := NewOverlayFS(a).WithLayerNames([]string{"alpha", "beta", "gamma"})
+		if ofs.LayerCount() != 1 {
+			t.Errorf("LayerCount() = %d, want 1", ofs.LayerCount())
+		}
+	})
 }
 
 // §3.2 #11: Zero layers
 func TestNewOverlayFS_ZeroLayers(t *testing.T) {
-	ofs := NewOverlayFS(nil, nil)
+	ofs := NewOverlayFS()
 	_, err := ofs.Open("anything.txt")
 	if err == nil {
 		t.Fatal("expected error with zero layers")
