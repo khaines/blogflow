@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -65,7 +66,7 @@ func TestMetricsMiddlewareRecordsHistogram(t *testing.T) {
 
 	// Use PATCH to isolate from other tests sharing the global registry.
 	before := histogramCount(t, "blogflow_http_request_duration_seconds", map[string]string{
-		"method": "PATCH", "path": "unmatched",
+		"method": "PATCH", "path": "unmatched", "status": "2xx",
 	})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +79,7 @@ func TestMetricsMiddlewareRecordsHistogram(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	after := histogramCount(t, "blogflow_http_request_duration_seconds", map[string]string{
-		"method": "PATCH", "path": "unmatched",
+		"method": "PATCH", "path": "unmatched", "status": "2xx",
 	})
 
 	if diff := after - before; diff != 1 {
@@ -112,7 +113,155 @@ func TestMetricsMiddlewareSkipsMetricsPath(t *testing.T) {
 	}
 }
 
+func TestMetricsMiddlewareInFlightGauge(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := MetricsMiddleware(inner)
+
+	before := gaugeValue(t, "blogflow_http_requests_in_flight")
+
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/in-flight-test", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+	}()
+
+	<-started // wait until the handler is executing
+
+	during := gaugeValue(t, "blogflow_http_requests_in_flight")
+	if during-before != 1 {
+		t.Fatalf("expected in-flight gauge to increase by 1 during request, got delta %f", during-before)
+	}
+
+	close(release) // let the handler finish
+
+	// Give the goroutine a moment to complete defer.
+	for range 100 {
+		if gaugeValue(t, "blogflow_http_requests_in_flight") == before {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	after := gaugeValue(t, "blogflow_http_requests_in_flight")
+	if after != before {
+		t.Fatalf("expected in-flight gauge to return to %f after request, got %f", before, after)
+	}
+}
+
+func TestMetricsMiddlewareStatusLabelOnDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		wantBucket string
+	}{
+		{"2xx", http.StatusOK, "2xx"},
+		{"3xx", http.StatusMovedPermanently, "3xx"},
+		{"4xx", http.StatusNotFound, "4xx"},
+		{"5xx", http.StatusInternalServerError, "5xx"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Use OPTIONS + unique path suffix to isolate from other tests.
+			labels := map[string]string{
+				"method": "OPTIONS", "path": "unmatched", "status": tt.wantBucket,
+			}
+			before := histogramCount(t, "blogflow_http_request_duration_seconds", labels)
+
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+			})
+
+			handler := MetricsMiddleware(inner)
+			req := httptest.NewRequest(http.MethodOptions, "/status-label-test-"+tt.name, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			after := histogramCount(t, "blogflow_http_request_duration_seconds", labels)
+			if diff := after - before; diff != 1 {
+				t.Fatalf("expected histogram sample count with status=%s to increase by 1, got %d", tt.wantBucket, diff)
+			}
+		})
+	}
+}
+
+func TestBlogBuckets(t *testing.T) {
+	t.Parallel()
+
+	want := []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0}
+	if len(blogBuckets) != len(want) {
+		t.Fatalf("expected %d buckets, got %d", len(want), len(blogBuckets))
+	}
+	for i, b := range blogBuckets {
+		if b != want[i] {
+			t.Fatalf("bucket[%d] = %f, want %f", i, b, want[i])
+		}
+	}
+}
+
+func TestStatusBucketLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		code int
+		want string
+	}{
+		{200, "2xx"},
+		{201, "2xx"},
+		{299, "2xx"},
+		{301, "3xx"},
+		{304, "3xx"},
+		{400, "4xx"},
+		{404, "4xx"},
+		{499, "4xx"},
+		{500, "5xx"},
+		{503, "5xx"},
+		{100, "other"},
+		{600, "other"},
+	}
+
+	for _, tt := range tests {
+		got := statusBucketLabel(tt.code)
+		if got != tt.want {
+			t.Errorf("statusBucketLabel(%d) = %q, want %q", tt.code, got, tt.want)
+		}
+	}
+}
+
 // --- helpers ---
+
+func gaugeValue(t *testing.T, name string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("failed to gather metrics: %v", err)
+	}
+
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			return m.GetGauge().GetValue()
+		}
+	}
+	return 0
+}
 
 func counterValue(t *testing.T, name string, labels map[string]string) float64 {
 	t.Helper()
