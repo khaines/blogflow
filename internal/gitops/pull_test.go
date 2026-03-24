@@ -678,6 +678,72 @@ func TestCloneOrPull_NoTagsFetched(t *testing.T) {
 	}
 }
 
+func TestCloneOrPull_PullNoTagsFetched(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "pull-no-tags")
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+
+	// Add a tag and a new commit to the bare repo *after* initial clone.
+	addCommitToBareRepo(t, bareRepo, "tagged.txt", "tagged content\n")
+	bareGit, err := git.PlainOpen(bareRepo)
+	if err != nil {
+		t.Fatalf("open bare repo: %v", err)
+	}
+	head, err := bareGit.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	if _, err := bareGit.CreateTag("v2.0.0", head.Hash(), nil); err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+
+	// Pull — should fetch new commit but NOT the tag.
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true after new commit")
+	}
+
+	clonedRepo, err := git.PlainOpen(destDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	tags, err := clonedRepo.Tags()
+	if err != nil {
+		t.Fatalf("tags: %v", err)
+	}
+	tagCount := 0
+	tags.ForEach(func(_ *plumbing.Reference) error { //nolint:errcheck,gosec // counting tags
+		tagCount++
+		return nil
+	})
+	if tagCount != 0 {
+		t.Fatalf("expected 0 tags after pull with NoTags, got %d", tagCount)
+	}
+}
+
+func TestWithCloneDepth_ClampsInvalid(t *testing.T) {
+	for _, depth := range []int{0, -1, -100} {
+		p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil, WithCloneDepth(depth))
+		if err != nil {
+			t.Fatalf("new puller with depth %d: %v", depth, err)
+		}
+		if p.depth != 1 {
+			t.Errorf("WithCloneDepth(%d): got depth %d, want 1", depth, p.depth)
+		}
+	}
+}
+
 func TestCloneOrPull_PullRespectsDepth(t *testing.T) {
 	bareRepo := newBareRepoWithCommit(t)
 

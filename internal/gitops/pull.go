@@ -24,15 +24,21 @@ type Puller struct {
 	auth       transport.AuthMethod
 	logger     *slog.Logger
 	SparseDirs []string // if non-empty, only these directories are checked out
-	depth      int      // git clone/pull depth; 0 means full clone
+	depth      int      // git clone/fetch depth; 1 = shallowest
 }
 
 // PullerOption configures optional Puller behaviour.
 type PullerOption func(*Puller)
 
-// WithCloneDepth sets the shallow clone/pull depth. Must be >= 1.
+// WithCloneDepth sets the shallow clone/fetch depth.
+// Values < 1 are silently clamped to 1.
 func WithCloneDepth(depth int) PullerOption {
-	return func(p *Puller) { p.depth = depth }
+	return func(p *Puller) {
+		if depth < 1 {
+			depth = 1
+		}
+		p.depth = depth
+	}
 }
 
 // NewPuller creates a git puller with the given auth configuration.
