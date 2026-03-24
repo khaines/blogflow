@@ -118,8 +118,13 @@ func main() {
 	logger.Info("configuration loaded", "port", cfg.Server.Port, "theme", cfg.Theme.Name)
 
 	// 2b. Content bootstrap: clone repo before scanning
+	var (
+		bootstrapPuller *gitops.Puller
+		repoBranch      string
+		repoDest        string
+	)
 	if cfg.Sync.Repo != "" {
-		bootstrapContent(cfg, *contentPath, logger)
+		bootstrapPuller, repoBranch, repoDest = bootstrapContent(cfg, *contentPath, logger)
 	}
 
 	// 3. Initialize content pipeline
@@ -169,27 +174,12 @@ func main() {
 		ws.SetDirs(*contentPath)
 	}
 
-	// Wire up puller for poll sync
+	// Wire up puller for poll sync (reuse bootstrap's Puller to avoid duplicate auth)
 	if ps, ok := syncStrategy.(*gitops.PollStrategy); ok && cfg.Sync.Repo != "" {
-		authCfg, authErr := gitops.LoadAuthFromEnv(logger)
-		if authErr != nil {
-			logger.Error("failed to load git auth for poll strategy", "error", authErr)
+		if bootstrapPuller != nil {
+			ps.SetPuller(bootstrapPuller, cfg.Sync.Repo, repoBranch, repoDest)
 		} else {
-			puller, pullerErr := gitops.NewPuller(authCfg, logger)
-			if pullerErr != nil {
-				logger.Error("failed to create git puller for poll strategy", "error", pullerErr)
-			} else {
-				puller.SparseDirs = cfg.Sync.SparseDirs
-				branch := cfg.Sync.Branch
-				if branch == "" {
-					branch = "main"
-				}
-				dest := *contentPath
-				if dest == "" {
-					dest = "content"
-				}
-				ps.SetPuller(puller, cfg.Sync.Repo, branch, dest)
-			}
+			logger.Warn("poll sync not activated — git puller unavailable (check auth config)")
 		}
 	}
 
