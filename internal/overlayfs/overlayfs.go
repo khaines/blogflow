@@ -65,11 +65,21 @@ type negCacheEntry struct {
 	firstCandidateLayer int
 }
 
-// resolution describes which layer served a file.
-type resolution struct {
-	Path       string
-	LayerIndex int
-	LayerName  string
+// Resolution describes which layer served a file.
+//
+// Security: Resolution contains internal filesystem topology information.
+// It MUST NOT be included in HTTP responses, error messages shown to end
+// users, or any other externally visible output. It is intended for
+// server-side observability only (structured logging, OpenTelemetry spans).
+type Resolution struct {
+	// Path is the fs.FS-clean path that was resolved.
+	Path string `json:"-"`
+
+	// LayerIndex is the zero-based index of the layer that served the file.
+	LayerIndex int `json:"-"`
+
+	// LayerName is the human-readable name of the layer (e.g. "theme", "defaults").
+	LayerName string `json:"-"`
 }
 
 // NewOverlayFS creates a new overlay with the given layers.
@@ -187,7 +197,6 @@ func NewFromEmbed(defaults embed.FS, prefix string) (*OverlayFS, error) {
 // Only fs.ErrNotExist triggers fallthrough; other errors (EACCES, EIO)
 // are returned immediately.
 func (o *OverlayFS) Open(name string) (fs.File, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -258,7 +267,6 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 // ReadFile implements fs.ReadFileFS. Reads the entire file from the
 // highest-priority layer that contains it.
 func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -368,7 +376,6 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 // entries across all layers. For duplicate names, the entry from the
 // highest-priority layer wins. Entries are sorted by name.
 func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -428,7 +435,6 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // Stat implements fs.StatFS. Returns file info from the highest-priority
 // layer that contains the path.
 func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -591,10 +597,21 @@ func (o *OverlayFS) LayerCount() int {
 	return len(o.layers)
 }
 
+// Resolve returns metadata about which layer would serve the given path.
+//
+// Security: the returned Resolution MUST NOT appear in HTTP responses.
+// It is intended for server-side observability (logging, OTel spans).
+func (o *OverlayFS) Resolve(name string) (Resolution, error) {
+	r, err := o.resolveInfo(name)
+	if err != nil {
+		return Resolution{}, err
+	}
+	return *r, nil
+}
+
 // resolveInfo returns metadata about where a path resolves to.
 // Internal only — must NOT appear in HTTP responses.
-func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
+func (o *OverlayFS) resolveInfo(name string) (*Resolution, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrInvalid}
 	}
@@ -621,7 +638,7 @@ func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
 			if i < len(names) {
 				layerName = names[i]
 			}
-			return &resolution{
+			return &Resolution{
 				Path:       name,
 				LayerIndex: i,
 				LayerName:  layerName,

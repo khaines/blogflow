@@ -22,6 +22,9 @@ const (
 	RemoteAddrKey
 )
 
+// resolutionKey is a distinct unexported type for the Resolution context key.
+type resolutionContextKey struct{}
+
 // ContextOverlayFS wraps OverlayFS with context.Context support for
 // cancellation, tracing, and security log correlation. This is the
 // public API surface — consumers should use this type, not OverlayFS directly.
@@ -29,6 +32,12 @@ const (
 // It does NOT implement io/fs.FS because its methods require context.Context.
 // For stdlib consumers that need fs.FS (e.g., html/template.ParseFS), use
 // the inner OverlayFS directly.
+//
+// ContextOverlayFS is NOT safe for concurrent use. It is designed to be
+// created per-request and accessed from a single goroutine.
+//
+// Security: Resolution MUST NOT appear in HTTP responses. It is
+// intended for server-side observability only.
 type ContextOverlayFS struct {
 	inner  *OverlayFS
 	logger *slog.Logger
@@ -187,4 +196,22 @@ func (c *ContextOverlayFS) logOperation(ctx context.Context, op, name string, st
 func contextString(ctx context.Context, key contextKey) string {
 	v, _ := ctx.Value(key).(string)
 	return v
+}
+
+// ResolutionFromContext extracts a Resolution stored by ContextWithResolution.
+// Returns the Resolution and true if present, or the zero value and false
+// if no resolution has been stored.
+func ResolutionFromContext(ctx context.Context) (Resolution, bool) {
+	r, ok := ctx.Value(resolutionContextKey{}).(Resolution)
+	return r, ok
+}
+
+// ContextWithResolution returns a new context carrying the given Resolution.
+// This is intended for middleware or handlers that call OverlayFS.Resolve
+// and want to propagate the result downstream for observability.
+//
+// Security: Resolution MUST NOT appear in HTTP responses. It is
+// intended for server-side observability only.
+func ContextWithResolution(ctx context.Context, r Resolution) context.Context {
+	return context.WithValue(ctx, resolutionContextKey{}, r)
 }

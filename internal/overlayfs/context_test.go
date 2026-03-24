@@ -408,3 +408,84 @@ func TestContextOpen_PermissionError(t *testing.T) {
 		t.Errorf("expected fs.ErrPermission, got %v", err)
 	}
 }
+
+// --- Resolution type tests ---
+
+func TestResolve_CorrectLayerNameAndIndex(t *testing.T) {
+	theme := fstest.MapFS{"style.css": {Data: []byte("theme-css")}}
+	content := fstest.MapFS{"posts/hello.md": {Data: []byte("# Hello")}}
+	config := fstest.MapFS{}
+	defaults := fstest.MapFS{
+		"style.css":      {Data: []byte("default-css")},
+		"posts/hello.md": {Data: []byte("# Default Hello")},
+		"base.html":      {Data: []byte("<html>")},
+	}
+
+	ofs := newTestOverlay(theme, content, config, defaults)
+
+	tests := []struct {
+		name      string
+		path      string
+		wantIndex int
+		wantLayer string
+	}{
+		{"top layer", "style.css", 0, "theme"},
+		{"middle layer", "posts/hello.md", 1, "content"},
+		{"bottom layer", "base.html", 3, "defaults"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ofs.Resolve(tc.path)
+			if err != nil {
+				t.Fatalf("Resolve(%q) error: %v", tc.path, err)
+			}
+			if res.LayerIndex != tc.wantIndex {
+				t.Errorf("LayerIndex = %d, want %d", res.LayerIndex, tc.wantIndex)
+			}
+			if res.LayerName != tc.wantLayer {
+				t.Errorf("LayerName = %q, want %q", res.LayerName, tc.wantLayer)
+			}
+			if res.Path != tc.path {
+				t.Errorf("Path = %q, want %q", res.Path, tc.path)
+			}
+		})
+	}
+}
+
+func TestResolve_MissingFileReturnsError(t *testing.T) {
+	ofs := newTestOverlay(fstest.MapFS{})
+	_, err := ofs.Resolve("nonexistent.txt")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+	if !isNotExist(err) {
+		t.Errorf("expected ErrNotExist, got %v", err)
+	}
+}
+
+// --- ResolutionFromContext / ContextWithResolution ---
+
+func TestResolutionFromContext_EmptyContext(t *testing.T) {
+	_, ok := ResolutionFromContext(context.Background())
+	if ok {
+		t.Error("expected false from empty context")
+	}
+}
+
+func TestContextWithResolution_RoundTrip(t *testing.T) {
+	r := Resolution{
+		Path:       "style.css",
+		LayerIndex: 0,
+		LayerName:  "theme",
+	}
+	ctx := ContextWithResolution(context.Background(), r)
+
+	got, ok := ResolutionFromContext(ctx)
+	if !ok {
+		t.Fatal("expected Resolution in context")
+	}
+	if got.Path != r.Path || got.LayerIndex != r.LayerIndex || got.LayerName != r.LayerName {
+		t.Errorf("got %+v, want %+v", got, r)
+	}
+}
