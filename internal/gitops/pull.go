@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -62,10 +64,39 @@ func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
 // fallback re-clone path is triggered (e.g. shallow-clone corruption). To
 // intentionally switch URLs, delete destPath first and let CloneOrPull re-clone.
 func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath string) (changed bool, err error) {
+	if len(p.SparseDirs) > 0 {
+		cleaned, valErr := validateSparseDirs(p.SparseDirs)
+		if valErr != nil {
+			return false, fmt.Errorf("gitops: %w", valErr)
+		}
+		p.SparseDirs = cleaned
+	}
+
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
 		return p.pull(ctx, repoURL, branch, destPath)
 	}
 	return true, p.clone(ctx, repoURL, branch, destPath)
+}
+
+// validateSparseDirs sanitizes and validates sparse directory entries.
+// It rejects absolute paths and path-traversal components, and normalizes
+// each entry (trailing slashes, redundant separators).
+func validateSparseDirs(dirs []string) ([]string, error) {
+	cleaned := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		d = path.Clean(d)
+		if d == "." || d == "" {
+			continue
+		}
+		if path.IsAbs(d) {
+			return nil, fmt.Errorf("sparse dir must be relative, got %q", d)
+		}
+		if d == ".." || strings.HasPrefix(d, "../") || strings.Contains(d, "/../") {
+			return nil, fmt.Errorf("sparse dir must not contain path traversal, got %q", d)
+		}
+		cleaned = append(cleaned, d)
+	}
+	return cleaned, nil
 }
 
 // SanitizeURL strips embedded credentials from a URL for safe logging.
@@ -182,11 +213,14 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bo
 
 // cleanNonSparsePaths removes top-level files and directories from destPath
 // that are not in the configured SparseDirs set. The .git directory is always
-// preserved.
+// preserved. Nested sparse dirs (e.g. "posts/drafts") are handled by
+// extracting the top-level component for the allow-list.
 func (p *Puller) cleanNonSparsePaths(destPath string) error {
 	allowed := make(map[string]bool, len(p.SparseDirs))
 	for _, d := range p.SparseDirs {
-		allowed[d] = true
+		// Extract top-level component so "posts/drafts" preserves "posts".
+		top := strings.SplitN(d, "/", 2)[0]
+		allowed[top] = true
 	}
 
 	entries, err := os.ReadDir(destPath)

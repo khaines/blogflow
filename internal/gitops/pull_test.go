@@ -496,3 +496,58 @@ func TestCloneOrPull_PullWithSparseDirs(t *testing.T) {
 		t.Fatal("expected scripts/deploy.sh to remain absent after sparse pull")
 	}
 }
+
+func TestCloneOrPull_RejectsPathTraversal(t *testing.T) {
+	bareRepo := newBareRepoWithDirs(t)
+
+	cases := []struct {
+		name string
+		dirs []string
+	}{
+		{"dotdot", []string{"../etc"}},
+		{"absolute", []string{"/etc/passwd"}},
+		{"embedded dotdot", []string{"posts/../../etc"}},
+		{"bare dotdot", []string{".."}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+			if err != nil {
+				t.Fatalf("new puller: %v", err)
+			}
+			p.SparseDirs = tc.dirs
+
+			destDir := filepath.Join(t.TempDir(), "traversal-"+tc.name)
+			_, err = p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+			if err == nil {
+				t.Fatal("expected error for path-traversal sparse dir")
+			}
+		})
+	}
+}
+
+func TestCloneOrPull_SparseTrailingSlashNormalized(t *testing.T) {
+	bareRepo := newBareRepoWithDirs(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+	// Trailing slash should be normalized to "posts".
+	p.SparseDirs = []string{"posts/", "pages/"}
+
+	destDir := filepath.Join(t.TempDir(), "trailing-slash")
+
+	_, err = p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("CloneOrPull with trailing slash sparse dirs: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "posts", "hello.md")); err != nil {
+		t.Fatalf("expected posts/hello.md to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "scripts", "deploy.sh")); !os.IsNotExist(err) {
+		t.Fatal("expected scripts/ to be absent in sparse checkout")
+	}
+}
