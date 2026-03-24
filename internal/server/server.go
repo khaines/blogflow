@@ -276,7 +276,14 @@ func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 
 // SetContentChecker installs a ContentChecker used by /readyz and
 // /readyz/content to report content availability. Safe for concurrent use.
-func (s *Server) SetContentChecker(cc ContentChecker) { s.contentChecker.Store(&cc) }
+// Passing nil clears the checker (readyz falls back to basic ready/not-ready).
+func (s *Server) SetContentChecker(cc ContentChecker) {
+	if cc == nil {
+		s.contentChecker.Store(nil)
+		return
+	}
+	s.contentChecker.Store(&cc)
+}
 
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")

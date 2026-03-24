@@ -221,6 +221,40 @@ func TestReadyEndpoint_NoContentChecker(t *testing.T) {
 	}
 }
 
+func TestReadyEndpoint_NoContentChecker_Strict(t *testing.T) {
+	s := newTestServer(t)
+	s.SetReady(true)
+	// No content checker — strict should be ignored (backward compat)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz?strict=true", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if body := rec.Body.String(); body != "ready" {
+		t.Errorf("body = %q, want %q", body, "ready")
+	}
+}
+
+func TestReadyEndpoint_NilContentChecker(t *testing.T) {
+	s := newTestServer(t)
+	s.SetReady(true)
+	s.SetContentChecker(nil) // must not panic on subsequent requests
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if body := rec.Body.String(); body != "ready" {
+		t.Errorf("body = %q, want %q", body, "ready")
+	}
+}
+
 func TestContentReadyEndpoint_WithContent(t *testing.T) {
 	s := newTestServer(t)
 	s.SetContentChecker(&stubContentChecker{posts: 5})
