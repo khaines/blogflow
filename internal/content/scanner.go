@@ -32,6 +32,30 @@ type Index struct {
 	ByYear     map[int][]*Post    // posts by year
 	Pages      []*Post            // static pages (from pages/ dir)
 	PageBySlug map[string]*Post   // O(1) page slug lookup
+	scanErrors []error            // collected errors in best-effort mode
+}
+
+// Errors returns any errors collected during a best-effort scan.
+// Returns nil when scanning in strict (default) mode or when no errors occurred.
+func (idx *Index) Errors() []error {
+	return idx.scanErrors
+}
+
+// ScanOption configures scanning behavior.
+type ScanOption func(*scanConfig)
+
+type scanConfig struct {
+	bestEffort bool
+}
+
+// WithBestEffort enables best-effort scanning mode. Parse errors, duplicate
+// slugs, and slug conflicts are collected instead of aborting the scan.
+// The partial Index is returned along with a nil error; call Index.Errors()
+// to retrieve all collected errors.
+func WithBestEffort() ScanOption {
+	return func(c *scanConfig) {
+		c.bestEffort = true
+	}
 }
 
 // Scanner walks a content filesystem and builds an Index.
@@ -72,11 +96,21 @@ func NewScanner(renderer *Renderer, postsDir, pagesDir string, summaryLen int, l
 // Scan walks the given fs.FS and builds a content Index.
 // Only processes .md files. Skips drafts. Skips files without front matter.
 // Individual file parse errors are logged at WARN level and skipped.
-func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
+//
+// Pass WithBestEffort() to collect errors instead of failing fast.
+// In best-effort mode, the partial Index is returned with a nil error;
+// call Index.Errors() to retrieve all collected errors.
+func (s *Scanner) Scan(contentFS fs.FS, opts ...ScanOption) (*Index, error) {
+	var cfg scanConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	start := time.Now()
 	s.logger.Info("content scan started",
 		"posts_dir", s.postsDir,
 		"pages_dir", s.pagesDir,
+		"best_effort", cfg.bestEffort,
 	)
 
 	idx := &Index{
@@ -89,18 +123,26 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 	var errCount int
 
 	// Scan posts
-	if skipped, err := s.scanDir(contentFS, s.postsDir, idx, false); err != nil {
+	if skipped, err := s.scanDir(contentFS, s.postsDir, idx, false, cfg.bestEffort); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("scanning posts: %w", err)
+			if cfg.bestEffort {
+				idx.scanErrors = append(idx.scanErrors, fmt.Errorf("scanning posts: %w", err))
+			} else {
+				return nil, fmt.Errorf("scanning posts: %w", err)
+			}
 		}
 	} else {
 		errCount += skipped
 	}
 
 	// Scan pages
-	if skipped, err := s.scanDir(contentFS, s.pagesDir, idx, true); err != nil {
+	if skipped, err := s.scanDir(contentFS, s.pagesDir, idx, true, cfg.bestEffort); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("scanning pages: %w", err)
+			if cfg.bestEffort {
+				idx.scanErrors = append(idx.scanErrors, fmt.Errorf("scanning pages: %w", err))
+			} else {
+				return nil, fmt.Errorf("scanning pages: %w", err)
+			}
 		}
 	} else {
 		errCount += skipped
@@ -109,7 +151,12 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 	// Detect post/page cross-namespace slug collisions
 	for slug, page := range idx.PageBySlug {
 		if post, ok := idx.BySlug[slug]; ok {
-			return nil, fmt.Errorf("slug conflict: page %s and post %s share slug %q", page.Path, post.Path, slug)
+			conflictErr := fmt.Errorf("slug conflict: page %s and post %s share slug %q", page.Path, post.Path, slug)
+			if cfg.bestEffort {
+				idx.scanErrors = append(idx.scanErrors, conflictErr)
+			} else {
+				return nil, conflictErr
+			}
 		}
 	}
 
@@ -143,7 +190,9 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 
 // scanDir walks a directory, logging and skipping individual file parse errors.
 // Returns the count of skipped files due to errors.
-func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) (int, error) {
+// When bestEffort is true, duplicate slug errors are collected in idx.scanErrors
+// instead of stopping the scan.
+func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage, bestEffort bool) (int, error) {
 	var skipped int
 	err := fs.WalkDir(contentFS, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -235,13 +284,25 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage bool) 
 
 		if isPage {
 			if existing, ok := idx.PageBySlug[slug]; ok {
-				return fmt.Errorf("duplicate page slug %q: %s conflicts with %s", slug, filePath, existing.Path)
+				dupeErr := fmt.Errorf("duplicate page slug %q: %s conflicts with %s", slug, filePath, existing.Path)
+				if bestEffort {
+					idx.scanErrors = append(idx.scanErrors, dupeErr)
+					skipped++
+					return nil
+				}
+				return dupeErr
 			}
 			idx.Pages = append(idx.Pages, post)
 			idx.PageBySlug[slug] = post
 		} else {
 			if existing, ok := idx.BySlug[slug]; ok {
-				return fmt.Errorf("duplicate post slug %q: %s conflicts with %s", slug, filePath, existing.Path)
+				dupeErr := fmt.Errorf("duplicate post slug %q: %s conflicts with %s", slug, filePath, existing.Path)
+				if bestEffort {
+					idx.scanErrors = append(idx.scanErrors, dupeErr)
+					skipped++
+					return nil
+				}
+				return dupeErr
 			}
 			idx.Posts = append(idx.Posts, post)
 			idx.BySlug[slug] = post
