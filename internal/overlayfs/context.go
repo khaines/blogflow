@@ -50,8 +50,9 @@ func (c *ContextOverlayFS) Inner() *OverlayFS {
 	return c.inner
 }
 
-// Open opens a file with context support. Checks ctx.Done() before each
-// layer attempt. Logs WARN on path traversal attempts with request context values.
+// Open opens a file with context support. Checks ctx.Err() before
+// delegating to the inner OverlayFS. Logs WARN on path traversal attempts
+// with request context values.
 func (c *ContextOverlayFS) Open(ctx context.Context, name string) (fs.File, error) {
 	if err := c.checkPath(ctx, "open", name); err != nil {
 		return nil, err
@@ -162,7 +163,7 @@ func (c *ContextOverlayFS) checkPath(ctx context.Context, op, name string) error
 
 // logOperation logs span-like info for each FS operation via slog.
 func (c *ContextOverlayFS) logOperation(ctx context.Context, op, name string, start time.Time, err error) {
-	if c.logger == nil {
+	if c.logger == nil || !c.logger.Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	duration := time.Since(start)
