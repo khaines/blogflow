@@ -332,9 +332,9 @@ func TestSanitizeURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeURL(tt.in)
+			got := SanitizeURL(tt.in)
 			if got != tt.want {
-				t.Errorf("sanitizeURL(%q) = %q, want %q", tt.in, got, tt.want)
+				t.Errorf("SanitizeURL(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

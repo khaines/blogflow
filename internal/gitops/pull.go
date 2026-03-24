@@ -67,8 +67,8 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 	return true, p.clone(ctx, repoURL, branch, destPath)
 }
 
-// sanitizeURL strips embedded credentials from a URL for safe logging.
-func sanitizeURL(raw string) string {
+// SanitizeURL strips embedded credentials from a URL for safe logging.
+func SanitizeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.User == nil {
 		return raw
@@ -78,7 +78,7 @@ func sanitizeURL(raw string) string {
 }
 
 func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) error {
-	p.logger.Info("cloning repository", "url", sanitizeURL(repoURL), "branch", branch, "dest", destPath)
+	p.logger.Info("cloning repository", "url", SanitizeURL(repoURL), "branch", branch, "dest", destPath)
 
 	opts := &git.CloneOptions{
 		URL:           repoURL,
@@ -90,10 +90,10 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 
 	_, err := git.PlainCloneContext(ctx, destPath, false, opts)
 	if err != nil {
-		return fmt.Errorf("gitops: clone %s: %w", sanitizeURL(repoURL), err)
+		return fmt.Errorf("gitops: clone %s: %w", SanitizeURL(repoURL), err)
 	}
 
-	p.logger.Info("clone complete", "url", sanitizeURL(repoURL))
+	p.logger.Info("clone complete", "url", SanitizeURL(repoURL))
 	return nil
 }
 

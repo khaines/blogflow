@@ -22,12 +22,6 @@ func newLocalBareRepo(t *testing.T) string {
 		t.Fatalf("init source repo: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(srcDir, "posts", ".gitkeep"), nil, 0o600); err != nil {
-		if err := os.MkdirAll(filepath.Join(srcDir, "posts"), 0o750); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-	}
-
 	postContent := "---\ntitle: Bootstrap Test\ndate: 2024-01-01T00:00:00Z\n---\nBootstrap content\n"
 	if err := os.MkdirAll(filepath.Join(srcDir, "posts"), 0o750); err != nil {
 		t.Fatalf("mkdir posts: %v", err)
@@ -126,7 +120,7 @@ func TestBootstrapContent_DefaultBranch(t *testing.T) {
 }
 
 func TestBootstrapContent_DefaultContentPath(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: os.Chdir is process-global.
 
 	bareRepo := newLocalBareRepo(t)
 
