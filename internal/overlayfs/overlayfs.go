@@ -197,7 +197,6 @@ func NewFromEmbed(defaults embed.FS, prefix string) (*OverlayFS, error) {
 // Only fs.ErrNotExist triggers fallthrough; other errors (EACCES, EIO)
 // are returned immediately.
 func (o *OverlayFS) Open(name string) (fs.File, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -268,7 +267,6 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 // ReadFile implements fs.ReadFileFS. Reads the entire file from the
 // highest-priority layer that contains it.
 func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -378,7 +376,6 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 // entries across all layers. For duplicate names, the entry from the
 // highest-priority layer wins. Entries are sorted by name.
 func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
@@ -438,7 +435,6 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // Stat implements fs.StatFS. Returns file info from the highest-priority
 // layer that contains the path.
 func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
-	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
 		if o.metrics != nil {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()

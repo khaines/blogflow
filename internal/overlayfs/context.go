@@ -32,6 +32,12 @@ type resolutionContextKey struct{}
 // It does NOT implement io/fs.FS because its methods require context.Context.
 // For stdlib consumers that need fs.FS (e.g., html/template.ParseFS), use
 // the inner OverlayFS directly.
+//
+// ContextOverlayFS is NOT safe for concurrent use. It is designed to be
+// created per-request and accessed from a single goroutine.
+//
+// Security: Resolution MUST NOT appear in HTTP responses. It is
+// intended for server-side observability only.
 type ContextOverlayFS struct {
 inner  *OverlayFS
 logger *slog.Logger
