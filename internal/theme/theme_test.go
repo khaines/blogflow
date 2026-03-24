@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"context"
 	"html/template"
 	"strings"
 	"sync"
@@ -34,7 +35,7 @@ func TestNewEngine_LoadsTemplates(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := e.Render(&b, "templates/index.html", nil); err != nil {
+	if err := e.Render(context.Background(), &b, "templates/index.html", nil); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	if got := b.String(); !strings.Contains(got, "<h1>Hello</h1>") {
@@ -58,7 +59,7 @@ func TestRender_WithData(t *testing.T) {
 	}{Title: "My Post", Author: "Alice"}
 
 	var b strings.Builder
-	if err := e.Render(&b, "templates/post.html", data); err != nil {
+	if err := e.Render(context.Background(), &b, "templates/post.html", data); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	want := `<h1>My Post</h1><p>by Alice</p>`
@@ -157,7 +158,7 @@ func TestRender_FuncMap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewEngine: %v", err)
 			}
-			got, err := e.RenderToString("templates/t.html", tt.data)
+			got, err := e.RenderToString(context.Background(), "templates/t.html", tt.data)
 			if err != nil {
 				t.Fatalf("RenderToString: %v", err)
 			}
@@ -180,7 +181,7 @@ func TestRender_Partials(t *testing.T) {
 	}
 
 	data := struct{ SiteName string }{SiteName: "BlogFlow"}
-	got, err := e.RenderToString("templates/page.html", data)
+	got, err := e.RenderToString(context.Background(), "templates/page.html", data)
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestRender_MissingTemplate(t *testing.T) {
 	}
 
 	var b strings.Builder
-	err = e.Render(&b, "templates/nonexistent.html", nil)
+	err = e.Render(context.Background(), &b, "templates/nonexistent.html", nil)
 	if err == nil {
 		t.Fatal("expected error for missing template, got nil")
 	}
@@ -220,7 +221,7 @@ func TestRender_Blocks(t *testing.T) {
 			t.Fatalf("NewEngine: %v", err)
 		}
 
-		got, err := e.RenderToString("templates/empty.html", nil)
+		got, err := e.RenderToString(context.Background(), "templates/empty.html", nil)
 		if err != nil {
 			t.Fatalf("RenderToString: %v", err)
 		}
@@ -241,7 +242,7 @@ func TestRender_Blocks(t *testing.T) {
 			t.Fatalf("NewEngine: %v", err)
 		}
 
-		got, err := e.RenderToString("templates/home.html", nil)
+		got, err := e.RenderToString(context.Background(), "templates/home.html", nil)
 		if err != nil {
 			t.Fatalf("RenderToString: %v", err)
 		}
@@ -262,7 +263,7 @@ func TestReload(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	got, err := e.RenderToString("templates/index.html", nil)
+	got, err := e.RenderToString(context.Background(), "templates/index.html", nil)
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestReload(t *testing.T) {
 		t.Fatalf("Reload: %v", err)
 	}
 
-	got, err = e.RenderToString("templates/index.html", nil)
+	got, err = e.RenderToString(context.Background(), "templates/index.html", nil)
 	if err != nil {
 		t.Fatalf("RenderToString after reload: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestReload_ConcurrentWithRender(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_, _ = e.RenderToString("templates/t.html", nil)
+				_, _ = e.RenderToString(context.Background(), "templates/t.html", nil)
 			}
 		}()
 		go func() {
@@ -337,7 +338,7 @@ func TestRender_HTMLEscaping(t *testing.T) {
 	}
 
 	data := struct{ Content string }{Content: `<script>alert("xss")</script>`}
-	got, err := e.RenderToString("templates/page.html", data)
+	got, err := e.RenderToString(context.Background(), "templates/page.html", data)
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
@@ -391,7 +392,7 @@ func TestRender_HTMLEscaping_TemplateHTML(t *testing.T) {
 			data := struct{ Content template.HTML }{
 				Content: template.HTML(sanitized), //nolint:gosec // testing that sanitizer already stripped the tag
 			}
-			got, err := e.RenderToString("templates/page.html", data)
+			got, err := e.RenderToString(context.Background(), "templates/page.html", data)
 			if err != nil {
 				t.Fatalf("RenderToString: %v", err)
 			}
@@ -413,7 +414,7 @@ func TestRender_HTMLEscaping_TemplateHTML(t *testing.T) {
 		safeData := struct{ Content template.HTML }{
 			Content: template.HTML(safeMD), //nolint:gosec // safe content
 		}
-		safeGot, err := e.RenderToString("templates/page.html", safeData)
+		safeGot, err := e.RenderToString(context.Background(), "templates/page.html", safeData)
 		if err != nil {
 			t.Fatalf("RenderToString: %v", err)
 		}
@@ -455,7 +456,7 @@ func TestReadingTime_TemplateHTML(t *testing.T) {
 			}
 
 			data := struct{ Content template.HTML }{Content: tt.content}
-			got, err := e.RenderToString("templates/post.html", data)
+			got, err := e.RenderToString(context.Background(), "templates/post.html", data)
 			if err != nil {
 				t.Fatalf("RenderToString: %v", err)
 			}
@@ -477,11 +478,75 @@ func TestRenderToString(t *testing.T) {
 	}
 
 	data := struct{ Name string }{Name: "World"}
-	got, err := e.RenderToString("templates/greeting.html", data)
+	got, err := e.RenderToString(context.Background(), "templates/greeting.html", data)
 	if err != nil {
 		t.Fatalf("RenderToString: %v", err)
 	}
 	if !strings.Contains(got, "Hello, World!") {
 		t.Errorf("output %q does not contain %q", got, "Hello, World!")
+	}
+}
+
+func TestRender_CancelledContext(t *testing.T) {
+	fs := testFS(map[string]string{
+		"templates/index.html": `{{define "content"}}<h1>Hello</h1>{{end}}`,
+	})
+
+	e, err := NewEngine(fs)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	var b strings.Builder
+	err = e.Render(ctx, &b, "templates/index.html", nil)
+	if err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
+	}
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRenderToString_CancelledContext(t *testing.T) {
+	fs := testFS(map[string]string{
+		"templates/index.html": `{{define "content"}}<h1>Hello</h1>{{end}}`,
+	})
+
+	e, err := NewEngine(fs)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = e.RenderToString(ctx, "templates/index.html", nil)
+	if err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
+	}
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRender_ValidContext(t *testing.T) {
+	fs := testFS(map[string]string{
+		"templates/index.html": `{{define "content"}}<h1>Works</h1>{{end}}`,
+	})
+
+	e, err := NewEngine(fs)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	var b strings.Builder
+	if err := e.Render(context.Background(), &b, "templates/index.html", nil); err != nil {
+		t.Fatalf("Render with valid context: %v", err)
+	}
+	if !strings.Contains(b.String(), "<h1>Works</h1>") {
+		t.Errorf("output %q does not contain expected content", b.String())
 	}
 }

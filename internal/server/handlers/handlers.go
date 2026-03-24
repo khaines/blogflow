@@ -86,7 +86,7 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 			Pagination: pag,
 		}
 
-		renderTemplate(w, deps.Theme, "templates/list.html", data, http.StatusOK)
+		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -110,7 +110,7 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 			Title: post.Title,
 		}
 
-		renderTemplate(w, deps.Theme, "templates/post.html", data, http.StatusOK)
+		renderTemplate(w, r, deps.Theme, "templates/post.html", data, http.StatusOK)
 	}
 }
 
@@ -134,7 +134,7 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 			Title: page.Title,
 		}
 
-		renderTemplate(w, deps.Theme, "templates/page.html", data, http.StatusOK)
+		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
 	}
 }
 
@@ -165,7 +165,7 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			Pagination: pag,
 		}
 
-		renderTemplate(w, deps.Theme, "templates/list.html", data, http.StatusOK)
+		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -178,7 +178,7 @@ func NotFoundHandler(deps *Deps) http.HandlerFunc {
 			Title: "Page Not Found",
 		}
 
-		renderTemplate(w, deps.Theme, "templates/404.html", data, http.StatusNotFound)
+		renderTemplate(w, r, deps.Theme, "templates/404.html", data, http.StatusNotFound)
 	}
 }
 
@@ -216,9 +216,13 @@ func paginate(posts []*content.Post, page, perPage int) ([]*content.Post, *Pagin
 // renderTemplate renders the named template into a buffer, then writes
 // the response. If rendering fails the client receives a 500 error
 // without any partial content.
-func renderTemplate(w http.ResponseWriter, engine *theme.Engine, name string, data *PageData, statusCode int) {
+func renderTemplate(w http.ResponseWriter, r *http.Request, engine *theme.Engine, name string, data *PageData, statusCode int) {
 	var buf bytes.Buffer
-	if err := engine.Render(&buf, name, data); err != nil {
+	if err := engine.Render(r.Context(), &buf, name, data); err != nil {
+		if r.Context().Err() != nil {
+			slog.Debug("render aborted: client disconnected", "template", name, "error", err)
+			return
+		}
 		slog.Error("template render failed", "template", name, "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
