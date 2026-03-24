@@ -353,6 +353,21 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.PollInterval = v
 		return nil
 	},
+	"BLOGFLOW_SYNC_SPARSE_DIRS": func(c *Config, v string) error {
+		if v == "" {
+			c.Sync.SparseDirs = nil
+			return nil
+		}
+		parts := strings.Split(v, ",")
+		dirs := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if d := strings.TrimSpace(p); d != "" {
+				dirs = append(dirs, d)
+			}
+		}
+		c.Sync.SparseDirs = dirs
+		return nil
+	},
 	"BLOGFLOW_FEED_TYPE": func(c *Config, v string) error {
 		c.Feed.Type = v
 		return nil

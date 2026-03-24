@@ -75,6 +75,7 @@ type SyncConfig struct {
 	Repo         string        `yaml:"repo"`
 	Branch       string        `yaml:"branch"`
 	PollInterval string        `yaml:"poll_interval"` // Go duration (e.g. "5m"); empty = disabled
+	SparseDirs   []string      `yaml:"sparse_dirs"`   // limit checkout to these dirs; empty = full checkout
 	Webhook      WebhookConfig `yaml:"webhook"`
 }
 

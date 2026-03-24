@@ -339,3 +339,160 @@ func TestSanitizeURL(t *testing.T) {
 		})
 	}
 }
+
+// newBareRepoWithDirs creates a local bare repo with files in multiple directories
+// (posts/, pages/, scripts/, and a root README.md). Useful for sparse checkout tests.
+func newBareRepoWithDirs(t *testing.T) string {
+	t.Helper()
+
+	srcDir := filepath.Join(t.TempDir(), "src")
+	repo, err := git.PlainInit(srcDir, false)
+	if err != nil {
+		t.Fatalf("init source repo: %v", err)
+	}
+
+	// Create directory structure with files.
+	files := map[string]string{
+		"README.md":         "# root readme\n",
+		"posts/hello.md":    "# Hello\n",
+		"pages/about.md":    "# About\n",
+		"scripts/deploy.sh": "#!/bin/sh\necho deploy\n",
+		"static/style.css":  "body { color: #333; }\n",
+	}
+
+	for name, content := range files {
+		fullPath := filepath.Join(srcDir, name)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(fullPath), err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err = wt.Commit("initial commit with dirs", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	bareDir := filepath.Join(t.TempDir(), "bare")
+	if _, err := git.PlainClone(bareDir, true, &git.CloneOptions{URL: srcDir}); err != nil {
+		t.Fatalf("bare clone: %v", err)
+	}
+
+	return bareDir
+}
+
+func TestCloneOrPull_SparseClone(t *testing.T) {
+	bareRepo := newBareRepoWithDirs(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+	p.SparseDirs = []string{"posts", "pages"}
+
+	destDir := filepath.Join(t.TempDir(), "sparse-clone")
+
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("CloneOrPull (sparse clone): %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true on fresh sparse clone")
+	}
+
+	// Verify sparse dirs are present.
+	if _, err := os.Stat(filepath.Join(destDir, "posts", "hello.md")); err != nil {
+		t.Fatalf("expected posts/hello.md to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "pages", "about.md")); err != nil {
+		t.Fatalf("expected pages/about.md to exist: %v", err)
+	}
+
+	// Verify excluded dirs are absent.
+	if _, err := os.Stat(filepath.Join(destDir, "scripts", "deploy.sh")); !os.IsNotExist(err) {
+		t.Fatal("expected scripts/deploy.sh to be absent in sparse checkout")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "static", "style.css")); !os.IsNotExist(err) {
+		t.Fatal("expected static/style.css to be absent in sparse checkout")
+	}
+}
+
+func TestCloneOrPull_FullCloneWhenSparseDirsEmpty(t *testing.T) {
+	bareRepo := newBareRepoWithDirs(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+	// SparseDirs is nil — full checkout expected.
+
+	destDir := filepath.Join(t.TempDir(), "full-clone")
+
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("CloneOrPull (full clone): %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true on fresh clone")
+	}
+
+	// All files should be present.
+	for _, path := range []string{"README.md", "posts/hello.md", "pages/about.md", "scripts/deploy.sh", "static/style.css"} {
+		if _, err := os.Stat(filepath.Join(destDir, path)); err != nil {
+			t.Fatalf("expected %s to exist in full checkout: %v", path, err)
+		}
+	}
+}
+
+func TestCloneOrPull_PullWithSparseDirs(t *testing.T) {
+	bareRepo := newBareRepoWithDirs(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+	p.SparseDirs = []string{"posts", "pages"}
+
+	destDir := filepath.Join(t.TempDir(), "sparse-pull")
+
+	// Initial sparse clone.
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("initial sparse clone: %v", err)
+	}
+
+	// Push a new commit with files in both sparse and non-sparse dirs.
+	addCommitToBareRepo(t, bareRepo, "posts/new-post.md", "# New\n")
+
+	// Pull should detect the change and maintain sparse state.
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("sparse pull: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true after new commit")
+	}
+
+	// New post in sparse dir should be present.
+	if _, err := os.Stat(filepath.Join(destDir, "posts", "new-post.md")); err != nil {
+		t.Fatalf("expected posts/new-post.md to exist after pull: %v", err)
+	}
+
+	// Excluded dirs should still be absent.
+	if _, err := os.Stat(filepath.Join(destDir, "scripts", "deploy.sh")); !os.IsNotExist(err) {
+		t.Fatal("expected scripts/deploy.sh to remain absent after sparse pull")
+	}
+}

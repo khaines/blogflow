@@ -19,8 +19,9 @@ import (
 
 // Puller handles git clone and pull operations for content/theme repos.
 type Puller struct {
-	auth   transport.AuthMethod
-	logger *slog.Logger
+	auth       transport.AuthMethod
+	logger     *slog.Logger
+	SparseDirs []string // if non-empty, only these directories are checked out
 }
 
 // NewPuller creates a git puller with the given auth configuration.
@@ -80,17 +81,34 @@ func SanitizeURL(raw string) string {
 func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) error {
 	p.logger.Info("cloning repository", "url", SanitizeURL(repoURL), "branch", branch, "dest", destPath)
 
+	sparse := len(p.SparseDirs) > 0
+
 	opts := &git.CloneOptions{
 		URL:           repoURL,
 		Auth:          p.auth,
 		ReferenceName: plumbing.NewBranchReferenceName(branch),
 		SingleBranch:  true,
 		Depth:         1, // shallow clone for efficiency
+		NoCheckout:    sparse,
 	}
 
-	_, err := git.PlainCloneContext(ctx, destPath, false, opts)
+	repo, err := git.PlainCloneContext(ctx, destPath, false, opts)
 	if err != nil {
 		return fmt.Errorf("gitops: clone %s: %w", SanitizeURL(repoURL), err)
+	}
+
+	if sparse {
+		wt, wtErr := repo.Worktree()
+		if wtErr != nil {
+			return fmt.Errorf("gitops: worktree after clone %s: %w", SanitizeURL(repoURL), wtErr)
+		}
+		if coErr := wt.Checkout(&git.CheckoutOptions{
+			Branch:                    plumbing.NewBranchReferenceName(branch),
+			SparseCheckoutDirectories: p.SparseDirs,
+		}); coErr != nil {
+			return fmt.Errorf("gitops: sparse checkout %s: %w", SanitizeURL(repoURL), coErr)
+		}
+		p.logger.Info("sparse checkout applied", "dirs", p.SparseDirs)
 	}
 
 	p.logger.Info("clone complete", "url", SanitizeURL(repoURL))
@@ -144,10 +162,46 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bo
 	}
 
 	changed := headBefore.Hash() != headAfter.Hash()
+
+	// Re-apply sparse checkout after pull — PullContext checks out all files,
+	// so we remove entries outside the sparse set.
+	if changed && len(p.SparseDirs) > 0 {
+		if cleanErr := p.cleanNonSparsePaths(destPath); cleanErr != nil {
+			return false, fmt.Errorf("gitops: sparse cleanup after pull %s: %w", destPath, cleanErr)
+		}
+		p.logger.Info("sparse checkout re-applied after pull", "dirs", p.SparseDirs)
+	}
+
 	if changed {
 		p.logger.Info("pull complete — content updated", "dest", destPath)
 	} else {
 		p.logger.Debug("already up to date", "dest", destPath)
 	}
 	return changed, nil
+}
+
+// cleanNonSparsePaths removes top-level files and directories from destPath
+// that are not in the configured SparseDirs set. The .git directory is always
+// preserved.
+func (p *Puller) cleanNonSparsePaths(destPath string) error {
+	allowed := make(map[string]bool, len(p.SparseDirs))
+	for _, d := range p.SparseDirs {
+		allowed[d] = true
+	}
+
+	entries, err := os.ReadDir(destPath)
+	if err != nil {
+		return fmt.Errorf("read dir %s: %w", destPath, err)
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if name == ".git" || allowed[name] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(destPath, name)); err != nil {
+			return fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+	return nil
 }
