@@ -26,6 +26,7 @@ Choose a deployment pattern based on your environment and update-latency needs:
 | Local dev | `watch` | fsnotify file events | Instant (< 1 s) | None |
 | K8s sidecar | `sidecar` | git-sync symlink swap | Poll interval (default 60 s) | Egress to git remote |
 | K8s webhook | `webhook` | GitHub push webhook | Instant on push | Ingress (webhook) + egress (git clone) |
+| K8s webhook (HA) | `webhook` | Webhook + poll interval | Instant (webhook pod) / ≤ poll interval (others) | Ingress (webhook) + egress (git clone) |
 | Docker prod | `webhook` | GitHub push webhook | Instant on push | Ingress (webhook) + egress (git clone) |
 
 All patterns share the same binary and container image. Only the `sync.strategy`
@@ -517,6 +518,62 @@ defaults to `AuthNone`.
   controller and egress to DNS (UDP/TCP 53) and HTTPS (TCP 443) to git remotes.
   See the [Container Security Guide](engineering/container-security.md#network-policy)
   for a ready-to-use NetworkPolicy manifest.
+
+### High Availability with Webhook Strategy
+
+**The problem:** In multi-replica deployments, a GitHub webhook POST reaches
+only one pod (whichever the Service selects). The remaining replicas never
+receive the event and continue serving stale content until they are restarted.
+
+**Solution: fetch-on-start + poll interval**
+
+Combine the `webhook` strategy with `sync.repo`, `sync.branch`, and
+`sync.poll_interval` so that every pod is self-sufficient:
+
+1. **Cold start solved** — Configure `sync.repo` and `sync.branch` so each pod
+   clones content on startup. No pod depends on receiving a webhook to have
+   content.
+2. **HA solved** — Configure `sync.poll_interval: "5m"` so each pod
+   independently pulls on a timer, regardless of whether it received the
+   webhook.
+3. **Instant path preserved** — The webhook is still the fast path: the pod
+   that receives it updates within seconds. The poll interval is the
+   consistency guarantor for every other replica.
+
+```mermaid
+graph LR
+    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub"]
+    GH -->|"POST /api/webhook"| Pod1["Pod 1\n(instant update)"]
+
+    Pod1 -->|"periodic pull"| Repo["Git Remote"]
+    Pod2["Pod 2"] -->|"periodic pull"| Repo
+    Pod3["Pod 3"] -->|"periodic pull"| Repo
+```
+
+**Example site.yaml for HA webhook:**
+
+```yaml
+sync:
+  strategy: webhook
+  repo: "https://github.com/your-org/blog-content.git"
+  branch: "main"
+  poll_interval: "5m"
+  webhook:
+    path: "/api/webhook"
+    branch_filter: "main"
+```
+
+**Kubernetes considerations for multi-replica deployments:**
+
+- **Egress** — Each pod needs egress to the git remote. Ensure your
+  NetworkPolicy allows HTTPS (TCP 443) outbound.
+- **Auth** — Pass git credentials via `BLOGFLOW_GIT_TOKEN` environment variable
+  sourced from a Kubernetes Secret.
+- **Storage** — Each pod clones to its own `emptyDir` volume. No shared PVC or
+  `ReadWriteMany` volume is needed.
+- **Readiness probes** — Use `/readyz?strict=true` or `/readyz/content` for
+  readiness probes to delay traffic until content is cloned. This prevents pods
+  from serving 404s during startup.
 
 ---
 
