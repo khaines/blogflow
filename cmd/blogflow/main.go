@@ -192,6 +192,7 @@ func main() {
 		routeOpts.WebhookHandler = ws.Handler()
 	}
 	srv.RegisterRoutes(routeOpts)
+	srv.SetContentChecker(deps)
 
 	// 11. Start sync strategy (non-fatal: a blog with embedded defaults has nothing to watch)
 	syncCtx, syncCancel := context.WithCancel(context.Background())
