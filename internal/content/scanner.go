@@ -37,8 +37,14 @@ type Index struct {
 
 // Errors returns any errors collected during a best-effort scan.
 // Returns nil when scanning in strict (default) mode or when no errors occurred.
+// The returned slice is a copy; callers may safely modify it.
 func (idx *Index) Errors() []error {
-	return idx.scanErrors
+	if len(idx.scanErrors) == 0 {
+		return nil
+	}
+	out := make([]error, len(idx.scanErrors))
+	copy(out, idx.scanErrors)
+	return out
 }
 
 // ScanOption configures scanning behavior.
@@ -182,6 +188,7 @@ func (s *Scanner) Scan(contentFS fs.FS, opts ...ScanOption) (*Index, error) {
 		"posts", len(idx.Posts),
 		"pages", len(idx.Pages),
 		"errors_skipped", errCount,
+		"collected_errors", len(idx.scanErrors),
 		"duration", time.Since(start),
 	)
 
@@ -196,6 +203,10 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage, bestE
 	var skipped int
 	err := fs.WalkDir(contentFS, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if bestEffort && !errors.Is(err, fs.ErrNotExist) {
+				idx.scanErrors = append(idx.scanErrors, fmt.Errorf("walk error at %s: %w", filePath, err))
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
