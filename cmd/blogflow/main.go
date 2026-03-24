@@ -169,6 +169,30 @@ func main() {
 		ws.SetDirs(*contentPath)
 	}
 
+	// Wire up puller for poll sync
+	if ps, ok := syncStrategy.(*gitops.PollStrategy); ok && cfg.Sync.Repo != "" {
+		authCfg, authErr := gitops.LoadAuthFromEnv(logger)
+		if authErr != nil {
+			logger.Error("failed to load git auth for poll strategy", "error", authErr)
+		} else {
+			puller, pullerErr := gitops.NewPuller(authCfg, logger)
+			if pullerErr != nil {
+				logger.Error("failed to create git puller for poll strategy", "error", pullerErr)
+			} else {
+				puller.SparseDirs = cfg.Sync.SparseDirs
+				branch := cfg.Sync.Branch
+				if branch == "" {
+					branch = "main"
+				}
+				dest := *contentPath
+				if dest == "" {
+					dest = "content"
+				}
+				ps.SetPuller(puller, cfg.Sync.Repo, branch, dest)
+			}
+		}
+	}
+
 	// 10. Register routes
 	staticFS, fsErr := fs.Sub(contentOverlay, "static")
 	if fsErr != nil {
