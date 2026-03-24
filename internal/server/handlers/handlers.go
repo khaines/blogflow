@@ -219,6 +219,10 @@ func paginate(posts []*content.Post, page, perPage int) ([]*content.Post, *Pagin
 func renderTemplate(w http.ResponseWriter, r *http.Request, engine *theme.Engine, name string, data *PageData, statusCode int) {
 	var buf bytes.Buffer
 	if err := engine.Render(r.Context(), &buf, name, data); err != nil {
+		if r.Context().Err() != nil {
+			slog.Debug("render aborted: client disconnected", "template", name, "error", err)
+			return
+		}
 		slog.Error("template render failed", "template", name, "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
