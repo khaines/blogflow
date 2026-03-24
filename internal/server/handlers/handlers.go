@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync/atomic"
 
@@ -80,6 +81,12 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 		page, pathBased := parsePage(r)
 		if page < 0 {
 			NotFoundHandler(deps)(w, r)
+			return
+		}
+
+		// /page/1 duplicates /; redirect for canonical URLs.
+		if pathBased && page == 1 {
+			http.Redirect(w, r, "/", http.StatusMovedPermanently)
 			return
 		}
 
@@ -269,10 +276,11 @@ func listPageURL(page int) string {
 
 // tagPageURL returns the URL for a page in a tag-filtered listing.
 func tagPageURL(tag string, page int) string {
+	escaped := url.PathEscape(tag)
 	if page <= 1 {
-		return "/tags/" + tag
+		return "/tags/" + escaped
 	}
-	return "/tags/" + tag + "?page=" + strconv.Itoa(page)
+	return "/tags/" + escaped + "?page=" + strconv.Itoa(page)
 }
 
 // setPageURLs populates PrevURL/NextURL on a Pagination using the given

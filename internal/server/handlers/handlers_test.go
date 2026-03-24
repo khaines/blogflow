@@ -617,6 +617,51 @@ func TestListHandler_NoPagination(t *testing.T) {
 	}
 }
 
+func TestListHandler_PathPage1Redirect(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
+	deps := testDeps(t, posts, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/page/1", nil)
+	req.SetPathValue("page", "1")
+	rec := httptest.NewRecorder()
+	handlers.ListHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("expected 301 for /page/1, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Errorf("expected redirect to /, got Location: %s", loc)
+	}
+}
+
+func TestTagHandler_URLEscaping(t *testing.T) {
+	tag := "c sharp"
+	posts := []*content.Post{
+		makePost("a", "Alpha", []string{tag}),
+		makePost("b", "Beta", []string{tag}),
+		makePost("c", "Gamma", []string{tag}),
+	}
+	deps := testDeps(t, posts, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/tags/c%20sharp", nil)
+	req.SetPathValue("tag", tag)
+	rec := httptest.NewRecorder()
+	handlers.TagHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// url.PathEscape("c sharp") → "c%20sharp"
+	if !strings.Contains(body, "next=/tags/c%20sharp?page=2") {
+		t.Errorf("expected URL-escaped tag in next URL, got body: %s", body)
+	}
+}
+
 func TestListHandler_PageURLs(t *testing.T) {
 	posts := []*content.Post{
 		makePost("a", "Alpha", nil),
