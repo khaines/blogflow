@@ -51,7 +51,8 @@ func testIndex(n int) *content.Index {
 func TestFeedHandler_Atom(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	deps := handlers.NewDeps(cfg, idx, nil)
+	h := handlers.NewFeedHandler(deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	rec := httptest.NewRecorder()
@@ -99,7 +100,8 @@ func TestFeedHandler_RSS(t *testing.T) {
 	cfg := testConfig()
 	cfg.Feed.Type = "rss"
 	idx := testIndex(3)
-	h := handlers.NewFeedHandler(cfg, idx)
+	deps := handlers.NewDeps(cfg, idx, nil)
+	h := handlers.NewFeedHandler(deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	rec := httptest.NewRecorder()
@@ -150,7 +152,8 @@ func TestFeedHandler_RSS(t *testing.T) {
 func TestFeedHandler_EmptyIndex(t *testing.T) {
 	cfg := testConfig()
 	idx := testIndex(0)
-	h := handlers.NewFeedHandler(cfg, idx)
+	deps := handlers.NewDeps(cfg, idx, nil)
+	h := handlers.NewFeedHandler(deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	rec := httptest.NewRecorder()
@@ -173,7 +176,8 @@ func TestFeedHandler_LimitItems(t *testing.T) {
 	cfg := testConfig()
 	cfg.Feed.Items = 2
 	idx := testIndex(5)
-	h := handlers.NewFeedHandler(cfg, idx)
+	deps := handlers.NewDeps(cfg, idx, nil)
+	h := handlers.NewFeedHandler(deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	rec := httptest.NewRecorder()

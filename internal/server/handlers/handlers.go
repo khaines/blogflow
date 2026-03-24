@@ -17,20 +17,27 @@ import (
 )
 
 // Deps holds shared dependencies for all handlers.
-// The content index is stored as an atomic pointer so that background
-// sync-strategy reloaders can swap it without racing with HTTP handlers.
+// Both the content index and config are stored as atomic pointers so that
+// background reloaders can swap them without racing with HTTP handlers.
 type Deps struct {
-	Config *config.Config
+	config atomic.Pointer[config.Config]
 	index  atomic.Pointer[content.Index]
 	Theme  *theme.Engine
 }
 
 // NewDeps creates a Deps with the given dependencies.
 func NewDeps(cfg *config.Config, idx *content.Index, themeEngine *theme.Engine) *Deps {
-	d := &Deps{Config: cfg, Theme: themeEngine}
+	d := &Deps{Theme: themeEngine}
+	d.config.Store(cfg)
 	d.index.Store(idx)
 	return d
 }
+
+// LoadConfig returns the current config. Safe for concurrent use.
+func (d *Deps) LoadConfig() *config.Config { return d.config.Load() }
+
+// SetConfig atomically replaces the config. Safe for concurrent use.
+func (d *Deps) SetConfig(cfg *config.Config) { d.config.Store(cfg) }
 
 // LoadIndex returns the current content index. Safe for concurrent use.
 func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
@@ -75,8 +82,9 @@ type Pagination struct {
 // Route: GET /{$} and GET /page/{page}
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
 		idx := deps.LoadIndex()
-		perPage := deps.Config.Content.PostsPerPage
+		perPage := cfg.Content.PostsPerPage
 
 		page, pathBased := parsePage(r)
 		if page < 0 {
@@ -100,10 +108,10 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 		setPageURLs(pag, listPageURL)
 
 		data := &PageData{
-			Site:       deps.Config.Site,
-			Feed:       deps.Config.Feed,
+			Site:       cfg.Site,
+			Feed:       cfg.Feed,
 			Posts:      paged,
-			Title:      deps.Config.Site.Title,
+			Title:      cfg.Site.Title,
 			Pagination: pag,
 		}
 
@@ -124,9 +132,10 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  deps.Config.Site,
-			Feed:  deps.Config.Feed,
+			Site:  cfg.Site,
+			Feed:  cfg.Feed,
 			Post:  post,
 			Title: post.Title,
 		}
@@ -148,9 +157,10 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  deps.Config.Site,
-			Feed:  deps.Config.Feed,
+			Site:  cfg.Site,
+			Feed:  cfg.Feed,
 			Page:  page,
 			Title: page.Title,
 		}
@@ -172,15 +182,16 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		cfg := deps.LoadConfig()
 		page := queryInt(r, "page", 1)
-		perPage := deps.Config.Content.PostsPerPage
+		perPage := cfg.Content.PostsPerPage
 
 		paged, pag := paginate(posts, page, perPage)
 		setPageURLs(pag, func(p int) string { return tagPageURL(tag, p) })
 
 		data := &PageData{
-			Site:       deps.Config.Site,
-			Feed:       deps.Config.Feed,
+			Site:       cfg.Site,
+			Feed:       cfg.Feed,
 			Posts:      paged,
 			Tag:        tag,
 			Title:      "Posts tagged \"" + tag + "\"",
@@ -194,9 +205,10 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 // NotFoundHandler returns a handler that renders the 404 page.
 func NotFoundHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  deps.Config.Site,
-			Feed:  deps.Config.Feed,
+			Site:  cfg.Site,
+			Feed:  cfg.Feed,
 			Title: "Page Not Found",
 		}
 

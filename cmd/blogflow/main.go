@@ -159,6 +159,15 @@ func main() {
 	// 7. Build handler dependencies
 	deps := handlers.NewDeps(cfg, idx, themeEngine)
 
+	// Wire config reload → handlers: when config changes, update deps atomically
+	cfgLoader.OnChange(func(newCfg *config.Config) {
+		deps.SetConfig(newCfg)
+		logger.Info("handlers config updated after reload",
+			"site_title", newCfg.Site.Title,
+			"base_url", newCfg.Site.BaseURL,
+		)
+	})
+
 	// 8. Content reloader for sync strategies
 	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, logger)
 
@@ -190,8 +199,8 @@ func main() {
 		staticFS = nil
 	}
 
-	feedHandler := handlers.NewFeedHandler(cfg, idx)
-	sitemapHandler := handlers.NewSitemapHandler(cfg, idx)
+	feedHandler := handlers.NewFeedHandler(deps)
+	sitemapHandler := handlers.NewSitemapHandler(deps)
 
 	routeOpts := server.RouteOptions{
 		ListHandler:    handlers.ListHandler(deps),
