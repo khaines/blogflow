@@ -118,6 +118,14 @@ func (s *Scanner) Scan(contentFS fs.FS) (*Index, error) {
 		return idx.Posts[i].Date.After(idx.Posts[j].Date)
 	})
 
+	// Sort pages by weight ascending, then title alphabetically as tiebreaker
+	sort.SliceStable(idx.Pages, func(i, j int) bool {
+		if idx.Pages[i].Weight != idx.Pages[j].Weight {
+			return idx.Pages[i].Weight < idx.Pages[j].Weight
+		}
+		return idx.Pages[i].Title < idx.Pages[j].Title
+	})
+
 	// Rebuild secondary indexes from sorted Posts for deterministic ordering
 	idx.ByTag = make(map[string][]*Post)
 	idx.ByYear = make(map[int][]*Post)
