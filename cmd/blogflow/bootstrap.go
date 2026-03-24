@@ -39,7 +39,7 @@ func bootstrapContent(cfg *config.Config, contentPath string, logger *slog.Logge
 		return
 	}
 
-	puller, err := gitops.NewPuller(authCfg, logger)
+	puller, err := gitops.NewPuller(authCfg, logger, gitops.WithCloneDepth(cfg.Sync.CloneDepth))
 	if err != nil {
 		logger.Error("content bootstrap: failed to create git puller", "error", err)
 		return

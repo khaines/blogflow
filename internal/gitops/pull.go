@@ -24,10 +24,25 @@ type Puller struct {
 	auth       transport.AuthMethod
 	logger     *slog.Logger
 	SparseDirs []string // if non-empty, only these directories are checked out
+	depth      int      // git clone/fetch depth; 1 = shallowest
+}
+
+// PullerOption configures optional Puller behaviour.
+type PullerOption func(*Puller)
+
+// WithCloneDepth sets the shallow clone/fetch depth.
+// Values < 1 are silently clamped to 1.
+func WithCloneDepth(depth int) PullerOption {
+	return func(p *Puller) {
+		if depth < 1 {
+			depth = 1
+		}
+		p.depth = depth
+	}
 }
 
 // NewPuller creates a git puller with the given auth configuration.
-func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
+func NewPuller(authCfg *AuthConfig, logger *slog.Logger, opts ...PullerOption) (*Puller, error) {
 	if authCfg == nil {
 		authCfg = &AuthConfig{Method: AuthNone}
 	}
@@ -53,7 +68,11 @@ func NewPuller(authCfg *AuthConfig, logger *slog.Logger) (*Puller, error) {
 		auth = nil // public repos
 	}
 
-	return &Puller{auth: auth, logger: logger}, nil
+	p := &Puller{auth: auth, logger: logger, depth: 1}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p, nil
 }
 
 // CloneOrPull clones a repo to destPath if it doesn't exist, or pulls if it does.
@@ -119,7 +138,8 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 		Auth:          p.auth,
 		ReferenceName: plumbing.NewBranchReferenceName(branch),
 		SingleBranch:  true,
-		Depth:         1, // shallow clone for efficiency
+		Depth:         p.depth,
+		Tags:          git.NoTags, // content repos don't need tags
 		NoCheckout:    sparse,
 	}
 
@@ -154,30 +174,32 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bo
 		return false, fmt.Errorf("gitops: open repo %s: %w", destPath, err)
 	}
 
-	// Record HEAD before pull so we can detect actual content changes.
-	// Force-pull may not return NoErrAlreadyUpToDate even when nothing changed.
+	// Record HEAD before fetch so we can detect actual content changes.
 	headBefore, err := repo.Head()
 	if err != nil {
 		return false, fmt.Errorf("gitops: head %s: %w", destPath, err)
 	}
 
-	wt, err := repo.Worktree()
-	if err != nil {
-		return false, fmt.Errorf("gitops: worktree %s: %w", destPath, err)
-	}
-
-	err = wt.PullContext(ctx, &git.PullOptions{
-		Auth:          p.auth,
-		ReferenceName: plumbing.NewBranchReferenceName(branch),
-		SingleBranch:  true,
-		Force:         true,
+	// Use FetchContext + hard reset instead of PullContext so we can set
+	// Tags: NoTags — PullOptions does not expose a Tags field.
+	fetchErr := repo.FetchContext(ctx, &git.FetchOptions{
+		Auth:  p.auth,
+		Depth: p.depth,
+		Tags:  git.NoTags,
+		Force: true,
 	})
 
-	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-		// Shallow clone + pull is a known go-git limitation.
+	switch {
+	case fetchErr == nil:
+		// New objects fetched — fast-forward worktree below.
+	case errors.Is(fetchErr, git.NoErrAlreadyUpToDate):
+		p.logger.Debug("already up to date", "dest", destPath)
+		return false, nil
+	default:
+		// Shallow clone + fetch is a known go-git limitation.
 		// Fall back to delete and re-clone.
 		p.logger.Warn("pull failed, falling back to re-clone",
-			"dest", destPath, "error", err)
+			"dest", destPath, "error", fetchErr)
 		if removeErr := os.RemoveAll(destPath); removeErr != nil {
 			return false, fmt.Errorf("gitops: failed to clear for re-clone %s: %w", destPath, removeErr)
 		}
@@ -185,6 +207,25 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bo
 			return false, cloneErr
 		}
 		return true, nil
+	}
+
+	// Resolve the remote tracking ref and hard-reset the worktree.
+	remoteRef, err := repo.Reference(
+		plumbing.NewRemoteReferenceName("origin", branch), true)
+	if err != nil {
+		return false, fmt.Errorf("gitops: resolve remote ref %s: %w", destPath, err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("gitops: worktree %s: %w", destPath, err)
+	}
+
+	if err := wt.Reset(&git.ResetOptions{
+		Commit: remoteRef.Hash(),
+		Mode:   git.HardReset,
+	}); err != nil {
+		return false, fmt.Errorf("gitops: reset %s: %w", destPath, err)
 	}
 
 	headAfter, err := repo.Head()
