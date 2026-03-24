@@ -66,17 +66,31 @@ type Pagination struct {
 	HasNext     bool
 	PrevPage    int
 	NextPage    int
+	PrevURL     string
+	NextURL     string
 }
 
 // ListHandler returns a handler for the home page (paginated post list).
-// Route: GET /{$}
+// Route: GET /{$} and GET /page/{page}
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idx := deps.LoadIndex()
-		page := queryInt(r, "page", 1)
 		perPage := deps.Config.Content.PostsPerPage
 
+		page, pathBased := parsePage(r)
+		if page < 0 {
+			NotFoundHandler(deps)(w, r)
+			return
+		}
+
+		// For path-based requests, return 404 for out-of-range pages.
+		if pathBased && !validPage(len(idx.Posts), page, perPage) {
+			NotFoundHandler(deps)(w, r)
+			return
+		}
+
 		paged, pag := paginate(idx.Posts, page, perPage)
+		setPageURLs(pag, listPageURL)
 
 		data := &PageData{
 			Site:       deps.Config.Site,
@@ -155,6 +169,7 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 		perPage := deps.Config.Content.PostsPerPage
 
 		paged, pag := paginate(posts, page, perPage)
+		setPageURLs(pag, func(p int) string { return tagPageURL(tag, p) })
 
 		data := &PageData{
 			Site:       deps.Config.Site,
@@ -184,7 +199,11 @@ func NotFoundHandler(deps *Deps) http.HandlerFunc {
 
 // paginate returns a page slice and pagination metadata for the given posts.
 func paginate(posts []*content.Post, page, perPage int) ([]*content.Post, *Pagination) {
-	if perPage <= 0 {
+	// perPage == 0 disables pagination: return all posts on a single page.
+	if perPage == 0 {
+		return posts, &Pagination{CurrentPage: 1, TotalPages: 1}
+	}
+	if perPage < 0 {
 		perPage = 10
 	}
 	total := len(posts)
@@ -210,6 +229,60 @@ func paginate(posts []*content.Post, page, perPage int) ([]*content.Post, *Pagin
 		HasNext:     page < totalPages,
 		PrevPage:    page - 1,
 		NextPage:    page + 1,
+	}
+}
+
+// parsePage extracts the page number from the request. It checks the path
+// value first (/page/{page}), then falls back to the ?page= query parameter.
+// Returns (-1, true) if a path value is present but invalid.
+func parsePage(r *http.Request) (int, bool) {
+	if p := r.PathValue("page"); p != "" {
+		v, err := strconv.Atoi(p)
+		if err != nil || v < 1 {
+			return -1, true
+		}
+		return v, true
+	}
+	return queryInt(r, "page", 1), false
+}
+
+// validPage reports whether page is within the valid range for the given
+// total post count and per-page size.
+func validPage(totalPosts, page, perPage int) bool {
+	if perPage <= 0 {
+		return page == 1
+	}
+	totalPages := int(math.Ceil(float64(totalPosts) / float64(perPage)))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	return page >= 1 && page <= totalPages
+}
+
+// listPageURL returns the canonical URL for a page in the main post list.
+func listPageURL(page int) string {
+	if page <= 1 {
+		return "/"
+	}
+	return "/page/" + strconv.Itoa(page)
+}
+
+// tagPageURL returns the URL for a page in a tag-filtered listing.
+func tagPageURL(tag string, page int) string {
+	if page <= 1 {
+		return "/tags/" + tag
+	}
+	return "/tags/" + tag + "?page=" + strconv.Itoa(page)
+}
+
+// setPageURLs populates PrevURL/NextURL on a Pagination using the given
+// URL-building function.
+func setPageURLs(pag *Pagination, urlFunc func(int) string) {
+	if pag.HasPrev {
+		pag.PrevURL = urlFunc(pag.PrevPage)
+	}
+	if pag.HasNext {
+		pag.NextURL = urlFunc(pag.NextPage)
 	}
 }
 

@@ -105,6 +105,7 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 
 	// Content routes
 	s.mux.HandleFunc("GET /{$}", opts.ListHandler)
+	s.mux.HandleFunc("GET /page/{page}", opts.ListHandler)
 	s.mux.HandleFunc("GET /posts/{slug}", opts.PostHandler)
 	s.mux.HandleFunc("GET /pages/{slug}", opts.PageHandler)
 	s.mux.HandleFunc("GET /tags/{tag}", opts.TagHandler)
