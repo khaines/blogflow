@@ -73,13 +73,13 @@ type negCacheEntry struct {
 // server-side observability only (structured logging, OpenTelemetry spans).
 type Resolution struct {
 	// Path is the fs.FS-clean path that was resolved.
-	Path string
+	Path string `json:"-"`
 
 	// LayerIndex is the zero-based index of the layer that served the file.
-	LayerIndex int
+	LayerIndex int `json:"-"`
 
 	// LayerName is the human-readable name of the layer (e.g. "theme", "defaults").
-	LayerName string
+	LayerName string `json:"-"`
 }
 
 // NewOverlayFS creates a new overlay with the given layers.
