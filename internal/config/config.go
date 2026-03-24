@@ -71,10 +71,11 @@ type CacheConfig struct {
 
 // SyncConfig holds content sync strategy settings.
 type SyncConfig struct {
-	Strategy string        `yaml:"strategy"`
-	Repo     string        `yaml:"repo"`
-	Branch   string        `yaml:"branch"`
-	Webhook  WebhookConfig `yaml:"webhook"`
+	Strategy     string        `yaml:"strategy"`
+	Repo         string        `yaml:"repo"`
+	Branch       string        `yaml:"branch"`
+	PollInterval string        `yaml:"poll_interval"` // Go duration (e.g. "5m"); empty = disabled
+	Webhook      WebhookConfig `yaml:"webhook"`
 }
 
 // WebhookConfig holds webhook receiver settings.

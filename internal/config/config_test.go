@@ -354,7 +354,7 @@ func TestConfigError_ErrorIncludesFields(t *testing.T) {
 
 func TestValidate_InvalidStrategy(t *testing.T) {
 	cfg := Default()
-	cfg.Sync.Strategy = "poll"
+	cfg.Sync.Strategy = "magic"
 	err := Validate(cfg)
 	if err == nil {
 		t.Fatal("expected validation error for invalid strategy")

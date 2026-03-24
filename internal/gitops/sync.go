@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/khaines/blogflow/internal/config"
 )
@@ -46,7 +47,19 @@ func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.
 		return NewWebhookStrategy(cfg.Webhook, reloader, logger)
 	case "sidecar":
 		return NewSidecarStrategy(reloader, logger), nil
+	case "poll":
+		return newPollFromConfig(cfg, reloader, logger)
 	default:
-		return nil, fmt.Errorf("gitops: unknown sync strategy %q (must be watch, webhook, or sidecar)", cfg.Strategy)
+		return nil, fmt.Errorf("gitops: unknown sync strategy %q (must be watch, webhook, sidecar, or poll)", cfg.Strategy)
 	}
+}
+
+// newPollFromConfig parses PollInterval and constructs a PollStrategy.
+// The puller must be wired post-construction via SetPuller before Start.
+func newPollFromConfig(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.Logger) (*PollStrategy, error) {
+	interval, err := time.ParseDuration(cfg.PollInterval)
+	if err != nil {
+		return nil, fmt.Errorf("gitops: invalid poll_interval %q: %w", cfg.PollInterval, err)
+	}
+	return NewPollStrategy(interval, reloader, logger)
 }

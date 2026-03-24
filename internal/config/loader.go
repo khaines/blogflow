@@ -349,6 +349,10 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.Webhook.RateLimit = n
 		return nil
 	},
+	"BLOGFLOW_SYNC_POLL_INTERVAL": func(c *Config, v string) error {
+		c.Sync.PollInterval = v
+		return nil
+	},
 	"BLOGFLOW_FEED_TYPE": func(c *Config, v string) error {
 		c.Feed.Type = v
 		return nil
@@ -393,7 +397,7 @@ func applyEnvOverrides(cfg *Config) ([]string, error) {
 
 // Package-level validation maps.
 var (
-	validStrategies    = map[string]bool{"watch": true, "webhook": true, "sidecar": true}
+	validStrategies    = map[string]bool{"watch": true, "webhook": true, "sidecar": true, "poll": true}
 	validFeedTypes     = map[string]bool{"atom": true, "rss": true}
 	validAllowedEvents = map[string]bool{
 		"push": true, "ping": true, "pull_request": true,
@@ -536,12 +540,39 @@ func Validate(cfg *Config) error {
 		}
 	}
 
-	// Sync.Strategy: must be watch, webhook, or sidecar
+	// Sync.Strategy: must be watch, webhook, sidecar, or poll
 	if !validStrategies[cfg.Sync.Strategy] {
 		errs = append(errs, FieldError{
 			Field:   "sync.strategy",
 			Value:   cfg.Sync.Strategy,
-			Message: "must be one of: watch, webhook, sidecar",
+			Message: "must be one of: watch, webhook, sidecar, poll",
+		})
+	}
+
+	// Sync.PollInterval: if set, must be a valid duration >= 30s
+	if cfg.Sync.PollInterval != "" {
+		d, err := time.ParseDuration(cfg.Sync.PollInterval)
+		if err != nil {
+			errs = append(errs, FieldError{
+				Field:   "sync.poll_interval",
+				Value:   cfg.Sync.PollInterval,
+				Message: "must be a valid Go duration (e.g. \"5m\")",
+			})
+		} else if d < 30*time.Second {
+			errs = append(errs, FieldError{
+				Field:   "sync.poll_interval",
+				Value:   cfg.Sync.PollInterval,
+				Message: "must be >= 30s to avoid excessive load",
+			})
+		}
+	}
+
+	// Sync.Strategy "poll" requires poll_interval
+	if cfg.Sync.Strategy == "poll" && cfg.Sync.PollInterval == "" {
+		errs = append(errs, FieldError{
+			Field:   "sync.poll_interval",
+			Value:   cfg.Sync.PollInterval,
+			Message: "must be set when strategy is \"poll\"",
 		})
 	}
 
