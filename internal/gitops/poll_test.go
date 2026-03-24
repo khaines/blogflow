@@ -291,3 +291,38 @@ func TestNewPollStrategy_NilReloader(t *testing.T) {
 		t.Fatal("expected error for nil reloader")
 	}
 }
+
+func TestPollStrategy_DoubleStartReturnsError(t *testing.T) {
+	t.Parallel()
+
+	puller := &fakePuller{}
+	s := newTestPollStrategy(t, 30*time.Second, puller, noop)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+
+	if err := s.Start(ctx); err == nil {
+		t.Fatal("expected error on second Start")
+	}
+
+	cancel()
+	_ = s.Stop(ctx)
+}
+
+func TestPollStrategy_StopWithoutStart(t *testing.T) {
+	t.Parallel()
+
+	s, err := gitops.NewPollStrategy(30*time.Second, noop, logger())
+	if err != nil {
+		t.Fatalf("NewPollStrategy: %v", err)
+	}
+
+	// Stop without Start should not block or error
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop without Start: %v", err)
+	}
+}

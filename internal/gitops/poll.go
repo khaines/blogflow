@@ -19,8 +19,11 @@ type PollStrategy struct {
 	repoURL  string
 	branch   string
 	destPath string
+	cancel   context.CancelFunc
 	stopOnce sync.Once
 	done     chan struct{}
+	mu       sync.Mutex
+	started  bool
 }
 
 // PullExecutor abstracts the git pull operation for testing.
@@ -58,19 +61,36 @@ func (p *PollStrategy) SetPuller(puller PullExecutor, repoURL, branch, destPath 
 
 // Start begins periodic polling in a background goroutine.
 func (p *PollStrategy) Start(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.started {
+		return fmt.Errorf("gitops: poll strategy already started")
+	}
 	if p.puller == nil {
 		return fmt.Errorf("gitops: poll strategy has no puller configured — call SetPuller before Start")
 	}
+	ctx, p.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancel is stored and called in Stop()
+	p.started = true
 	p.logger.Info("poll strategy started", "interval", p.interval)
 	go p.loop(ctx)
 	return nil
 }
 
 // Stop gracefully shuts down polling. Idempotent via sync.Once.
+// Blocks until the background goroutine exits.
 func (p *PollStrategy) Stop(_ context.Context) error {
 	p.stopOnce.Do(func() {
+		if p.cancel != nil {
+			p.cancel()
+		}
 		p.logger.Info("poll strategy stopped")
 	})
+	p.mu.Lock()
+	started := p.started
+	p.mu.Unlock()
+	if started {
+		<-p.done
+	}
 	return nil
 }
 
