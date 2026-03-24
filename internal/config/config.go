@@ -74,6 +74,7 @@ type SyncConfig struct {
 	Strategy     string        `yaml:"strategy"`
 	Repo         string        `yaml:"repo"`
 	Branch       string        `yaml:"branch"`
+	CloneDepth   int           `yaml:"clone_depth"`   // git clone/pull depth; default 1, recommended 10
 	PollInterval string        `yaml:"poll_interval"` // Go duration (e.g. "5m"); empty = disabled
 	SparseDirs   []string      `yaml:"sparse_dirs"`   // limit checkout to these dirs; empty = full checkout
 	Webhook      WebhookConfig `yaml:"webhook"`
@@ -133,8 +134,9 @@ func Default() *Config {
 			MaxEntries: 1000,
 		},
 		Sync: SyncConfig{
-			Strategy: "watch",
-			Branch:   "main",
+			Strategy:   "watch",
+			Branch:     "main",
+			CloneDepth: 1,
 			Webhook: WebhookConfig{
 				Path:          "/api/webhook",
 				AllowedEvents: []string{"push"},

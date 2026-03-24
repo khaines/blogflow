@@ -5,12 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"golang.org/x/crypto/ssh"
 )
@@ -549,5 +551,164 @@ func TestCloneOrPull_SparseTrailingSlashNormalized(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destDir, "scripts", "deploy.sh")); !os.IsNotExist(err) {
 		t.Fatal("expected scripts/ to be absent in sparse checkout")
+	}
+}
+
+func TestCloneOrPull_CloneDepthDefault(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	// Default depth is 1 (no WithCloneDepth option).
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "depth-default")
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true on fresh clone")
+	}
+
+	// Verify it's a shallow clone (depth=1 → single commit).
+	repo, err := git.PlainOpen(destDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	iter, err := repo.Log(&git.LogOptions{})
+	if err != nil {
+		t.Fatalf("log: %v", err)
+	}
+	count := 0
+	iter.ForEach(func(_ *object.Commit) error { //nolint:errcheck,gosec // counting commits
+		count++
+		return nil
+	})
+	if count != 1 {
+		t.Fatalf("expected 1 commit for depth=1 clone, got %d", count)
+	}
+}
+
+func TestCloneOrPull_CloneDepth10(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	// Add more commits to the bare repo so depth=10 is meaningful.
+	for i := 0; i < 4; i++ {
+		addCommitToBareRepo(t, bareRepo, fmt.Sprintf("file%d.txt", i), fmt.Sprintf("content %d", i))
+	}
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil, WithCloneDepth(10))
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "depth-10")
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true on fresh clone")
+	}
+
+	// With 5 commits total and depth=10, all 5 should be visible.
+	repo, err := git.PlainOpen(destDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	iter, err := repo.Log(&git.LogOptions{})
+	if err != nil {
+		t.Fatalf("log: %v", err)
+	}
+	count := 0
+	iter.ForEach(func(_ *object.Commit) error { //nolint:errcheck,gosec // counting commits
+		count++
+		return nil
+	})
+	if count != 5 {
+		t.Fatalf("expected 5 commits for depth=10 clone (only 5 exist), got %d", count)
+	}
+}
+
+func TestCloneOrPull_NoTagsFetched(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	// Create a tag in the bare repo.
+	bareGit, err := git.PlainOpen(bareRepo)
+	if err != nil {
+		t.Fatalf("open bare repo: %v", err)
+	}
+	head, err := bareGit.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	_, err = bareGit.CreateTag("v1.0.0", head.Hash(), nil)
+	if err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil)
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "no-tags")
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+
+	// Verify no tags were fetched.
+	clonedRepo, err := git.PlainOpen(destDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	tags, err := clonedRepo.Tags()
+	if err != nil {
+		t.Fatalf("tags: %v", err)
+	}
+	tagCount := 0
+	tags.ForEach(func(_ *plumbing.Reference) error { //nolint:errcheck,gosec // counting tags
+		tagCount++
+		return nil
+	})
+	if tagCount != 0 {
+		t.Fatalf("expected 0 tags with NoTags, got %d", tagCount)
+	}
+}
+
+func TestCloneOrPull_PullRespectsDepth(t *testing.T) {
+	bareRepo := newBareRepoWithCommit(t)
+
+	p, err := NewPuller(&AuthConfig{Method: AuthNone}, nil, WithCloneDepth(10))
+	if err != nil {
+		t.Fatalf("new puller: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "pull-depth")
+	if _, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir); err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+
+	// Push a new commit.
+	addCommitToBareRepo(t, bareRepo, "new.txt", "new content\n")
+
+	// Pull should succeed and detect the change.
+	changed, err := p.CloneOrPull(context.Background(), bareRepo, "master", destDir)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true after new commit")
+	}
+
+	// Verify the new file is present.
+	data, err := os.ReadFile(filepath.Join(destDir, "new.txt")) //nolint:gosec // G304: test reads known path
+	if err != nil {
+		t.Fatalf("read new file: %v", err)
+	}
+	if string(data) != "new content\n" {
+		t.Fatalf("unexpected content: %q", data)
 	}
 }

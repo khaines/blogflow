@@ -368,6 +368,14 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.SparseDirs = dirs
 		return nil
 	},
+	"BLOGFLOW_SYNC_CLONE_DEPTH": func(c *Config, v string) error {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SYNC_CLONE_DEPTH as int: %w", err)
+		}
+		c.Sync.CloneDepth = n
+		return nil
+	},
 	"BLOGFLOW_FEED_TYPE": func(c *Config, v string) error {
 		c.Feed.Type = v
 		return nil
@@ -588,6 +596,15 @@ func Validate(cfg *Config) error {
 			Field:   "sync.poll_interval",
 			Value:   cfg.Sync.PollInterval,
 			Message: "must be set when strategy is \"poll\"",
+		})
+	}
+
+	// Sync.CloneDepth: must be >= 1
+	if cfg.Sync.CloneDepth < 1 {
+		errs = append(errs, FieldError{
+			Field:   "sync.clone_depth",
+			Value:   cfg.Sync.CloneDepth,
+			Message: "must be >= 1",
 		})
 	}
 
