@@ -29,6 +29,7 @@ type FrontMatter struct {
 	Template    string    `yaml:"template,omitempty"`
 	Image       string    `yaml:"image,omitempty"`
 	ReadingTime int       `yaml:"reading_time,omitempty"`
+	Weight      int       `yaml:"weight,omitempty"`
 }
 
 // ParseFrontMatter splits a markdown file into front matter and body.

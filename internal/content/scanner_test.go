@@ -1,6 +1,7 @@
 package content
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -19,6 +20,21 @@ func mkPost(title, slug, date string, tags []string, draft bool, body string) st
 	}
 	if len(tags) > 0 {
 		b.WriteString("tags: [\"" + strings.Join(tags, "\", \"") + "\"]\n")
+	}
+	b.WriteString("---\n")
+	b.WriteString(body)
+	return b.String()
+}
+
+func mkPage(title, slug string, weight int, body string) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("title: \"" + title + "\"\n")
+	if slug != "" {
+		b.WriteString("slug: \"" + slug + "\"\n")
+	}
+	if weight != 0 {
+		fmt.Fprintf(&b, "weight: %d\n", weight)
 	}
 	b.WriteString("---\n")
 	b.WriteString(body)
@@ -496,5 +512,153 @@ func TestScan_EmptyTagSkipped(t *testing.T) {
 	}
 	if len(idx.ByTag["go"]) != 1 {
 		t.Errorf("expected 1 post tagged 'go', got %d", len(idx.ByTag["go"]))
+	}
+}
+
+func TestScan_PagesSortedByWeight(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte(mkPage("About", "about", 20, "About page.\n")),
+		},
+		"pages/home.md": &fstest.MapFile{
+			Data: []byte(mkPage("Home", "home", 1, "Home page.\n")),
+		},
+		"pages/contact.md": &fstest.MapFile{
+			Data: []byte(mkPage("Contact", "contact", 10, "Contact page.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 3 {
+		t.Fatalf("expected 3 pages, got %d", len(idx.Pages))
+	}
+
+	want := []string{"home", "contact", "about"}
+	for i, slug := range want {
+		if idx.Pages[i].Slug != slug {
+			t.Errorf("pages[%d].Slug = %q, want %q", i, idx.Pages[i].Slug, slug)
+		}
+	}
+}
+
+func TestScan_PagesSortedByTitleTiebreaker(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/zebra.md": &fstest.MapFile{
+			Data: []byte(mkPage("Zebra", "zebra", 5, "Zebra page.\n")),
+		},
+		"pages/alpha.md": &fstest.MapFile{
+			Data: []byte(mkPage("Alpha", "alpha", 5, "Alpha page.\n")),
+		},
+		"pages/mid.md": &fstest.MapFile{
+			Data: []byte(mkPage("Mid", "mid", 5, "Mid page.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 3 {
+		t.Fatalf("expected 3 pages, got %d", len(idx.Pages))
+	}
+
+	want := []string{"alpha", "mid", "zebra"}
+	for i, slug := range want {
+		if idx.Pages[i].Slug != slug {
+			t.Errorf("pages[%d].Slug = %q, want %q", i, idx.Pages[i].Slug, slug)
+		}
+	}
+}
+
+func TestScan_PagesDefaultWeightZero(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/weighted.md": &fstest.MapFile{
+			Data: []byte(mkPage("Weighted", "weighted", 10, "Weighted page.\n")),
+		},
+		"pages/default.md": &fstest.MapFile{
+			Data: []byte(mkPage("Default", "default", 0, "Default page.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 2 {
+		t.Fatalf("expected 2 pages, got %d", len(idx.Pages))
+	}
+
+	// Default weight (0) comes before weight 10
+	if idx.Pages[0].Slug != "default" {
+		t.Errorf("pages[0].Slug = %q, want %q (default weight=0 first)", idx.Pages[0].Slug, "default")
+	}
+	if idx.Pages[1].Slug != "weighted" {
+		t.Errorf("pages[1].Slug = %q, want %q", idx.Pages[1].Slug, "weighted")
+	}
+}
+
+func TestScan_PagesWeightAndTitleCombined(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/c.md": &fstest.MapFile{
+			Data: []byte(mkPage("Charlie", "charlie", 0, "Content.\n")),
+		},
+		"pages/a.md": &fstest.MapFile{
+			Data: []byte(mkPage("Alpha", "alpha", 0, "Content.\n")),
+		},
+		"pages/z.md": &fstest.MapFile{
+			Data: []byte(mkPage("Zulu", "zulu", -5, "Content.\n")),
+		},
+		"pages/b.md": &fstest.MapFile{
+			Data: []byte(mkPage("Bravo", "bravo", 10, "Content.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 4 {
+		t.Fatalf("expected 4 pages, got %d", len(idx.Pages))
+	}
+
+	// weight -5 < 0 < 10; within weight 0, Alpha < Charlie
+	want := []string{"zulu", "alpha", "charlie", "bravo"}
+	for i, slug := range want {
+		if idx.Pages[i].Slug != slug {
+			t.Errorf("pages[%d].Slug = %q, want %q", i, idx.Pages[i].Slug, slug)
+		}
+	}
+}
+
+func TestScan_PagesTitleTiebreakerCaseInsensitive(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/ios.md": &fstest.MapFile{
+			Data: []byte(mkPage("iOS Guide", "ios-guide", 0, "Content.\n")),
+		},
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte(mkPage("About", "about", 0, "Content.\n")),
+		},
+		"pages/zebra.md": &fstest.MapFile{
+			Data: []byte(mkPage("zebra", "zebra", 0, "Content.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 3 {
+		t.Fatalf("expected 3 pages, got %d", len(idx.Pages))
+	}
+
+	// Case-insensitive: about < ios guide < zebra
+	want := []string{"about", "ios-guide", "zebra"}
+	for i, slug := range want {
+		if idx.Pages[i].Slug != slug {
+			t.Errorf("pages[%d].Slug = %q, want %q", i, idx.Pages[i].Slug, slug)
+		}
 	}
 }
