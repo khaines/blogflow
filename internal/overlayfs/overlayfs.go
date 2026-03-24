@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // layerMeta stores resolved root paths for disk-backed layers.
@@ -52,6 +53,9 @@ type OverlayFS struct {
 	// maxNegCacheEntries bounds the negative cache size. When exceeded,
 	// new entries are not cached (graceful degradation).
 	maxNegCacheEntries int
+
+	// metrics is nil when WithMetrics is not used (zero overhead).
+	metrics *overlayMetrics
 }
 
 type negCacheEntry struct {
@@ -86,6 +90,17 @@ func NewOverlayFS(layers ...fs.FS) *OverlayFS {
 		layerMeta:          make([]layerMeta, len(filtered)),
 		maxNegCacheEntries: 100_000,
 	}
+}
+
+// WithOptions applies functional options to the OverlayFS.
+// This is used with options like WithMetrics.
+func (o *OverlayFS) WithOptions(opts ...Option) (*OverlayFS, error) {
+	for _, opt := range opts {
+		if err := opt(o); err != nil {
+			return nil, fmt.Errorf("overlayfs: apply option: %w", err)
+		}
+	}
+	return o, nil
 }
 
 // WithLayerNames sets human-readable names for the overlay layers.
@@ -174,7 +189,15 @@ func NewFromEmbed(defaults embed.FS, prefix string) (*OverlayFS, error) {
 func (o *OverlayFS) Open(name string) (fs.File, error) {
 	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
+		if o.metrics != nil {
+			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
+		}
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+
+	var start time.Time
+	if o.metrics != nil {
+		start = time.Now()
 	}
 
 	o.mu.RLock()
@@ -187,6 +210,9 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 		entry := cached.(negCacheEntry)
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
+			if o.metrics != nil {
+				o.metrics.negCacheHit.Inc()
+			}
 		}
 	}
 
@@ -206,7 +232,14 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 					firstCandidateLayer: i,
 				}); !loaded {
 					o.negCacheCount.Add(1)
+					if o.metrics != nil {
+						o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+					}
 				}
+			}
+			if o.metrics != nil {
+				o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
+				o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
 			}
 			return f, nil
 		}
@@ -215,6 +248,10 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 		}
 	}
 
+	if o.metrics != nil {
+		o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
+		o.metrics.missTotal.Inc()
+	}
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
 
@@ -223,7 +260,15 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
+		if o.metrics != nil {
+			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
+		}
 		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrInvalid}
+	}
+
+	var start time.Time
+	if o.metrics != nil {
+		start = time.Now()
 	}
 
 	o.mu.RLock()
@@ -236,6 +281,9 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 		entry := cached.(negCacheEntry)
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
+			if o.metrics != nil {
+				o.metrics.negCacheHit.Inc()
+			}
 		}
 	}
 
@@ -257,7 +305,14 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 						firstCandidateLayer: i,
 					}); !loaded {
 						o.negCacheCount.Add(1)
+						if o.metrics != nil {
+							o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+						}
 					}
+				}
+				if o.metrics != nil {
+					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
+					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
 				}
 				return data, nil
 			}
@@ -285,7 +340,14 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 						firstCandidateLayer: i,
 					}); !loaded {
 						o.negCacheCount.Add(1)
+						if o.metrics != nil {
+							o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+						}
 					}
+				}
+				if o.metrics != nil {
+					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
+					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
 				}
 				return data, nil
 			}
@@ -295,6 +357,10 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 		}
 	}
 
+	if o.metrics != nil {
+		o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
+		o.metrics.missTotal.Inc()
+	}
 	return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrNotExist}
 }
 
@@ -304,7 +370,15 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
+		if o.metrics != nil {
+			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
+		}
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
+	}
+
+	var start time.Time
+	if o.metrics != nil {
+		start = time.Now()
 	}
 
 	o.mu.RLock()
@@ -330,6 +404,10 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 
 	if !found {
+		if o.metrics != nil {
+			o.metrics.resolveDuration.WithLabelValues("readdir").Observe(time.Since(start).Seconds())
+			o.metrics.missTotal.Inc()
+		}
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
 	}
 
@@ -340,6 +418,10 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name() < result[j].Name()
 	})
+
+	if o.metrics != nil {
+		o.metrics.resolveDuration.WithLabelValues("readdir").Observe(time.Since(start).Seconds())
+	}
 	return result, nil
 }
 
@@ -348,7 +430,15 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 	// TODO(security): ContextOverlayFS will log WARN with request_id and remote_addr
 	if !fs.ValidPath(name) {
+		if o.metrics != nil {
+			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
+		}
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+
+	var start time.Time
+	if o.metrics != nil {
+		start = time.Now()
 	}
 
 	o.mu.RLock()
@@ -361,6 +451,9 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 		entry := cached.(negCacheEntry)
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
+			if o.metrics != nil {
+				o.metrics.negCacheHit.Inc()
+			}
 		}
 	}
 
@@ -374,6 +467,10 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 			}
 			info, err := sfs.Stat(name)
 			if err == nil {
+				if o.metrics != nil {
+					o.metrics.resolveDuration.WithLabelValues("stat").Observe(time.Since(start).Seconds())
+					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
+				}
 				return info, nil
 			}
 			if !isNotExist(err) {
@@ -393,6 +490,10 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 				info, statErr := f.Stat()
 				_ = f.Close()
 				if statErr == nil {
+					if o.metrics != nil {
+						o.metrics.resolveDuration.WithLabelValues("stat").Observe(time.Since(start).Seconds())
+						o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
+					}
 					return info, nil
 				}
 				return nil, statErr
@@ -403,6 +504,10 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 		}
 	}
 
+	if o.metrics != nil {
+		o.metrics.resolveDuration.WithLabelValues("stat").Observe(time.Since(start).Seconds())
+		o.metrics.missTotal.Inc()
+	}
 	return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 }
 
@@ -434,6 +539,9 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 		}
 		return true
 	})
+	if o.metrics != nil {
+		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+	}
 }
 
 // InvalidateAll clears the entire negative cache.
@@ -444,6 +552,9 @@ func (o *OverlayFS) InvalidateAll() {
 		}
 		return true
 	})
+	if o.metrics != nil {
+		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+	}
 }
 
 // ReplaceLayer atomically replaces a layer's backing fs.FS and clears
@@ -467,6 +578,9 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 		}
 		return true
 	})
+	if o.metrics != nil {
+		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+	}
 	return nil
 }
 
@@ -518,6 +632,16 @@ func (o *OverlayFS) resolveInfo(name string) (*resolution, error) {
 		}
 	}
 	return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrNotExist}
+}
+
+// layerName returns the name for layer at index i.
+func (o *OverlayFS) layerName(i int) string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if i < len(o.layerNames) {
+		return o.layerNames[i]
+	}
+	return fmt.Sprintf("layer-%d", i)
 }
 
 // isNotExist checks if an error indicates the file does not exist.
