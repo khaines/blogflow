@@ -404,12 +404,7 @@ var secretEnvVars = map[string]bool{
 	"BLOGFLOW_WEBHOOK_SECRET": true,
 }
 
-func applyEnvOverrides(cfg *Config, logger ...*slog.Logger) ([]string, error) {
-	var log *slog.Logger
-	if len(logger) > 0 {
-		log = logger[0]
-	}
-
+func applyEnvOverrides(cfg *Config, log *slog.Logger) ([]string, error) {
 	var applied []string
 	for name, setter := range envMap {
 		var v string
