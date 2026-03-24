@@ -5,6 +5,7 @@ package theme
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"io"
@@ -37,7 +38,8 @@ func NewEngine(fsys fs.FS) (*Engine, error) {
 // Render renders a page using base.html with the named page template's
 // block overrides ({{define "content"}}, {{define "title"}}, etc.).
 // Each page template is cloned+parsed per request so defines don't collide.
-func (e *Engine) Render(w io.Writer, name string, data any) error {
+// The context allows callers to cancel long-running renders.
+func (e *Engine) Render(ctx context.Context, w io.Writer, name string, data any) error {
 	pages := *e.pages.Load()
 	src, ok := pages[name]
 	if !ok {
@@ -52,6 +54,13 @@ func (e *Engine) Render(w io.Writer, name string, data any) error {
 		return fmt.Errorf("theme: parse page %s: %w", name, err)
 	}
 
+	// Check for cancellation before expensive template execution.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	var buf bytes.Buffer
 	if err := clone.ExecuteTemplate(&buf, "templates/base.html", data); err != nil {
 		return err
@@ -61,9 +70,9 @@ func (e *Engine) Render(w io.Writer, name string, data any) error {
 }
 
 // RenderToString renders a named template to a string.
-func (e *Engine) RenderToString(name string, data any) (string, error) {
+func (e *Engine) RenderToString(ctx context.Context, name string, data any) (string, error) {
 	var b strings.Builder
-	if err := e.Render(&b, name, data); err != nil {
+	if err := e.Render(ctx, &b, name, data); err != nil {
 		return "", err
 	}
 	return b.String(), nil
