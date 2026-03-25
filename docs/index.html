@@ -152,9 +152,10 @@
       margin: 0 auto 4rem;
       padding: 0 2rem;
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 1.5rem;
       text-align: center;
+      justify-items: center;
     }
 
     .metric-value {
@@ -162,6 +163,7 @@
       font-size: 2rem;
       font-weight: 700;
       color: var(--accent);
+      white-space: nowrap;
     }
 
     .metric-label {
@@ -274,7 +276,7 @@
     footer a:hover { text-decoration: underline; }
 
     @media (max-width: 600px) {
-      .metrics { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+      .metrics { grid-template-columns: 1fr; gap: 1rem; }
       .install-box { font-size: 0.8rem; padding: 0.75rem 1rem; }
     }
   </style>
@@ -283,7 +285,7 @@
 
   <section class="hero">
     <div class="hero-content">
-      <h1 class="logo">BlogFlow<span class="dot">.</span></h1>
+      <h1 class="logo">blogflow<span class="dot">.</span>io</h1>
       <p class="tagline">Compact Go blog engine — git-driven content, distroless container.</p>
       <p class="subtitle">Just add markdown.</p>
 
