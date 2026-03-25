@@ -1,7 +1,7 @@
 ---
 name: update-changelog
 description: >-
-  Updates CHANGELOG.md with entries for the current PR using the Grafana Mimir convention:
+  Updates CHANGELOG.md with entries for the current PR using the Prometheus/Cortex ecosystem convention:
   prefixed tags ([FEATURE], [ENHANCEMENT], [BUGFIX], [CHANGE]), component prefixes,
   and inline PR references. Designed to be invoked as a final step in the implement-work-item
   or review-fix-loop skills before opening/updating a PR.
@@ -24,7 +24,7 @@ before making changes to match the established style.
 
 ---
 
-## Format Convention (Grafana Mimir Style)
+## Format Convention (Prometheus/Cortex Ecosystem Style)
 
 Every entry is a single bullet using this format:
 
@@ -152,7 +152,7 @@ If no subsection exists for the component, create one following the existing ord
 ### 2.3 Insert Entries
 
 Append entries at the **end** of the relevant subsection (newest entries last within a release,
-matching Mimir convention). Entries within a section are ordered: `[CHANGE]` → `[FEATURE]` →
+matching Prometheus/Cortex convention). Entries within a section are ordered: `[CHANGE]` → `[FEATURE]` →
 `[ENHANCEMENT]` → `[BUGFIX]`.
 
 ### 2.4 Validate
