@@ -1,192 +1,213 @@
 # BlogFlow
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/khaines/blogflow)](go.mod)
+[![CI](https://github.com/khaines/blogflow/actions/workflows/ci.yml/badge.svg)](https://github.com/khaines/blogflow/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/khaines/blogflow)](https://github.com/khaines/blogflow/releases/latest)
+[![Container](https://img.shields.io/badge/container-%3C25MB-brightgreen)](https://github.com/khaines/blogflow/pkgs/container/blogflow)
 
-A compact, efficient blog engine written in Go. Ship a single binary with sensible
-defaults — just add markdown.
+**A git-driven blog engine that just serves markdown.**
 
-BlogFlow embeds its entire default theme, templates, CSS, and configuration via
-`embed.FS`. Content, config, and themes are git-driven: manage everything through
-branches and pull requests, or just drop markdown files in a directory.
+## What Is BlogFlow?
+
+BlogFlow is a single-binary blog engine written in Go. It embeds a complete default theme, templates, and configuration — just add markdown. An overlay FS layers your content, config, and theme files over the embedded defaults, so you only override what you need. The container image ships under 25 MB on a distroless base with no shell and no package manager. Push markdown to a content repo and BlogFlow renders your site.
 
 ## Quick Start
 
 ```bash
-# 1. Create a content directory with a post
-mkdir -p content/posts
-
-# 2. Write a markdown post
-cat > content/posts/hello.md << 'EOF'
----
-title: "Hello, World!"
-date: 2025-01-15
-tags: ["intro"]
----
-
-Welcome to my blog, powered by BlogFlow.
-EOF
-
-# 3. Run BlogFlow
-blogflow --content ./content
+docker run -p 8080:8080 ghcr.io/khaines/blogflow:latest
 ```
 
-Open [http://localhost:8080](http://localhost:8080) — that's it.
+Open [http://localhost:8080](http://localhost:8080) — a working blog with embedded sample content.
+
+To serve your own posts:
+
+```bash
+docker run -p 8080:8080 \
+  -v ./content:/data/content:ro \
+  ghcr.io/khaines/blogflow:latest
+```
 
 ## Features
 
-- **Zero-config start** — embedded defaults mean the binary works standalone
-- **Overlay filesystem** — external files override embedded defaults (`io/fs.FS`)
-- **Goldmark** — GitHub Flavored Markdown with syntax highlighting (CSS classes for Chroma — requires theme CSS), tables, task lists, footnotes
-- **Secure by default** — distroless container, rootless (UID 65532), read-only root FS
-- **< 25 MB container** — single static binary on `gcr.io/distroless/static-debian12:nonroot`
-- **Git-driven content** — git-sync sidecar or fsnotify for live reload
-- **HMAC-SHA256 webhooks** — constant-time signature validation, branch filtering, rate limiting
-- **Atom/RSS feeds** — auto-generated with configurable item count
-- **Rendered content cache** — in-memory LRU with configurable TTL
+### Core
+
+- **Overlay FS** — external files override embedded defaults via a layered `io/fs.FS`
+- **Goldmark renderer** — GitHub Flavored Markdown with tables, task lists, footnotes, and link sanitization
+- **Chroma syntax highlighting** — fenced code blocks rendered with CSS classes
+- **Render cache** — in-memory LRU with configurable TTL and max entries
+- **Atom / RSS feeds** — auto-generated at `/feed.xml` with configurable item count
+- **Sitemap** — auto-generated `sitemap.xml`
+
+### Content
+
+- **Front matter** — YAML metadata: `title`, `date`, `tags`, `slug`, `draft`, `author`, `template`, `image`, `weight`, and more
+- **Pagination** — configurable posts-per-page with paginated index and tag listings
+- **Page sort** — posts sorted by date descending; pages sorted by weight then title
+- **Best-effort scanner** — collects parse errors and slug conflicts without aborting the scan
+- **Slug override** — set `slug` in front matter or let BlogFlow derive it from the filename
+
+### Sync Strategies
+
+| Strategy | Trigger | Best for |
+|---|---|---|
+| **watch** | fsnotify file events | Local development — instant reload |
+| **webhook** | GitHub/GitLab push event (HMAC-SHA256) | Public sites — instant sync on push |
+| **sidecar** | git-sync symlink swap | Kubernetes — no inbound ingress needed |
+| **poll** | Periodic `git pull` on a timer | Multi-replica clusters without git-sync |
+
+### Observability
+
+- **Prometheus metrics** — `/metrics` endpoint with request counters, latencies, and overlay FS stats
+- **RED dashboard** — request rate, error rate, duration (p50/p95/p99) plus per-path breakdowns
+- **Grafana dashboard** — [pre-built JSON](examples/grafana/) with RED, HTTP detail, overlay FS, and Go runtime panels
+- **Structured logging** — `slog` JSON in production, text in `--dev` mode; includes request-ID, method, path, status, duration
+- **Request-ID** — generated per-request with proxy-aware client IP detection
+
+### Security
+
+- **Content-Security-Policy** — restrictive CSP header on every response
+- **HSTS** — `Strict-Transport-Security` when `tls_terminated: true`
+- **Permissions-Policy** — disables camera, microphone, geolocation, and other browser APIs
+- **Rate limiting** — LRU-based limiter with TTL eviction (configurable per-minute cap)
+- **Body limits** — `MaxBytesReader` on webhook payloads to prevent oversized requests
+- **`_FILE` secrets** — `BLOGFLOW_WEBHOOK_SECRET_FILE` reads the secret from a mounted file (K8s-native)
+- **Distroless container** — `gcr.io/distroless/static-debian12:nonroot`, UID 65532, read-only root FS, all capabilities dropped
+
+### Deployment
+
+- **< 25 MB image** — single static binary, stripped debug symbols
+- **Healthcheck CLI** — `blogflow healthcheck` subcommand for distroless containers (no curl/wget needed)
+- **Health endpoints** — `/healthz` (liveness) and `/readyz` (readiness with atomic gate)
+- **Helm chart** — production-ready chart with sidecar, webhook, and watch strategies ([`deploy/helm/blogflow/`](deploy/helm/blogflow/))
+- **K8s manifests** — plain YAML examples for sidecar and webhook patterns ([`examples/k8s/`](examples/k8s/))
+- **Config reload** — runtime `Reload()` with `OnChange()` callbacks; no restart needed
+- **PodDisruptionBudget** — optional PDB, startup probes, and emptyDir size limits in Helm
 
 ## Configuration
 
-BlogFlow loads configuration in three layers (highest priority first):
+BlogFlow merges three configuration layers (highest priority first):
 
 1. **Environment variables** (`BLOGFLOW_*`)
 2. **`site.yaml`** in your config directory
 3. **Embedded defaults**
 
-### Example `site.yaml`
+See [`examples/config/site.yaml`](examples/config/site.yaml) for a fully annotated example.
 
-```yaml
-site:
-  title: "My Blog"
-  description: "Thoughts on code and craft"
-  base_url: "https://blog.example.com"
-  language: "en"
-  author:
-    name: "Jane Doe"
-    email: "jane@example.com"
-
-content:
-  posts_dir: "posts"
-  pages_dir: "pages"
-  posts_per_page: 10
-  date_format: "January 2, 2006"
-  summary_length: 200
-
-server:
-  port: 8080
-  read_timeout: "5s"
-  write_timeout: "10s"
-  idle_timeout: "120s"
-
-cache:
-  enabled: true
-  ttl: "1h"
-  max_entries: 1000
-
-feed:
-  enabled: true
-  type: "atom"
-  items: 20
-```
-
-See [`examples/config/site.yaml`](examples/config/site.yaml) for a fully documented example.
-
-### Environment Variable Overrides
+### Key Environment Variables
 
 | Variable | Description |
 |---|---|
 | `BLOGFLOW_SITE_TITLE` | Site title |
-| `BLOGFLOW_SITE_DESCRIPTION` | Site description |
-| `BLOGFLOW_SITE_BASE_URL` | Base URL (set to production HTTPS URL) |
-| `BLOGFLOW_SERVER_PORT` | HTTP server port (1–65535) |
-| `BLOGFLOW_SERVER_READ_TIMEOUT` | Read timeout (Go duration, e.g. `5s`) |
-| `BLOGFLOW_SERVER_WRITE_TIMEOUT` | Write timeout |
-| `BLOGFLOW_SERVER_IDLE_TIMEOUT` | Idle timeout |
-| `BLOGFLOW_CACHE_ENABLED` | Enable/disable cache (`true`/`false`) |
-| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar` |
-| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (≥ 32 bytes, **never in YAML**) |
+| `BLOGFLOW_SITE_BASE_URL` | Canonical base URL (set to HTTPS in production) |
+| `BLOGFLOW_SERVER_PORT` | HTTP listen port (default `8080`) |
+| `BLOGFLOW_CACHE_ENABLED` | Enable render cache (`true` / `false`) |
+| `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar`, `poll` |
+| `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (≥ 32 bytes — **never in YAML**) |
+| `BLOGFLOW_WEBHOOK_SECRET_FILE` | Path to secret file (`_FILE` convention) |
 | `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook rate limit (1–100 req/min) |
 | `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` |
+| `BLOGFLOW_SERVER_TLS_TERMINATED` | Enable HSTS header (`true` when behind TLS proxy) |
 
-## Progressive Customization
+## Deployment
 
-BlogFlow is designed for progressive disclosure — start simple, customize as needed.
+Four deployment patterns — same binary, different sync strategy:
 
-| Level | What You Do | What Changes |
+| Pattern | Strategy | Docs |
 |---|---|---|
-| **0 — Just Markdown** | Drop `.md` files in `content/posts/` | Embedded theme, default config |
-| **1 — Add Config** | Create `site.yaml` with your site title, URL, author | Personalized metadata, same theme |
-| **2 — Custom Theme** | Add a `theme/` directory with templates and CSS | Your look and feel, git-managed |
-| **3 — Full GitFlow** | Separate content and theme repos, webhook sync, CI/CD | Team workflow with PRs to `main` |
+| Local development | `watch` | [Deployment Guide § Pattern 1](docs/deployment-guide.md#pattern-1-local-development-watch) |
+| K8s git-sync sidecar | `sidecar` | [Deployment Guide § Pattern 2](docs/deployment-guide.md#pattern-2-kubernetes--git-sync-sidecar) |
+| K8s webhook + go-git | `webhook` | [Deployment Guide § Pattern 3](docs/deployment-guide.md#pattern-3-kubernetes--webhook--go-git-pull) |
+| Docker / VM production | `webhook` | [Deployment Guide § Pattern 4](docs/deployment-guide.md#pattern-4-docker-production-webhook) |
 
-## CLI Flags
+For full details — architecture diagrams, Helm values, auth setup — see the **[Deployment Guide](docs/deployment-guide.md)**.
 
-```
-blogflow [flags]
+## Content Format
 
-Flags:
-  --content <path>    Path to content directory
-  --theme <path>      Path to custom theme directory
-  --config <path>     Path to site.yaml config file
-  --dev               Enable development mode (verbose logging, no cache)
-  --port <number>     HTTP server port (overrides config)
-```
+Posts live in `content/posts/` as markdown files with YAML front matter:
 
-## Docker
+```yaml
+---
+title: "My First Post"
+date: 2025-06-15T09:00:00Z
+tags: ["go", "blogging"]
+draft: false
+---
 
-### Build
-
-```bash
-docker build -t blogflow .
+Your markdown content here.
 ```
 
-### Run
+### Front Matter Fields
 
-```bash
-# Minimal — use embedded defaults
-docker run -p 8080:8080 blogflow
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `title` | string | ✓ | Post title |
+| `date` | RFC 3339 | ✓ | Publish date |
+| `slug` | string | | URL path segment (default: filename) |
+| `draft` | bool | | Exclude from published index |
+| `tags` | list | | Tag labels for categorization |
+| `categories` | list | | Category labels |
+| `author` | string | | Author name (overrides site default) |
+| `description` | string | | Summary for feeds and SEO |
+| `template` | string | | Override the rendering template |
+| `image` | string | | Featured image URL |
+| `weight` | int | | Sort priority for pages (lower = first) |
+| `updated` | RFC 3339 | | Last-modified date |
+| `reading_time` | int | | Manual reading-time override (minutes) |
 
-# With external content
-docker run -p 8080:8080 \
-  -v ./content:/data/content:ro \
-  blogflow --content /data/content
+### Supported Markdown
 
-# With config overrides
-docker run -p 8080:8080 \
-  -e BLOGFLOW_SITE_TITLE="My Blog" \
-  -e BLOGFLOW_SITE_BASE_URL="https://blog.example.com" \
-  blogflow
-```
-
-The image is built on `gcr.io/distroless/static-debian12:nonroot` — no shell,
-no package manager, no attack surface. Runs as `nonroot:nonroot` (UID 65532).
+GitHub Flavored Markdown via Goldmark: tables, task lists, strikethrough, autolinks, footnotes, and fenced code blocks with syntax highlighting.
 
 ## Development
 
 ```bash
-make build    # Compile binary to bin/blogflow
-make test     # Run tests with race detector
-make lint     # Run golangci-lint
-make fmt      # Format with gofumpt
-make docker   # Build Docker image
-make run      # Build and run locally (dev mode)
-make dev      # Build and run with live reload
-make clean    # Remove build artifacts
-make help     # Show all targets
+make build        # Compile binary to bin/blogflow
+make test         # Unit tests with race detector
+make lint         # golangci-lint static analysis
+make fmt          # Format with gofumpt
+make docker       # Build container image
+make smoke-test   # Container smoke tests (health, feeds, metrics)
+make e2e          # Docker Compose end-to-end suite
+make k8s-lint     # Validate K8s manifests and Helm chart with kubeconform
+make run          # Build and run locally (dev mode)
+make dev          # Build and run with local content
+make clean        # Remove build artifacts
 ```
 
 ## Architecture
 
-```
-cmd/blogflow/          CLI entry point
-internal/server/       HTTP server, routes, middleware, handlers
-internal/content/      Content scanning, front matter parsing, markdown rendering
-internal/theme/        Theme loading, overlay FS, template engine
-internal/config/       Configuration system (YAML + env vars + embedded defaults)
-internal/overlayfs/    Overlay filesystem (io/fs.FS) implementation
-defaults/              Embedded defaults (templates, CSS, images, config)
+```mermaid
+graph TD
+    subgraph CLI
+        main["cmd/blogflow/main.go"]
+    end
+
+    subgraph Internal
+        config["internal/config\nYAML + env + defaults"]
+        content["internal/content\nScanner · front matter · Goldmark"]
+        theme["internal/theme\nTemplates · overlay FS"]
+        server["internal/server\nRoutes · middleware · handlers"]
+        overlayfs["internal/overlayfs\nio/fs.FS layering"]
+        gitops["internal/gitops\nwatch · webhook · sidecar · poll"]
+        envfile["internal/envfile\n_FILE secret loader"]
+    end
+
+    subgraph Embedded
+        defaults["defaults/\nTemplates · CSS · images · config"]
+    end
+
+    main --> config
+    main --> server
+    server --> content
+    server --> theme
+    theme --> overlayfs
+    overlayfs --> defaults
+    config --> envfile
+    gitops --> content
 ```
 
-**Overlay FS resolution order** (first match wins):
+**Overlay FS resolution** (first match wins):
 
 ```
 External theme → External content → External config → Embedded defaults
@@ -195,77 +216,19 @@ External theme → External content → External config → Embedded defaults
 **Content pipeline**:
 
 ```
-Markdown files → YAML front matter + goldmark → Go html/template → Cached HTML
+Markdown → YAML front matter + Goldmark → Go html/template → Render cache → HTTP response
 ```
 
 Design documents and ADRs are in [`docs/engineering/design/`](docs/engineering/design/).
 
-## Health Checks
-
-BlogFlow exposes two health endpoints:
-
-| Endpoint | Purpose |
-|---|---|
-| `/healthz` | Liveness probe — returns `200 OK` if the process is running |
-| `/readyz` | Readiness probe — returns `200 OK` once the server has finished initialization (atomic gate) |
-
-Use these with Kubernetes liveness/readiness probes or any load-balancer health check.
-
-## Logging
-
-BlogFlow uses Go's structured `slog` logger. Each request logs:
-
-| Field | Description |
-|---|---|
-| `method` | HTTP method |
-| `path` | Request path |
-| `status` | Response status code |
-| `duration` | Request handling time |
-| `remote` | Client address |
-
-Use `--dev` to set the log level to debug. In production, logs are emitted as
-structured JSON at info level.
-
-## Content Format
-
-Blog posts use YAML front matter:
-
-```yaml
----
-title: "Post Title"
-slug: "post-title"
-date: 2025-01-15
-tags: ["go", "architecture"]
-description: "A brief summary for feeds and SEO"
-draft: false
----
-
-Markdown content here...
-```
-
-Supported front matter fields: `title`, `slug`, `date`, `updated`, `draft`,
-`tags`, `categories`, `author`, `description`, `template`, `image`.
-
-## Deployment
-
-BlogFlow supports multiple deployment patterns — from local development to
-production Kubernetes clusters.
-
-- **[Deployment Guide](docs/deployment-guide.md)** — full walkthrough of all patterns (watch, sidecar, webhook, Docker)
-- **[K8s Sidecar Manifests](examples/k8s/sidecar/)** — production-ready Kubernetes manifests for the git-sync sidecar pattern
-- **[K8s Webhook Manifests](examples/k8s/webhook/)** — production-ready Kubernetes manifests for the webhook pattern
-- **[Helm Chart](deploy/helm/blogflow/)** — deploy with `helm install` using any sync strategy
-
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make changes with tests (`make test`)
-4. Run linters (`make lint`)
-5. Submit a pull request to `main`
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. The short version:
 
-Trunk-based development: `main` is always deployable. All changes go through
-feature branches and pull requests.
+1. Fork and create a feature branch
+2. Write tests — `make test`
+3. Lint — `make lint`
+4. Open a pull request to `main`
 
 ## License
 
