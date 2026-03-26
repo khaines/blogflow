@@ -245,6 +245,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Shutdown shuts down both the main and metrics servers.
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("shutdown error", "error", err)
 		}
@@ -256,6 +257,12 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Start()
+	}()
+
+	// Start metrics server on dedicated port (no-op when MetricsPort == 0).
+	metricsErrCh := make(chan error, 1)
+	go func() {
+		metricsErrCh <- srv.StartMetrics()
 	}()
 
 	// Wait for listener to bind or an immediate failure
@@ -274,6 +281,10 @@ func main() {
 	// Wait for server to finish (shutdown or error)
 	if err := <-errCh; err != nil {
 		logger.Error("server error", "error", err)
+		os.Exit(1)
+	}
+	if err := <-metricsErrCh; err != nil {
+		logger.Error("metrics server error", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("server stopped")

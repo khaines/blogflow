@@ -74,6 +74,8 @@ siteConfig:
     name: default
   server:
     port: 8080
+    # -- Dedicated metrics port (0 = serve metrics on main port)
+    # metrics_port: 9090
     read_timeout: 5s
     write_timeout: 10s
     idle_timeout: 120s
@@ -99,6 +101,8 @@ service:
   type: ClusterIP
   # -- Service port
   port: 8080
+  # -- Dedicated metrics port (0 = disabled, metrics served on main port)
+  metricsPort: 0
 
 ingress:
   # -- Enable ingress resource

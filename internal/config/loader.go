@@ -397,6 +397,14 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.HSTSMaxAge = n
 		return nil
 	},
+	"BLOGFLOW_SERVER_METRICS_PORT": func(c *Config, v string) error {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_METRICS_PORT as int: %w", err)
+		}
+		c.Server.MetricsPort = n
+		return nil
+	},
 }
 
 // secretEnvVars identifies env vars that should be redacted in logs.
@@ -452,6 +460,24 @@ func Validate(cfg *Config) error {
 			Value:   cfg.Server.Port,
 			Message: "must be between 1 and 65535",
 		})
+	}
+
+	// Server.MetricsPort: 0 = disabled (metrics on main port); 1-65535 = separate listener
+	if cfg.Server.MetricsPort != 0 {
+		if cfg.Server.MetricsPort < 1 || cfg.Server.MetricsPort > 65535 {
+			errs = append(errs, FieldError{
+				Field:   "server.metrics_port",
+				Value:   cfg.Server.MetricsPort,
+				Message: "must be between 1 and 65535",
+			})
+		}
+		if cfg.Server.MetricsPort == cfg.Server.Port {
+			errs = append(errs, FieldError{
+				Field:   "server.metrics_port",
+				Value:   cfg.Server.MetricsPort,
+				Message: "must be different from server.port",
+			})
+		}
 	}
 
 	// Server timeouts: must be > 0

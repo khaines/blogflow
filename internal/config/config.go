@@ -54,6 +54,7 @@ type ThemeConfig struct {
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
 	Port              int           `yaml:"port"`
+	MetricsPort       int           `yaml:"metrics_port"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
 	WriteTimeout      time.Duration `yaml:"write_timeout"`
 	IdleTimeout       time.Duration `yaml:"idle_timeout"`

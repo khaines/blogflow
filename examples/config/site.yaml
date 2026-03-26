@@ -53,6 +53,11 @@ theme:
 # ---------------------------------------------------------------------------
 server:
   port: 8080                  # Listen port (1–65535). Override: BLOGFLOW_SERVER_PORT
+  # metrics_port: 9090        # Dedicated metrics port (1–65535, must differ from port).
+                              # When set, /metrics and /healthz are served on this port
+                              # only — the main port has no /metrics endpoint.
+                              # Set to 0 (default) to serve metrics on the main port.
+                              # Override: BLOGFLOW_SERVER_METRICS_PORT
   read_timeout: "5s"          # Max time to read request (Go duration)
   write_timeout: "10s"        # Max time to write response
   idle_timeout: "120s"        # Max time for idle keep-alive connections
