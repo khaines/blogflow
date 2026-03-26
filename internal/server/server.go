@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -27,6 +28,7 @@ type ContentChecker interface {
 // Server is the BlogFlow HTTP server.
 type Server struct {
 	httpServer     *http.Server
+	metricsServer  *http.Server // nil when MetricsPort == 0
 	mux            *http.ServeMux
 	config         *config.Config
 	logger         *slog.Logger
@@ -66,6 +68,20 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      cfg.Server.WriteTimeout,
 		IdleTimeout:       cfg.Server.IdleTimeout,
+	}
+
+	if cfg.Server.MetricsPort > 0 {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", MetricsHandler())
+		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
+		s.metricsServer = &http.Server{
+			Addr:              fmt.Sprintf(":%d", cfg.Server.MetricsPort),
+			Handler:           s.recoveryMiddleware(metricsMux),
+			ReadTimeout:       cfg.Server.ReadTimeout,
+			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      cfg.Server.WriteTimeout,
+			IdleTimeout:       cfg.Server.IdleTimeout,
+		}
 	}
 
 	return s
@@ -126,8 +142,10 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	s.mux.HandleFunc("GET /readyz", s.readyHandler)
 	s.mux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 
-	// Prometheus metrics (registered directly on the mux, outside metrics middleware)
-	s.mux.Handle("GET /metrics", MetricsHandler())
+	// Prometheus metrics: on main mux only when no separate metrics port is configured
+	if s.config.Server.MetricsPort == 0 {
+		s.mux.Handle("GET /metrics", MetricsHandler())
+	}
 
 	// Static assets
 	if opts.StaticFS != nil {
@@ -183,9 +201,54 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // Shutdown gracefully stops the server with the given context deadline.
+// If a separate metrics server is running, both servers are shut down
+// concurrently so that one cannot consume the other's timeout budget.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("server shutting down")
-	return s.httpServer.Shutdown(ctx)
+
+	var metricsErr error
+	var wg sync.WaitGroup
+	if s.metricsServer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.metricsServer.Shutdown(ctx); err != nil {
+				metricsErr = fmt.Errorf("metrics server: %w", err)
+			}
+		}()
+	}
+
+	var mainErr error
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		mainErr = fmt.Errorf("main server: %w", err)
+	}
+	wg.Wait()
+	return errors.Join(mainErr, metricsErr)
+}
+
+// StartMetrics starts the metrics server on its dedicated port.
+// Returns nil immediately if no separate metrics port is configured.
+// Blocks until the metrics server stops.
+func (s *Server) StartMetrics() error {
+	if s.metricsServer == nil {
+		return nil
+	}
+	addr := s.metricsServer.Addr
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("metrics server: %w", err)
+	}
+	s.logger.Info("metrics server listening", "addr", ln.Addr().String())
+	if err := s.metricsServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("metrics server: %w", err)
+	}
+	return nil
+}
+
+// MetricsServer returns the dedicated metrics *http.Server, or nil
+// if metrics are served on the main port.
+func (s *Server) MetricsServer() *http.Server {
+	return s.metricsServer
 }
 
 // middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics.

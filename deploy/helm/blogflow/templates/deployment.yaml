@@ -38,6 +38,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) }}
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+            {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           {{- /* NOTE: BlogFlow currently reads the webhook secret from the

@@ -245,6 +245,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Shutdown shuts down both the main and metrics servers.
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("shutdown error", "error", err)
 		}
@@ -258,10 +259,28 @@ func main() {
 		errCh <- srv.Start()
 	}()
 
+	// Start metrics server on dedicated port (no-op when MetricsPort == 0).
+	metricsErrCh := make(chan error, 1)
+	go func() {
+		metricsErrCh <- srv.StartMetrics()
+	}()
+
+	// metricsStartCh mirrors metricsErrCh only when a separate metrics
+	// port is configured.  A nil channel is never selected, so the
+	// readiness select below naturally ignores it when MetricsPort == 0
+	// (where StartMetrics returns nil immediately).
+	var metricsStartCh <-chan error
+	if cfg.Server.MetricsPort > 0 {
+		metricsStartCh = metricsErrCh
+	}
+
 	// Wait for listener to bind or an immediate failure
 	select {
 	case err := <-errCh:
 		logger.Error("server failed to start", "error", err)
+		os.Exit(1)
+	case err := <-metricsStartCh:
+		logger.Error("metrics server failed to start", "error", err)
 		os.Exit(1)
 	case <-srv.Ready():
 		srv.SetReady(true)
@@ -271,10 +290,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wait for server to finish (shutdown or error)
-	if err := <-errCh; err != nil {
-		logger.Error("server error", "error", err)
-		os.Exit(1)
+	// Wait for both servers to finish (shutdown or error).
+	// Using a select ensures that a metrics-server failure (e.g. port
+	// conflict) is detected immediately rather than going unnoticed until
+	// the main server shuts down.
+	for errCh != nil || metricsErrCh != nil {
+		select {
+		case err := <-errCh:
+			errCh = nil
+			if err != nil {
+				logger.Error("server error", "error", err)
+				os.Exit(1)
+			}
+		case err := <-metricsErrCh:
+			metricsErrCh = nil
+			if err != nil {
+				logger.Error("metrics server error", "error", err)
+				os.Exit(1)
+			}
+		}
 	}
 	logger.Info("server stopped")
 }

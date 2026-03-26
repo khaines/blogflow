@@ -705,3 +705,162 @@ func TestReadyChannel_NotClosedBeforeStart(t *testing.T) {
 		// expected — channel is still open
 	}
 }
+
+// --- Metrics port tests ---
+
+func TestMetricsOnMainPort_Default(t *testing.T) {
+	// When MetricsPort is 0 (default), /metrics should be registered on the main mux.
+	s := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "go_goroutines") {
+		t.Error("expected prometheus metrics in response body")
+	}
+}
+
+func TestMetricsNotOnMainPort_WhenSeparatePort(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 9090
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	// /metrics should NOT be on the main mux
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	// Go 1.22 ServeMux returns 405 for unmatched method or 404 for unmatched path.
+	// /metrics is not registered, so we expect 404 or 405 — definitely not 200.
+	if rec.Code == http.StatusOK {
+		t.Error("expected /metrics NOT to be on main mux when MetricsPort is set")
+	}
+}
+
+func TestMetricsOnSeparatePort(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 19091
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	if s.MetricsServer() == nil {
+		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+	}
+
+	// Start the metrics server on a random port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.metricsServer.Serve(ln)
+	}()
+
+	// Request /metrics on the metrics listener
+	resp, err := http.Get(fmt.Sprintf("http://%s/metrics", ln.Addr().String()))
+	if err != nil {
+		t.Fatalf("failed to GET /metrics: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("/metrics status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Shut down metrics server
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.metricsServer.Shutdown(ctx); err != nil {
+		t.Fatalf("metrics server shutdown error: %v", err)
+	}
+	if err := <-errCh; err != nil && err != http.ErrServerClosed {
+		t.Fatalf("metrics server returned unexpected error: %v", err)
+	}
+}
+
+func TestHealthzOnMetricsPort(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 19092
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+
+	// Start metrics server on a random port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.metricsServer.Serve(ln)
+	}()
+
+	// /healthz should be available on the metrics port
+	resp, err := http.Get(fmt.Sprintf("http://%s/healthz", ln.Addr().String()))
+	if err != nil {
+		t.Fatalf("failed to GET /healthz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("/healthz on metrics port: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body := make([]byte, 64)
+	n, _ := resp.Body.Read(body)
+	if got := string(body[:n]); got != "ok" {
+		t.Errorf("/healthz body = %q, want %q", got, "ok")
+	}
+
+	// /healthz should also still be on the main port
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("/healthz on main port: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.metricsServer.Shutdown(ctx); err != nil {
+		t.Fatalf("metrics server shutdown error: %v", err)
+	}
+	if err := <-errCh; err != nil && err != http.ErrServerClosed {
+		t.Fatalf("metrics server returned unexpected error: %v", err)
+	}
+}
+
+func TestMetricsServer_NilWhenPortZero(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 0
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if s.MetricsServer() != nil {
+		t.Error("MetricsServer() should be nil when MetricsPort is 0")
+	}
+}
+
+func TestStartMetrics_NilWhenPortZero(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 0
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	// StartMetrics should return nil immediately when no metrics server
+	if err := s.StartMetrics(); err != nil {
+		t.Errorf("StartMetrics() = %v, want nil", err)
+	}
+}
