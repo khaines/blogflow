@@ -746,9 +746,6 @@ func TestMetricsNotOnMainPort_WhenSeparatePort(t *testing.T) {
 
 func TestMetricsOnSeparatePort(t *testing.T) {
 	cfg := defaultTestConfig()
-	cfg.Server.MetricsPort = 0 // will pick a free port via listener
-
-	// Manually set MetricsPort to something non-zero to trigger separate server creation
 	cfg.Server.MetricsPort = 19091
 
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))

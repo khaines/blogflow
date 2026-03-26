@@ -278,14 +278,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wait for server to finish (shutdown or error)
-	if err := <-errCh; err != nil {
-		logger.Error("server error", "error", err)
-		os.Exit(1)
-	}
-	if err := <-metricsErrCh; err != nil {
-		logger.Error("metrics server error", "error", err)
-		os.Exit(1)
+	// Wait for both servers to finish (shutdown or error).
+	// Using a select ensures that a metrics-server failure (e.g. port
+	// conflict) is detected immediately rather than going unnoticed until
+	// the main server shuts down.
+	for errCh != nil || metricsErrCh != nil {
+		select {
+		case err := <-errCh:
+			errCh = nil
+			if err != nil {
+				logger.Error("server error", "error", err)
+				os.Exit(1)
+			}
+		case err := <-metricsErrCh:
+			metricsErrCh = nil
+			if err != nil {
+				logger.Error("metrics server error", "error", err)
+				os.Exit(1)
+			}
+		}
 	}
 	logger.Info("server stopped")
 }

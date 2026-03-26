@@ -978,10 +978,22 @@ func TestValidate_MetricsPort_Zero_Valid(t *testing.T) {
 }
 
 func TestValidate_MetricsPort_Valid(t *testing.T) {
-	cfg := Default()
-	cfg.Server.MetricsPort = 9090
-	if err := Validate(cfg); err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
+	tests := []struct {
+		name string
+		port int
+	}{
+		{"typical", 9090},
+		{"min valid", 1},
+		{"max valid", 65535},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Server.MetricsPort = tt.port
+			if err := Validate(cfg); err != nil {
+				t.Fatalf("unexpected validation error for port %d: %v", tt.port, err)
+			}
+		})
 	}
 }
 
@@ -1015,6 +1027,7 @@ func TestValidate_MetricsPort_OutOfRange(t *testing.T) {
 		port int
 	}{
 		{"negative", -1},
+		{"boundary too high", 65536},
 		{"too high", 99999},
 	}
 	for _, tt := range tests {
