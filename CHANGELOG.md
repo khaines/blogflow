@@ -2,6 +2,24 @@
 
 ## main / unreleased
 
+## 0.2.1 / 2026-03-26
+
+### BlogFlow
+
+* [FEATURE] Server: Separate metrics listener port (`server.metrics_port`) for network isolation. #146
+* [BUGFIX] CI: Update `codeql-action` from v3 to v4 and make SARIF upload non-blocking. #138
+
+### Helm Chart
+
+* [ENHANCEMENT] Helm: Added `service.metricsPort` for dedicated Prometheus scrape target. #146
+
+### Documentation
+
+* [ENHANCEMENT] Docs: Rewritten README with comprehensive v0.2.0 feature coverage. #139
+* [ENHANCEMENT] Docs: Added CONTRIBUTING.md with development workflow, testing, AI agents, RFL process. #140
+* [ENHANCEMENT] Docs: GitHub Pages landing page at blogflow.io. #142 #143 #144
+* [BUGFIX] Docs: Corrected changelog format attribution to Prometheus/Cortex ecosystem. #141
+
 ## 0.1.0 / 2026-03-23
 
 ### BlogFlow
