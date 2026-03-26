@@ -6,4 +6,8 @@ metadata:
     {{- include "blogflow.labels" . | nindent 4 }}
 data:
   site.yaml: |
-    {{- .Values.siteConfig | toYaml | nindent 4 }}
+    {{- $config := deepCopy .Values.siteConfig -}}
+    {{- if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) -}}
+      {{- $_ := set $config.server "metrics_port" (int .Values.service.metricsPort) -}}
+    {{- end }}
+    {{- $config | toYaml | nindent 4 }}
