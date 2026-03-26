@@ -145,6 +145,120 @@ examples/              Example K8s deployments and configurations
 
 ---
 
+## Mermaid Diagram Standards
+
+BlogFlow uses [Mermaid](https://mermaid.js.org/) diagrams throughout its
+documentation — architecture overviews, deployment flows, sequence diagrams, and
+decision trees. Follow these standards so every diagram is visually consistent
+and immediately readable.
+
+### Color Scheme (`classDef` Classes)
+
+Every Mermaid diagram **must** use the standard `classDef` palette instead of
+inline `style` directives on individual nodes. Define these classes at the
+bottom of every diagram block:
+
+```text
+classDef primary   fill:#2563eb,stroke:#1e40af,color:#fff
+classDef secondary fill:#7c3aed,stroke:#5b21b6,color:#fff
+classDef external  fill:#059669,stroke:#047857,color:#fff
+classDef storage   fill:#d97706,stroke:#b45309,color:#fff
+classDef danger    fill:#dc2626,stroke:#991b1b,color:#fff
+classDef success   fill:#16a34a,stroke:#15803d,color:#fff
+classDef muted     fill:#6b7280,stroke:#4b5563,color:#fff
+```
+
+| Class       | Use for                          | Examples                                      |
+| ----------- | -------------------------------- | --------------------------------------------- |
+| `primary`   | BlogFlow core components         | Server, OverlayFS, Theme Engine               |
+| `secondary` | Supporting / internal components | Config, Scanner, Cache                        |
+| `external`  | External systems                 | GitHub, git-sync, Browser, Prometheus         |
+| `storage`   | Data, files, volumes             | Content dir, PVC, embed.FS, ConfigMap         |
+| `danger`    | Errors, anti-patterns            | Stale pods, failures, rejected paths          |
+| `success`   | Recommended, healthy states      | Synced pods, approved patterns                |
+| `muted`     | Context, background info         | Trust boundaries, optional paths              |
+
+### Subgraph Backgrounds
+
+Use tinted subgraph fills to convey trust boundaries at a glance:
+
+| Boundary              | Style                       | Use                              |
+| --------------------- | --------------------------- | -------------------------------- |
+| Trusted (compiled)    | `style TB fill:#f0fdf4`     | embed.FS, binary code            |
+| Operator-controlled   | `style OP fill:#eff6ff`     | Config, theme repos              |
+| Untrusted / external  | `style UT fill:#fef2f2`     | User input, external APIs        |
+| K8s Pod boundary      | `style K8S fill:#faf5ff`    | Container grouping               |
+
+### Formatting Rules
+
+- **Always specify direction** — start every diagram with `graph LR`, `graph TD`,
+  `sequenceDiagram`, or another explicit direction.
+- **Line breaks** — use `<br/>` only; never use `\n`.
+- **Emojis** — allowed in text labels (e.g., `["🚀 Server"]`), but **never** in
+  node IDs.
+- **No inline `style`** on individual nodes — use `classDef` + `:::className`
+  (see [Color Scheme](#color-scheme-classdef-classes) above).
+- **Node shapes** — pick the shape that matches the concept:
+  - `[rect]` — components and services
+  - `[(database)]` — storage and persistence
+  - `{{decision}}` — choices and conditions
+  - `([rounded])` — events and triggers
+
+### Example Diagram
+
+Below is a complete reference diagram that demonstrates every standard class,
+subgraph background, and formatting rule:
+
+````markdown
+```mermaid
+graph LR
+  subgraph TB["🔒 Trusted Binary"]
+    E["📦 embed.FS<br/>Default Theme"]:::storage
+    S["🚀 Server"]:::primary
+    O["📂 OverlayFS"]:::primary
+  end
+
+  subgraph OP["⚙️ Operator-Controlled"]
+    C["🔧 Config"]:::secondary
+    T["🎨 Theme Repo"]:::secondary
+  end
+
+  subgraph UT["🌐 Untrusted"]
+    B["🖥️ Browser"]:::external
+    G["🐙 GitHub Webhook"]:::external
+  end
+
+  subgraph K8S["☸ Kubernetes Pod"]
+    GS["🔄 git-sync"]:::external
+    V[("💾 Content Volume")]:::storage
+  end
+
+  G -->|push event| GS
+  GS -->|pulls content| V
+  V -->|reads files| O
+  E -->|fallback layer| O
+  T -->|theme layer| O
+  C -->|settings| S
+  O -->|merged tree| S
+  B -->|HTTP request| S
+
+  style TB fill:#f0fdf4
+  style OP fill:#eff6ff
+  style UT fill:#fef2f2
+  style K8S fill:#faf5ff
+
+  classDef primary   fill:#2563eb,stroke:#1e40af,color:#fff
+  classDef secondary fill:#7c3aed,stroke:#5b21b6,color:#fff
+  classDef external  fill:#059669,stroke:#047857,color:#fff
+  classDef storage   fill:#d97706,stroke:#b45309,color:#fff
+  classDef danger    fill:#dc2626,stroke:#991b1b,color:#fff
+  classDef success   fill:#16a34a,stroke:#15803d,color:#fff
+  classDef muted     fill:#6b7280,stroke:#4b5563,color:#fff
+```
+````
+
+---
+
 ## AI-Assisted Development
 
 BlogFlow uses a structured AI-agent workflow to maintain quality and
