@@ -265,10 +265,22 @@ func main() {
 		metricsErrCh <- srv.StartMetrics()
 	}()
 
+	// metricsStartCh mirrors metricsErrCh only when a separate metrics
+	// port is configured.  A nil channel is never selected, so the
+	// readiness select below naturally ignores it when MetricsPort == 0
+	// (where StartMetrics returns nil immediately).
+	var metricsStartCh <-chan error
+	if cfg.Server.MetricsPort > 0 {
+		metricsStartCh = metricsErrCh
+	}
+
 	// Wait for listener to bind or an immediate failure
 	select {
 	case err := <-errCh:
 		logger.Error("server failed to start", "error", err)
+		os.Exit(1)
+	case err := <-metricsStartCh:
+		logger.Error("metrics server failed to start", "error", err)
 		os.Exit(1)
 	case <-srv.Ready():
 		srv.SetReady(true)

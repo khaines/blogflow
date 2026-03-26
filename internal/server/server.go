@@ -201,19 +201,29 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // Shutdown gracefully stops the server with the given context deadline.
-// If a separate metrics server is running, it is shut down as well.
+// If a separate metrics server is running, both servers are shut down
+// concurrently so that one cannot consume the other's timeout budget.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("server shutting down")
-	var errs []error
+
+	var metricsErr error
+	var wg sync.WaitGroup
 	if s.metricsServer != nil {
-		if err := s.metricsServer.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("metrics server: %w", err))
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.metricsServer.Shutdown(ctx); err != nil {
+				metricsErr = fmt.Errorf("metrics server: %w", err)
+			}
+		}()
 	}
+
+	var mainErr error
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("main server: %w", err))
+		mainErr = fmt.Errorf("main server: %w", err)
 	}
-	return errors.Join(errs...)
+	wg.Wait()
+	return errors.Join(mainErr, metricsErr)
 }
 
 // StartMetrics starts the metrics server on its dedicated port.
