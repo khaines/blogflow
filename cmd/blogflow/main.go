@@ -61,7 +61,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	// OpenTelemetry (opt-in via OTEL_TRACES_EXPORTER env var)
+	// OpenTelemetry (opt-in via OTEL_TRACES_EXPORTER / OTEL_METRICS_EXPORTER env vars)
 	otelShutdown, otelErr := blogotel.Init(context.Background(), "blogflow", version, nil)
 	if otelErr != nil {
 		// Use stderr directly — logger is not yet created.
