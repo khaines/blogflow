@@ -186,7 +186,7 @@ func main() {
 	})
 
 	// 8. Content reloader for sync strategies
-	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, logger)
+	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, cfgLoader, themeEngine, logger)
 
 	// 9. Initialize sync strategy
 	syncStrategy, err := gitops.NewStrategy(&cfg.Sync, reloader, logger)
