@@ -6,6 +6,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // contextKey is an unexported type for context keys defined in this package,
@@ -24,6 +29,10 @@ const (
 
 // resolutionKey is a distinct unexported type for the Resolution context key.
 type resolutionContextKey struct{}
+
+// tracer is the package-level OpenTelemetry tracer for ContextOverlayFS.
+// Obtained from the global provider on each call to support test swapping.
+const tracerName = "github.com/khaines/blogflow/internal/overlayfs"
 
 // ContextOverlayFS wraps OverlayFS with context.Context support for
 // cancellation, tracing, and security log correlation. This is the
@@ -70,8 +79,15 @@ func (c *ContextOverlayFS) Open(ctx context.Context, name string) (fs.File, erro
 		return nil, fmt.Errorf("overlayfs: open %q: %w", name, err)
 	}
 
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "overlayfs.open", trace.WithAttributes(
+		attribute.String("path", name),
+	))
+	defer span.End()
+
 	start := time.Now()
 	f, err := c.inner.Open(name)
+	c.recordResolution(ctx, span, name)
+	c.finishSpan(span, err)
 	c.logOperation(ctx, "open", name, start, err)
 	return f, err
 }
@@ -85,8 +101,15 @@ func (c *ContextOverlayFS) ReadFile(ctx context.Context, name string) ([]byte, e
 		return nil, fmt.Errorf("overlayfs: readfile %q: %w", name, err)
 	}
 
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "overlayfs.readfile", trace.WithAttributes(
+		attribute.String("path", name),
+	))
+	defer span.End()
+
 	start := time.Now()
 	data, err := c.inner.ReadFile(name)
+	c.recordResolution(ctx, span, name)
+	c.finishSpan(span, err)
 	c.logOperation(ctx, "readfile", name, start, err)
 	return data, err
 }
@@ -100,8 +123,14 @@ func (c *ContextOverlayFS) ReadDir(ctx context.Context, name string) ([]fs.DirEn
 		return nil, fmt.Errorf("overlayfs: readdir %q: %w", name, err)
 	}
 
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "overlayfs.readdir", trace.WithAttributes(
+		attribute.String("path", name),
+	))
+	defer span.End()
+
 	start := time.Now()
 	entries, err := c.inner.ReadDir(name)
+	c.finishSpan(span, err)
 	c.logOperation(ctx, "readdir", name, start, err)
 	return entries, err
 }
@@ -115,8 +144,15 @@ func (c *ContextOverlayFS) Stat(ctx context.Context, name string) (fs.FileInfo, 
 		return nil, fmt.Errorf("overlayfs: stat %q: %w", name, err)
 	}
 
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "overlayfs.stat", trace.WithAttributes(
+		attribute.String("path", name),
+	))
+	defer span.End()
+
 	start := time.Now()
 	info, err := c.inner.Stat(name)
+	c.recordResolution(ctx, span, name)
+	c.finishSpan(span, err)
 	c.logOperation(ctx, "stat", name, start, err)
 	return info, err
 }
@@ -131,8 +167,15 @@ func (c *ContextOverlayFS) OpenFile(ctx context.Context, name string) (fs.File, 
 		return nil, nil, fmt.Errorf("overlayfs: openfile %q: %w", name, err)
 	}
 
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "overlayfs.openfile", trace.WithAttributes(
+		attribute.String("path", name),
+	))
+	defer span.End()
+
 	start := time.Now()
 	f, info, err := c.inner.OpenFile(name)
+	c.recordResolution(ctx, span, name)
+	c.finishSpan(span, err)
 	c.logOperation(ctx, "openfile", name, start, err)
 	return f, info, err
 }
@@ -189,6 +232,27 @@ func (c *ContextOverlayFS) logOperation(ctx context.Context, op, name string, st
 		c.logger.LogAttrs(ctx, slog.LevelDebug, "overlayfs operation failed", attrs...)
 	} else {
 		c.logger.LogAttrs(ctx, slog.LevelDebug, "overlayfs operation", attrs...)
+	}
+}
+
+// recordResolution adds Resolution attributes to the span if the path
+// can be resolved. ReadDir does not resolve to a single layer, so this
+// is not called for readdir operations.
+func (c *ContextOverlayFS) recordResolution(_ context.Context, span trace.Span, name string) {
+	res, err := c.inner.Resolve(name)
+	if err != nil {
+		return
+	}
+	span.SetAttributes(
+		attribute.String("layer.name", res.LayerName),
+		attribute.Int("layer.index", res.LayerIndex),
+	)
+}
+
+// finishSpan sets span status to Error when err is non-nil.
+func (c *ContextOverlayFS) finishSpan(span trace.Span, err error) {
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 	}
 }
 
