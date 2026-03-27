@@ -56,3 +56,15 @@ top of the page:
 The datasource is referenced as `${DS_PROMETHEUS}` so Grafana will prompt you
 to bind it on import. Edit the JSON directly if you need to hard-code a UID
 instead.
+
+## Trace correlation
+
+When [OpenTelemetry tracing](../../docs/deployment-guide.md#observability) is
+enabled, BlogFlow injects `trace_id` and `span_id` into every log line. If
+your logging pipeline forwards these fields to a trace backend (Grafana Tempo,
+Jaeger, etc.), you can jump directly from a Grafana log panel to the
+corresponding distributed trace.
+
+In Grafana, configure a **Tempo** or **Jaeger** datasource alongside
+Prometheus, then add a **Logs** panel filtered by `trace_id` to correlate
+dashboard metrics with individual traces.

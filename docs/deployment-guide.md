@@ -11,6 +11,7 @@
 - [Pattern 3: Kubernetes — Webhook + go-git Pull](#pattern-3-kubernetes--webhook--go-git-pull)
 - [Pattern 4: Docker Production (Webhook)](#pattern-4-docker-production-webhook)
 - [Health & Readiness Endpoints](#health--readiness-endpoints)
+- [Observability](#observability)
 - [Helm Chart Installation](#helm-chart-installation)
 - [Authentication Reference](#authentication-reference)
 - [Environment Variable Reference](#environment-variable-reference)
@@ -949,6 +950,145 @@ When `server.metrics_port` is configured, `/healthz` is available on **both** th
 
 ---
 
+## Observability
+
+BlogFlow exposes metrics via Prometheus (built-in) and supports OpenTelemetry
+tracing and metrics export (opt-in). Both systems work independently — enable
+one, both, or neither.
+
+### Prometheus (built-in)
+
+Prometheus metrics are always available. No extra configuration is needed.
+
+| Feature | Details |
+|---------|---------|
+| Endpoint | `/metrics` on the main port, or on a dedicated `metrics_port` |
+| RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
+| Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
+| Go runtime | Goroutines, memory, GC pause duration, open file descriptors |
+| Grafana dashboard | [Pre-built JSON](../examples/grafana/) — import and go |
+
+To move metrics off the main port:
+
+```yaml
+server:
+  port: 8080
+  metrics_port: 9090   # /metrics served here only
+```
+
+### OpenTelemetry (opt-in)
+
+OpenTelemetry is **disabled by default**. When the `OTEL_*` environment
+variables below are unset, BlogFlow registers a no-op tracer and meter —
+**zero overhead**.
+
+#### Tracing
+
+Set `OTEL_TRACES_EXPORTER=otlp` and point `OTEL_EXPORTER_OTLP_ENDPOINT` at
+your collector or backend:
+
+```bash
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+OTEL_SERVICE_NAME=blogflow        # default: "blogflow"
+```
+
+**What gets traced:**
+
+- HTTP requests (method, path, status, duration)
+- Content scans (directory walk, front-matter parsing)
+- Git operations (clone, pull, diff)
+- Template rendering (template name, render duration)
+- Config reloads (reload trigger, changed keys)
+- Overlay FS resolution (layer lookups, cache hits/misses)
+
+**Propagation:** W3C Trace Context and Baggage headers are propagated
+automatically.
+
+#### Metrics bridge
+
+Set `OTEL_METRICS_EXPORTER=otlp` to **dual-export** metrics — Prometheus
+scraping via `/metrics` continues to work while the same metrics are pushed
+to your OTel backend via OTLP:
+
+```bash
+OTEL_METRICS_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+The bridge reads from the default Prometheus gatherer and exports every 30
+seconds.
+
+#### Log correlation
+
+When tracing is active, `trace_id` and `span_id` are automatically injected
+into every `slog` log line. Use these fields to jump from a log entry to its
+distributed trace in your backend.
+
+```json
+{"time":"…","level":"INFO","msg":"request","trace_id":"abc123…","span_id":"def456…","method":"GET","path":"/"}
+```
+
+### Example: docker-compose with OTel Collector
+
+```yaml
+services:
+  blogflow:
+    image: ghcr.io/khaines/blogflow:latest
+    environment:
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: blogflow
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - "4318:4318"    # OTLP HTTP receiver
+      - "4317:4317"    # OTLP gRPC receiver
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml
+```
+
+### Example: Kubernetes with sidecar collector
+
+Add the OTel env vars to your Deployment spec:
+
+```yaml
+env:
+  - name: OTEL_TRACES_EXPORTER
+    value: "otlp"
+  - name: OTEL_METRICS_EXPORTER
+    value: "otlp"
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: "http://localhost:4318"   # sidecar on same pod
+  - name: OTEL_SERVICE_NAME
+    value: "blogflow"
+```
+
+Deploy the collector as a sidecar container in the same pod, or as a
+DaemonSet that all pods forward to. The [OpenTelemetry Operator for
+Kubernetes](https://opentelemetry.io/docs/kubernetes/operator/) can inject
+sidecars automatically.
+
+### Provider examples
+
+BlogFlow uses standard OTLP — no provider-specific dependencies. Point
+`OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP-compatible receiver:
+
+| Provider | Endpoint target |
+|----------|----------------|
+| **Grafana Tempo** | Tempo distributor (`http://tempo:4318`) |
+| **Jaeger** | Jaeger OTLP receiver (`http://jaeger:4318`) |
+| **Datadog** | Datadog Agent OTLP ingestion (`http://datadog-agent:4318`) |
+| **Azure Monitor** | Azure Monitor OTLP endpoint, or route through an OTel Collector |
+
+> **Tip:** Run a local collector during development to inspect traces before
+> configuring a production backend. The `debug` exporter in the OTel Collector
+> prints spans to stdout.
+
+---
+
 ## Helm Chart Installation
 
 A Helm chart is available in [`deploy/helm/blogflow/`](../deploy/helm/blogflow/)
@@ -1051,3 +1191,7 @@ and feed options, see the inline comments in the config examples above.
 | `BLOGFLOW_CACHE_ENABLED` | Enable/disable render cache | `true` | All patterns |
 | `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Max webhook requests/min/IP | `10` | Webhook patterns (3, 4) |
 | `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` | `atom` | All patterns |
+| `OTEL_TRACES_EXPORTER` | Enable OTel tracing (set to `otlp`) | *(disabled)* | All patterns |
+| `OTEL_METRICS_EXPORTER` | Enable OTel metrics bridge (set to `otlp`) | *(disabled)* | All patterns |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector/backend URL | — | All patterns |
+| `OTEL_SERVICE_NAME` | Service name in traces/metrics | `blogflow` | All patterns |

@@ -61,7 +61,8 @@ docker run -p 8080:8080 \
 - **Prometheus metrics** — `/metrics` endpoint with request counters, latencies, and overlay FS stats
 - **RED dashboard** — request rate, error rate, duration (p50/p95/p99) plus per-path breakdowns
 - **Grafana dashboard** — [pre-built JSON](examples/grafana/) with RED, HTTP detail, overlay FS, and Go runtime panels
-- **Structured logging** — `slog` JSON in production, text in `--dev` mode; includes request-ID, method, path, status, duration
+- **OpenTelemetry tracing and metrics** — opt-in via `OTEL_*` env vars; OTLP export to any compatible backend with zero overhead when disabled
+- **Structured logging** — `slog` JSON in production, text in `--dev` mode; includes request-ID, method, path, status, duration; `trace_id`/`span_id` injected when tracing is active
 - **Request-ID** — generated per-request with proxy-aware client IP detection
 
 ### Security
