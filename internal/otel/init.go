@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	prometheusbridge "go.opentelemetry.io/contrib/bridges/prometheus"
@@ -45,7 +46,7 @@ func Init(ctx context.Context, serviceName, version string, logger *slog.Logger)
 
 	var shutdowns []func(context.Context) error
 
-	proto := os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
+	proto := strings.TrimSpace(strings.ToLower(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")))
 
 	// --- Tracing ---
 	if exp := os.Getenv("OTEL_TRACES_EXPORTER"); exp != "" {
@@ -74,10 +75,6 @@ func Init(ctx context.Context, serviceName, version string, logger *slog.Logger)
 		}
 	} else if logger != nil {
 		logger.Debug("otel: metrics bridge disabled (OTEL_METRICS_EXPORTER not set)")
-	}
-
-	if logger != nil && len(shutdowns) > 0 {
-		logger.Info("otel transport", "protocol", proto)
 	}
 
 	if len(shutdowns) == 0 {
@@ -112,8 +109,10 @@ func initTracing(ctx context.Context, res *resource.Resource, proto string) (*sd
 	switch proto {
 	case "grpc":
 		exp, err = otlptracegrpc.New(ctx)
-	default: // "http/protobuf" or unset
+	case "http/protobuf", "":
 		exp, err = otlptracehttp.New(ctx)
+	default:
+		return nil, fmt.Errorf("otel: unsupported OTLP protocol %q (expected \"grpc\" or \"http/protobuf\")", proto)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("otel: create OTLP trace exporter: %w", err)
@@ -141,8 +140,10 @@ func initMetrics(ctx context.Context, res *resource.Resource, proto string) (*me
 	switch proto {
 	case "grpc":
 		exp, err = otlpmetricgrpc.New(ctx)
-	default: // "http/protobuf" or unset
+	case "http/protobuf", "":
 		exp, err = otlpmetrichttp.New(ctx)
+	default:
+		return nil, fmt.Errorf("otel: unsupported OTLP protocol %q (expected \"grpc\" or \"http/protobuf\")", proto)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("otel: create OTLP metric exporter: %w", err)

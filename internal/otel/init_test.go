@@ -145,3 +145,44 @@ func TestInit_ProtocolHTTPExplicit(t *testing.T) {
 	}
 	_ = shutdown(context.Background())
 }
+
+func TestInit_ProtocolNormalization(t *testing.T) {
+	for _, val := range []string{"GRPC", " grpc ", "  GRPC  "} {
+		t.Run(val, func(t *testing.T) {
+			t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+			t.Setenv("OTEL_METRICS_EXPORTER", "")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:0")
+			t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", val)
+
+			shutdown, err := blogotel.Init(context.Background(), "test-svc", "0.0.0", nil)
+			if err != nil {
+				t.Fatalf("Init() error = %v, want nil", err)
+			}
+			_ = shutdown(context.Background())
+		})
+	}
+}
+
+func TestInit_ProtocolInvalid(t *testing.T) {
+	t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+	t.Setenv("OTEL_METRICS_EXPORTER", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:0")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "thrift")
+
+	_, err := blogotel.Init(context.Background(), "test-svc", "0.0.0", nil)
+	if err == nil {
+		t.Fatal("Init() error = nil, want error for unsupported protocol")
+	}
+}
+
+func TestInit_ProtocolInvalid_Metrics(t *testing.T) {
+	t.Setenv("OTEL_TRACES_EXPORTER", "")
+	t.Setenv("OTEL_METRICS_EXPORTER", "otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:0")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "thrift")
+
+	_, err := blogotel.Init(context.Background(), "test-svc", "0.0.0", nil)
+	if err == nil {
+		t.Fatal("Init() error = nil, want error for unsupported protocol")
+	}
+}
