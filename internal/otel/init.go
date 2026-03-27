@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	prometheusbridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -43,15 +46,17 @@ func Init(ctx context.Context, serviceName, version string, logger *slog.Logger)
 
 	var shutdowns []func(context.Context) error
 
+	proto := strings.TrimSpace(strings.ToLower(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")))
+
 	// --- Tracing ---
 	if exp := os.Getenv("OTEL_TRACES_EXPORTER"); exp != "" {
-		tp, tErr := initTracing(ctx, res)
+		tp, tErr := initTracing(ctx, res, proto)
 		if tErr != nil {
 			return noop, tErr
 		}
 		shutdowns = append(shutdowns, tp.Shutdown)
 		if logger != nil {
-			logger.Info("otel: tracing enabled", "exporter", exp, "service", serviceName)
+			logger.Info("otel: tracing enabled", "exporter", exp, "protocol", proto, "service", serviceName)
 		}
 	} else if logger != nil {
 		logger.Debug("otel: tracing disabled (OTEL_TRACES_EXPORTER not set)")
@@ -59,14 +64,14 @@ func Init(ctx context.Context, serviceName, version string, logger *slog.Logger)
 
 	// --- Metrics ---
 	if exp := os.Getenv("OTEL_METRICS_EXPORTER"); exp != "" {
-		mp, mErr := initMetrics(ctx, res)
+		mp, mErr := initMetrics(ctx, res, proto)
 		if mErr != nil {
 			_ = runShutdowns(ctx, shutdowns)
 			return noop, mErr
 		}
 		shutdowns = append(shutdowns, mp.Shutdown)
 		if logger != nil {
-			logger.Info("otel: metrics bridge enabled", "exporter", exp, "service", serviceName)
+			logger.Info("otel: metrics bridge enabled", "exporter", exp, "protocol", proto, "service", serviceName)
 		}
 	} else if logger != nil {
 		logger.Debug("otel: metrics bridge disabled (OTEL_METRICS_EXPORTER not set)")
@@ -96,8 +101,19 @@ func buildResource(serviceName, version string) (*resource.Resource, error) {
 	return res, nil
 }
 
-func initTracing(ctx context.Context, res *resource.Resource) (*sdktrace.TracerProvider, error) {
-	exp, err := otlptracehttp.New(ctx)
+func initTracing(ctx context.Context, res *resource.Resource, proto string) (*sdktrace.TracerProvider, error) {
+	var (
+		exp sdktrace.SpanExporter
+		err error
+	)
+	switch proto {
+	case "grpc":
+		exp, err = otlptracegrpc.New(ctx)
+	case "http/protobuf", "":
+		exp, err = otlptracehttp.New(ctx)
+	default:
+		return nil, fmt.Errorf("otel: unsupported OTLP protocol %q (expected \"grpc\" or \"http/protobuf\")", proto)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("otel: create OTLP trace exporter: %w", err)
 	}
@@ -116,8 +132,19 @@ func initTracing(ctx context.Context, res *resource.Resource) (*sdktrace.TracerP
 	return tp, nil
 }
 
-func initMetrics(ctx context.Context, res *resource.Resource) (*metric.MeterProvider, error) {
-	exp, err := otlpmetrichttp.New(ctx)
+func initMetrics(ctx context.Context, res *resource.Resource, proto string) (*metric.MeterProvider, error) {
+	var (
+		exp metric.Exporter
+		err error
+	)
+	switch proto {
+	case "grpc":
+		exp, err = otlpmetricgrpc.New(ctx)
+	case "http/protobuf", "":
+		exp, err = otlpmetrichttp.New(ctx)
+	default:
+		return nil, fmt.Errorf("otel: unsupported OTLP protocol %q (expected \"grpc\" or \"http/protobuf\")", proto)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("otel: create OTLP metric exporter: %w", err)
 	}
