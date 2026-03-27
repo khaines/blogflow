@@ -104,3 +104,20 @@ feed:
   enabled: true               # Generate a feed at /feed.xml (or /feed.atom)
   type: "atom"                # Feed format: "atom" or "rss"
   items: 20                   # Number of posts to include in the feed (1–100)
+
+# ---------------------------------------------------------------------------
+# OpenTelemetry — opt-in distributed tracing and metrics export
+# ---------------------------------------------------------------------------
+# BlogFlow uses standard OTEL_* environment variables. When these are unset,
+# a no-op tracer is registered with zero overhead.
+#
+# Tracing:
+#   OTEL_TRACES_EXPORTER: otlp
+#   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+#   OTEL_SERVICE_NAME: blogflow              # default: "blogflow"
+#
+# Metrics bridge (dual-export alongside Prometheus /metrics):
+#   OTEL_METRICS_EXPORTER: otlp
+#   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+#
+# See docs/deployment-guide.md#observability for full details.
