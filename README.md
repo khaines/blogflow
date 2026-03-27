@@ -179,22 +179,26 @@ make clean        # Remove build artifacts
 
 ```mermaid
 graph TD
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef secondary fill:#7c3aed,stroke:#5b21b6,color:#fff
+    classDef storage fill:#d97706,stroke:#b45309,color:#fff
+
     subgraph CLI
-        main["cmd/blogflow/main.go"]
+        main["cmd/blogflow/main.go"]:::primary
     end
 
     subgraph Internal
-        config["internal/config\nYAML + env + defaults"]
-        content["internal/content\nScanner · front matter · Goldmark"]
-        theme["internal/theme\nTemplates · overlay FS"]
-        server["internal/server\nRoutes · middleware · handlers"]
-        overlayfs["internal/overlayfs\nio/fs.FS layering"]
-        gitops["internal/gitops\nwatch · webhook · sidecar · poll"]
-        envfile["internal/envfile\n_FILE secret loader"]
+        config["internal/config<br/>YAML + env + defaults"]:::secondary
+        content["internal/content<br/>Scanner · front matter · Goldmark"]:::secondary
+        theme["internal/theme<br/>Templates · overlay FS"]:::secondary
+        server["internal/server<br/>Routes · middleware · handlers"]:::primary
+        overlayfs["internal/overlayfs<br/>io/fs.FS layering"]:::primary
+        gitops["internal/gitops<br/>watch · webhook · sidecar · poll"]:::secondary
+        envfile["internal/envfile<br/>_FILE secret loader"]:::secondary
     end
 
     subgraph Embedded
-        defaults["defaults/\nTemplates · CSS · images · config"]
+        defaults["defaults/<br/>Templates · CSS · images · config"]:::storage
     end
 
     main --> config

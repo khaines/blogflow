@@ -34,14 +34,18 @@ config value and surrounding infrastructure differ.
 
 ```mermaid
 graph TD
-    Start{{Which environment?}} -->|Local / dev| P1["Pattern 1: watch\n(fsnotify)"]
-    Start -->|Kubernetes| K8s{{How many replicas?}}
-    Start -->|Docker / VM| P4["Pattern 4: Docker webhook\n(go-git pull)"]
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef success fill:#16a34a,stroke:#15803d,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
 
-    K8s -->|"1 replica"| Single{{Inbound webhook\navailable?}}
-    K8s -->|"2+ replicas (HA)"| P2["✅ Pattern 2: git-sync sidecar\n(recommended for HA)"]
+    Start{{Which environment?}}:::muted -->|Local / dev| P1["Pattern 1: watch<br/>(fsnotify)"]:::primary
+    Start -->|Kubernetes| K8s{{How many replicas?}}:::muted
+    Start -->|Docker / VM| P4["Pattern 4: Docker webhook<br/>(go-git pull)"]:::primary
 
-    Single -->|"Yes"| P3["Pattern 3: K8s webhook\n(instant updates)"]
+    K8s -->|"1 replica"| Single{{Inbound webhook<br/>available?}}:::muted
+    K8s -->|"2+ replicas (HA)"| P2["✅ Pattern 2: git-sync sidecar<br/>(recommended for HA)"]:::success
+
+    Single -->|"Yes"| P3["Pattern 3: K8s webhook<br/>(instant updates)"]:::primary
     Single -->|"No"| P2
 ```
 
@@ -53,9 +57,13 @@ graph TD
 
 ```mermaid
 graph LR
-    Editor["✏️ Editor"] -->|"writes .md"| Content["📁 ./content/"]
-    Content -->|"fsnotify\nfile events"| BF["⚙️ BlogFlow\n(watch mode)"]
-    BF -->|"serves on :8080"| Browser["🌐 Browser"]
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef storage fill:#d97706,stroke:#b45309,color:#fff
+
+    Editor["✏️ Editor"]:::external -->|"writes .md"| Content["📁 ./content/"]:::storage
+    Content -->|"fsnotify<br/>file events"| BF["⚙️ BlogFlow<br/>(watch mode)"]:::primary
+    BF -->|"serves on :8080"| Browser["🌐 Browser"]:::external
 ```
 
 The `watch` strategy uses [fsnotify](https://github.com/fsnotify/fsnotify) to
@@ -121,14 +129,19 @@ No persistent volumes are needed — you are editing files directly on your host
 
 ```mermaid
 graph LR
-    Git["Git Remote\n(GitHub)"] -- "HTTPS poll\n(every 60 s)" --> GS
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef storage fill:#d97706,stroke:#b45309,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
+
+    Git["Git Remote<br/>(GitHub)"]:::external -- "HTTPS poll<br/>(every 60 s)" --> GS
 
     subgraph Pod ["☸ Kubernetes Pod"]
-        GS["git-sync\nsidecar"] -- "symlink swap" --> Vol[("Shared Volume\n/data/content")]
-        Vol -- "fsnotify\ndetects swap" --> BF["BlogFlow\n(sidecar mode)"]
+        GS["git-sync<br/>sidecar"]:::external -- "symlink swap" --> Vol[("Shared Volume<br/>/data/content")]:::storage
+        Vol -- "fsnotify<br/>detects swap" --> BF["BlogFlow<br/>(sidecar mode)"]:::primary
     end
 
-    BF --> Svc["K8s Service\n:8080"]
+    BF --> Svc["K8s Service<br/>:8080"]:::muted
 ```
 
 **How it works:** The [git-sync](https://github.com/kubernetes/git-sync)
@@ -295,15 +308,20 @@ volumeMounts:
 
 ```mermaid
 graph LR
-    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub\nWebhooks"]
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef storage fill:#d97706,stroke:#b45309,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
+
+    Dev["Developer<br/>git push"]:::external -->|"push event"| GH["GitHub<br/>Webhooks"]:::external
     GH -->|"POST /api/webhook"| BF
 
     subgraph K8s ["☸ Kubernetes"]
-        BF["BlogFlow\n(webhook mode)"] -->|"go-git\nclone/pull"| Vol[("Content Volume\n/data/content")]
-        Vol -->|"re-scan\n& reload"| BF
+        BF["BlogFlow<br/>(webhook mode)"]:::primary -->|"go-git<br/>clone/pull"| Vol[("Content Volume<br/>/data/content")]:::storage
+        Vol -->|"re-scan<br/>& reload"| BF
     end
 
-    BF -->|":8080"| Ingress["Ingress"]
+    BF -->|":8080"| Ingress["Ingress"]:::muted
 ```
 
 **How it works:** GitHub sends a push webhook to BlogFlow's `/api/webhook`
@@ -541,12 +559,17 @@ defaults to `AuthNone`.
 
 ```mermaid
 graph LR
-    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub"]
-    GH -->|"POST /api/webhook"| Svc["K8s Service"]
-    Svc -->|"routed to one pod"| Pod1["Pod 1 ✅\n(instant update)"]
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef success fill:#16a34a,stroke:#15803d,color:#fff
+    classDef danger fill:#dc2626,stroke:#991b1b,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
 
-    Pod2["Pod 2 ❌\n(stale indefinitely)"] -.->|"never receives webhook"| Pod2
-    Pod3["Pod 3 ❌\n(stale indefinitely)"] -.->|"never receives webhook"| Pod3
+    Dev["Developer<br/>git push"]:::external -->|"push event"| GH["GitHub"]:::external
+    GH -->|"POST /api/webhook"| Svc["K8s Service"]:::muted
+    Svc -->|"routed to one pod"| Pod1["Pod 1 ✅<br/>(instant update)"]:::success
+
+    Pod2["Pod 2 ❌<br/>(stale indefinitely)"]:::danger -.->|"never receives webhook"| Pod2
+    Pod3["Pod 3 ❌<br/>(stale indefinitely)"]:::danger -.->|"never receives webhook"| Pod3
 ```
 
 ---
@@ -565,21 +588,25 @@ recommended strategy** for multi-replica deployments:
 
 ```mermaid
 graph LR
-    Git["Git Remote"] -- "poll every 60s" --> GS1["git-sync"]
-    Git -- "poll every 60s" --> GS2["git-sync"]
-    Git -- "poll every 60s" --> GS3["git-sync"]
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
+
+    Git["Git Remote"]:::external -- "poll every 60s" --> GS1["git-sync"]:::external
+    Git -- "poll every 60s" --> GS2["git-sync"]:::external
+    Git -- "poll every 60s" --> GS3["git-sync"]:::external
 
     subgraph Pod1 ["Pod 1"]
-        GS1 --> BF1["BlogFlow"]
+        GS1 --> BF1["BlogFlow"]:::primary
     end
     subgraph Pod2 ["Pod 2"]
-        GS2 --> BF2["BlogFlow"]
+        GS2 --> BF2["BlogFlow"]:::primary
     end
     subgraph Pod3 ["Pod 3"]
-        GS3 --> BF3["BlogFlow"]
+        GS3 --> BF3["BlogFlow"]:::primary
     end
 
-    BF1 & BF2 & BF3 --> Svc["K8s Service\n:8080"]
+    BF1 & BF2 & BF3 --> Svc["K8s Service<br/>:8080"]:::muted
 ```
 
 No additional configuration is needed beyond the standard
@@ -659,15 +686,20 @@ but adds operational complexity.
 
 ```mermaid
 graph LR
-    Dev["Developer\ngit push"] -->|"push event"| GH["GitHub\nWebhooks"]
+    classDef primary fill:#2563eb,stroke:#1e40af,color:#fff
+    classDef external fill:#059669,stroke:#047857,color:#fff
+    classDef storage fill:#d97706,stroke:#b45309,color:#fff
+    classDef muted fill:#6b7280,stroke:#4b5563,color:#fff
+
+    Dev["Developer<br/>git push"]:::external -->|"push event"| GH["GitHub<br/>Webhooks"]:::external
     GH -->|"POST /api/webhook"| BF
 
     subgraph Docker ["🐳 Docker Host"]
-        BF["BlogFlow\n(Docker)"] -->|"go-git pull"| Vol[("Named Volume\nblogflow-content")]
-        Vol -->|"re-scan\n& reload"| BF
+        BF["BlogFlow<br/>(Docker)"]:::primary -->|"go-git pull"| Vol[("Named Volume<br/>blogflow-content")]:::storage
+        Vol -->|"re-scan<br/>& reload"| BF
     end
 
-    BF -->|":8080"| Proxy["Reverse Proxy\n(TLS)"]
+    BF -->|":8080"| Proxy["Reverse Proxy<br/>(TLS)"]:::muted
 ```
 
 This is the same webhook + go-git pull pattern as Pattern 3, but deployed with
