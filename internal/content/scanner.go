@@ -12,6 +12,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Post represents a fully processed blog post.
@@ -97,6 +101,39 @@ func NewScanner(renderer *Renderer, postsDir, pagesDir string, summaryLen int, l
 		logger = slog.New(discardHandler{})
 	}
 	return &Scanner{renderer: renderer, logger: logger, postsDir: postsDir, pagesDir: pagesDir, summaryLen: summaryLen}
+}
+
+// ScanContext walks the given fs.FS and builds a content Index, recording
+// an OpenTelemetry span for the operation. It behaves identically to Scan
+// but accepts a context for trace propagation.
+func (s *Scanner) ScanContext(ctx context.Context, contentFS fs.FS, opts ...ScanOption) (*Index, error) {
+	tracer := otel.Tracer("github.com/khaines/blogflow/content")
+	_, span := tracer.Start(ctx, "content.Scan")
+	defer span.End()
+
+	start := time.Now()
+	idx, err := s.Scan(contentFS, opts...)
+	duration := time.Since(start)
+
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return nil, err
+	}
+
+	var errCount int
+	if errs := idx.Errors(); errs != nil {
+		errCount = len(errs)
+	}
+
+	span.SetAttributes(
+		attribute.Int("content.posts_found", len(idx.Posts)),
+		attribute.Int("content.pages_found", len(idx.Pages)),
+		attribute.Int("content.errors_skipped", errCount),
+		attribute.Int64("content.duration_ms", duration.Milliseconds()),
+	)
+
+	return idx, nil
 }
 
 // Scan walks the given fs.FS and builds a content Index.

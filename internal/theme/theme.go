@@ -15,6 +15,9 @@ import (
 	"time"
 	"unicode"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -43,32 +46,55 @@ func NewEngine(fsys fs.FS) (*Engine, error) {
 // Each page template is cloned+parsed per request so defines don't collide.
 // The context allows callers to cancel long-running renders.
 func (e *Engine) Render(ctx context.Context, w io.Writer, name string, data any) error {
+	tracer := otel.Tracer("github.com/khaines/blogflow/theme")
+	ctx, span := tracer.Start(ctx, "theme.Render")
+	defer span.End()
+	span.SetAttributes(attribute.String("theme.template_name", name))
+
 	pages := *e.pages.Load()
 	src, ok := pages[name]
 	if !ok {
-		return fmt.Errorf("theme: template %q not found", name)
+		err := fmt.Errorf("theme: template %q not found", name)
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return err
 	}
 
 	clone, err := e.base.Load().Clone()
 	if err != nil {
-		return fmt.Errorf("theme: clone: %w", err)
+		err = fmt.Errorf("theme: clone: %w", err)
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return err
 	}
 	if _, err := clone.Parse(src); err != nil {
-		return fmt.Errorf("theme: parse page %s: %w", name, err)
+		err = fmt.Errorf("theme: parse page %s: %w", name, err)
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return err
 	}
 
 	// Check for cancellation before expensive template execution.
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		err := ctx.Err()
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return err
 	default:
 	}
 
 	var buf bytes.Buffer
 	if err := clone.ExecuteTemplate(&buf, "templates/base.html", data); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return err
 	}
 	_, writeErr := buf.WriteTo(w)
+	if writeErr != nil {
+		span.SetStatus(codes.Error, writeErr.Error())
+		span.RecordError(writeErr)
+	}
 	return writeErr
 }
 

@@ -17,6 +17,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Puller handles git clone and pull operations for content/theme repos.
@@ -83,18 +86,42 @@ func NewPuller(authCfg *AuthConfig, logger *slog.Logger, opts ...PullerOption) (
 // fallback re-clone path is triggered (e.g. shallow-clone corruption). To
 // intentionally switch URLs, delete destPath first and let CloneOrPull re-clone.
 func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath string) (changed bool, err error) {
+	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
+	ctx, span := tracer.Start(ctx, "gitops.CloneOrPull")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("gitops.repo_url", SanitizeURL(repoURL)),
+		attribute.String("gitops.branch", branch),
+	)
+
 	if len(p.SparseDirs) > 0 {
 		cleaned, valErr := validateSparseDirs(p.SparseDirs)
 		if valErr != nil {
+			span.SetStatus(codes.Error, valErr.Error())
+			span.RecordError(valErr)
 			return false, fmt.Errorf("gitops: %w", valErr)
 		}
 		p.SparseDirs = cleaned
 	}
 
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
-		return p.pull(ctx, repoURL, branch, destPath)
+		span.SetAttributes(attribute.String("gitops.operation", "pull"))
+		changed, pullErr := p.pull(ctx, repoURL, branch, destPath)
+		if pullErr != nil {
+			span.SetStatus(codes.Error, pullErr.Error())
+			span.RecordError(pullErr)
+		}
+		return changed, pullErr
 	}
-	return true, p.clone(ctx, repoURL, branch, destPath)
+
+	span.SetAttributes(attribute.String("gitops.operation", "clone"))
+	cloneErr := p.clone(ctx, repoURL, branch, destPath)
+	if cloneErr != nil {
+		span.SetStatus(codes.Error, cloneErr.Error())
+		span.RecordError(cloneErr)
+	}
+	return true, cloneErr
 }
 
 // validateSparseDirs sanitizes and validates sparse directory entries.
@@ -128,7 +155,18 @@ func SanitizeURL(raw string) string {
 	return u.String()
 }
 
-func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) error {
+func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (retErr error) {
+	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
+	ctx, span := tracer.Start(ctx, "gitops.clone")
+	defer func() {
+		if retErr != nil {
+			span.SetStatus(codes.Error, retErr.Error())
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+	span.SetAttributes(attribute.String("gitops.repo_url", SanitizeURL(repoURL)))
+
 	p.logger.Info("cloning repository", "url", SanitizeURL(repoURL), "branch", branch, "dest", destPath)
 
 	sparse := len(p.SparseDirs) > 0
@@ -166,7 +204,17 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 	return nil
 }
 
-func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bool, error) {
+func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ bool, retErr error) {
+	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
+	ctx, span := tracer.Start(ctx, "gitops.pull")
+	defer func() {
+		if retErr != nil {
+			span.SetStatus(codes.Error, retErr.Error())
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+
 	p.logger.Debug("pulling repository", "dest", destPath, "branch", branch)
 
 	repo, err := git.PlainOpen(destPath)
@@ -234,6 +282,7 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (bo
 	}
 
 	changed := headBefore.Hash() != headAfter.Hash()
+	span.SetAttributes(attribute.Bool("gitops.changed", changed))
 
 	// Re-apply sparse checkout after pull — PullContext checks out all files,
 	// so we remove entries outside the sparse set.

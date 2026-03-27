@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const debounceDuration = 500 * time.Millisecond
@@ -17,13 +20,26 @@ const debounceDuration = 500 * time.Millisecond
 // On validation (or parse) failure the previous config is preserved and
 // the error is returned.
 func (l *Loader) Reload() (*Config, error) {
+	return l.reloadCtx(context.Background())
+}
+
+func (l *Loader) reloadCtx(ctx context.Context) (*Config, error) {
+	tracer := otel.Tracer("github.com/khaines/blogflow/config")
+	_, span := tracer.Start(ctx, "config.Reload")
+	defer span.End()
+	span.SetAttributes(attribute.String("config.path", "site.yaml"))
+
 	l.reloadMu.Lock()
 	defer l.reloadMu.Unlock()
 
 	cfg, err := l.Load()
 	if err != nil {
+		span.SetAttributes(attribute.Bool("config.success", false))
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.Bool("config.success", true))
 	l.fireCallbacks(cfg)
 	return cfg, nil
 }
@@ -92,7 +108,7 @@ func (l *Loader) Watch(ctx context.Context) error {
 		case <-debounceCh:
 			debounceCh = nil
 			// Best-effort reload: validation failures preserve old config.
-			_, _ = l.Reload()
+			_, _ = l.reloadCtx(ctx)
 
 		case _, ok := <-watcher.Errors:
 			if !ok {
