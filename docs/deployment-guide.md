@@ -10,6 +10,7 @@
 - [Pattern 2: Kubernetes — git-sync Sidecar](#pattern-2-kubernetes--git-sync-sidecar)
 - [Pattern 3: Kubernetes — Webhook + go-git Pull](#pattern-3-kubernetes--webhook--go-git-pull)
 - [Pattern 4: Docker Production (Webhook)](#pattern-4-docker-production-webhook)
+- [Health & Readiness Endpoints](#health--readiness-endpoints)
 - [Helm Chart Installation](#helm-chart-installation)
 - [Authentication Reference](#authentication-reference)
 - [Environment Variable Reference](#environment-variable-reference)
@@ -865,6 +866,86 @@ environment:
   GitHub's webhook ranges).
 - Pin the image by SHA256 digest in production (see
   [Container Security Guide](engineering/container-security.md#image-pinning)).
+
+---
+
+## Health & Readiness Endpoints
+
+BlogFlow exposes three health endpoints. Choose the right one for your deployment:
+
+### Endpoint Reference
+
+| Endpoint | Status | Response | Use case |
+|----------|--------|----------|----------|
+| `GET /healthz` | 200 always (if server is listening) | `ok` | **Liveness probe** — restart if BlogFlow crashes |
+| `GET /readyz` | 200 always (warns if no content) | `ready` or `ready (no content)` | **Graceful readiness** — serve embedded defaults while waiting for sync |
+| `GET /readyz?strict=true` | 503 until posts exist | `not ready (no content)` → `ready` | **Strict readiness** — hold traffic until content is synced |
+| `GET /readyz/content` | 503 until posts exist | `no content` → `content available` | **Content-only check** — dedicated endpoint for content availability |
+
+### How Content Readiness Works
+
+BlogFlow counts **real posts only** — the embedded defaults include zero posts (only a placeholder `about` page). This means:
+
+- **Before first sync**: `PostCount() == 0` → readyz reports "no content"
+- **After content syncs**: `PostCount() > 0` → readyz reports "ready"
+- **Content deleted/cleared**: `PostCount()` drops back to 0 → readyz warns again
+
+This is checked atomically on every request — no caching or delay.
+
+### Choosing a Readiness Strategy
+
+#### Local Development / Docker
+
+Use `/readyz` (graceful) — you want the server available immediately, even before content is mounted:
+
+```yaml
+# docker-compose.yml
+healthcheck:
+  test: ["/app", "healthcheck"]  # checks /healthz
+  interval: 30s
+```
+
+#### Kubernetes — Single Replica
+
+Use `/readyz?strict=true` — don't serve traffic until content is ready:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /readyz?strict=true
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+```
+
+#### Kubernetes — Multi-Replica (HA)
+
+Use `/readyz?strict=true` with the sidecar strategy — each pod independently syncs content and only receives traffic once ready:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /readyz?strict=true
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 12  # allow 60s for initial clone
+```
+
+### Metrics Port
+
+When `server.metrics_port` is configured, `/healthz` is available on **both** the main port and the metrics port. `/readyz` and `/readyz/content` are only on the main port.
+
+| Port | `/healthz` | `/readyz` | `/metrics` |
+|------|-----------|-----------|------------|
+| Main (8080) | ✅ | ✅ | ❌ (when metrics_port set) |
+| Metrics (9090) | ✅ | ❌ | ✅ |
 
 ---
 
