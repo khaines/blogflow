@@ -140,10 +140,13 @@ func initMetrics(ctx context.Context, res *resource.Resource) (*metric.MeterProv
 	return mp, nil
 }
 
+// runShutdowns calls each function in reverse order (LIFO) so the
+// last-initialised provider is shut down first, matching the OTel SDK's
+// recommended teardown sequence.
 func runShutdowns(ctx context.Context, fns []func(context.Context) error) error {
 	var first error
-	for _, fn := range fns {
-		if err := fn(ctx); err != nil && first == nil {
+	for i := len(fns) - 1; i >= 0; i-- {
+		if err := fns[i](ctx); err != nil && first == nil {
 			first = err
 		}
 	}
