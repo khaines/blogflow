@@ -78,7 +78,7 @@ docker run -p 8080:8080 \
 
 - **< 25 MB image** — single static binary, stripped debug symbols
 - **Healthcheck CLI** — `blogflow healthcheck` subcommand for distroless containers (no curl/wget needed)
-- **Health endpoints** — `/healthz` (liveness) and `/readyz` (readiness with atomic gate)
+- **Health endpoints** — `/healthz` (liveness), `/readyz` (readiness), `/readyz?strict=true` (503 until content synced). See [Health & Readiness Endpoints](docs/deployment-guide.md#health--readiness-endpoints)
 - **Helm chart** — production-ready chart with sidecar, webhook, and watch strategies ([`deploy/helm/blogflow/`](deploy/helm/blogflow/))
 - **K8s manifests** — plain YAML examples for sidecar and webhook patterns ([`examples/k8s/`](examples/k8s/))
 - **Config reload** — runtime `Reload()` with `OnChange()` callbacks; no restart needed
