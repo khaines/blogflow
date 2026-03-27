@@ -16,6 +16,7 @@ import (
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/content"
 	"github.com/khaines/blogflow/internal/gitops"
+	blogotel "github.com/khaines/blogflow/internal/otel"
 	"github.com/khaines/blogflow/internal/overlayfs"
 	"github.com/khaines/blogflow/internal/server"
 	"github.com/khaines/blogflow/internal/server/handlers"
@@ -60,12 +61,28 @@ func main() {
 		os.Exit(0)
 	}
 
+	// OpenTelemetry (opt-in via OTEL_TRACES_EXPORTER env var)
+	otelShutdown, otelErr := blogotel.Init(context.Background(), "blogflow", version, nil)
+	if otelErr != nil {
+		// Use stderr directly — logger is not yet created.
+		fmt.Fprintf(os.Stderr, "otel init error: %v\n", otelErr)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "otel shutdown error: %v\n", err)
+		}
+	}()
+
 	// Logger
 	logLevel := slog.LevelInfo
 	if *dev {
 		logLevel = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	handler := blogotel.TraceHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
 	logger.Info("blogflow starting", "version", version)
