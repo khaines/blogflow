@@ -2,6 +2,27 @@
 
 ## main / unreleased
 
+## 0.3.0 / 2026-03-27
+
+### BlogFlow
+
+* [FEATURE] Server: OpenTelemetry core SDK with opt-in HTTP tracing via `OTEL_TRACES_EXPORTER` env var. #151
+* [FEATURE] Server: OTel metrics bridge — dual-export existing Prometheus metrics via OTLP. #152
+* [FEATURE] Server: Trace ID and span ID automatically injected into slog log records. #151
+* [FEATURE] Content: OTel spans on content scanner with posts/pages/errors attributes. #154
+* [FEATURE] GitOps: OTel spans on git clone/pull operations with sanitized repo URL. #154
+* [FEATURE] Theme: OTel span on template rendering with template name attribute. #154
+* [FEATURE] Config: OTel span on config reload with success/failure tracking. #154
+* [FEATURE] OverlayFS: OTel spans on all ContextOverlayFS operations with layer Resolution attributes. #153
+* [BUGFIX] Server: Theme and config now reload alongside content on sync events (was content-only). #156
+
+### Documentation
+
+* [ENHANCEMENT] Docs: OpenTelemetry observability guide with docker-compose/K8s examples and provider reference. #155
+* [ENHANCEMENT] Docs: Health & Readiness Endpoints section with operator decision table and K8s probe examples. #150
+* [ENHANCEMENT] Docs: Mermaid diagram style guide with 7 classDef color classes. #147
+* [ENHANCEMENT] Docs: Applied consistent Mermaid theme to user-facing diagrams. #148
+
 ## 0.2.1 / 2026-03-26
 
 ### BlogFlow
