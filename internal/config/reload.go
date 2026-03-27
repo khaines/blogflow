@@ -20,8 +20,12 @@ const debounceDuration = 500 * time.Millisecond
 // On validation (or parse) failure the previous config is preserved and
 // the error is returned.
 func (l *Loader) Reload() (*Config, error) {
+	return l.reloadCtx(context.Background())
+}
+
+func (l *Loader) reloadCtx(ctx context.Context) (*Config, error) {
 	tracer := otel.Tracer("github.com/khaines/blogflow/config")
-	_, span := tracer.Start(context.Background(), "config.Reload")
+	_, span := tracer.Start(ctx, "config.Reload")
 	defer span.End()
 	span.SetAttributes(attribute.String("config.path", "site.yaml"))
 
@@ -104,7 +108,7 @@ func (l *Loader) Watch(ctx context.Context) error {
 		case <-debounceCh:
 			debounceCh = nil
 			// Best-effort reload: validation failures preserve old config.
-			_, _ = l.Reload()
+			_, _ = l.reloadCtx(ctx)
 
 		case _, ok := <-watcher.Errors:
 			if !ok {

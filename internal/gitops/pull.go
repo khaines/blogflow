@@ -155,10 +155,16 @@ func SanitizeURL(raw string) string {
 	return u.String()
 }
 
-func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) error {
+func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (retErr error) {
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.clone")
-	defer span.End()
+	defer func() {
+		if retErr != nil {
+			span.SetStatus(codes.Error, retErr.Error())
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
 	span.SetAttributes(attribute.String("gitops.repo_url", SanitizeURL(repoURL)))
 
 	p.logger.Info("cloning repository", "url", SanitizeURL(repoURL), "branch", branch, "dest", destPath)
@@ -177,8 +183,6 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 
 	repo, err := git.PlainCloneContext(ctx, destPath, false, opts)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
 		return fmt.Errorf("gitops: clone %s: %w", SanitizeURL(repoURL), err)
 	}
 
@@ -200,10 +204,16 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) er
 	return nil
 }
 
-func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ bool, _ error) {
+func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ bool, retErr error) {
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.pull")
-	defer span.End()
+	defer func() {
+		if retErr != nil {
+			span.SetStatus(codes.Error, retErr.Error())
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
 
 	p.logger.Debug("pulling repository", "dest", destPath, "branch", branch)
 
