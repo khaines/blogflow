@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/khaines/blogflow/internal/config"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // ContentChecker reports how many posts are available. Implementations must
@@ -251,14 +252,16 @@ func (s *Server) MetricsServer() *http.Server {
 	return s.metricsServer
 }
 
-// middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics.
+// middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.
 func (s *Server) middleware(next http.Handler) http.Handler {
-	// Order: request-ID (outermost) → logging → recovery → security headers → metrics → handler
+	// Order: request-ID (outermost) → otelhttp → logging → recovery → security headers → metrics → handler
 	return s.requestIDMiddleware(
-		s.loggingMiddleware(
-			s.recoveryMiddleware(
-				s.securityHeadersMiddleware(
-					MetricsMiddleware(next),
+		otelhttp.NewMiddleware("blogflow")(
+			s.loggingMiddleware(
+				s.recoveryMiddleware(
+					s.securityHeadersMiddleware(
+						MetricsMiddleware(next),
+					),
 				),
 			),
 		),
