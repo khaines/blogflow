@@ -21,6 +21,7 @@ import (
 	"github.com/khaines/blogflow/internal/server"
 	"github.com/khaines/blogflow/internal/server/handlers"
 	"github.com/khaines/blogflow/internal/theme"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -92,6 +93,9 @@ func main() {
 	if err != nil {
 		logger.Error("failed to create overlay filesystem", "error", err)
 		os.Exit(1)
+	}
+	if _, metricsErr := contentOverlay.WithOptions(overlayfs.WithMetrics(prometheus.DefaultRegisterer)); metricsErr != nil {
+		logger.Warn("overlay FS metrics registration failed", "error", metricsErr)
 	}
 	logger.Info("overlay filesystem initialized", "layers", contentOverlay.LayerCount())
 
