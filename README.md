@@ -226,6 +226,10 @@ Markdown → YAML front matter + Goldmark → Go html/template → Render cache 
 
 Design documents and ADRs are in [`docs/engineering/design/`](docs/engineering/design/).
 
+## Vision
+
+BlogFlow is the **anti-WordPress** — git is the CMS, everything else is optional. Read [VISION.md](VISION.md) for our design principles, feature evaluation rubric, and what we will (and won't) build.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. The short version:
