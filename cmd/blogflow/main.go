@@ -92,7 +92,8 @@ func main() {
 	for _, dir := range []string{*contentPath, *themePath, *configPath} {
 		if dir != "" {
 			if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
-				logger.Warn("could not create directory", "path", dir, "error", mkErr)
+				logger.Error("could not create required directory", "path", dir, "error", mkErr)
+				os.Exit(1)
 			}
 		}
 	}
