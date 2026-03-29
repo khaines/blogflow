@@ -88,6 +88,16 @@ func main() {
 
 	logger.Info("blogflow starting", "version", version)
 
+	// 0. Ensure content/theme/config directories exist (bootstrap may create them later)
+	for _, dir := range []string{*contentPath, *themePath, *configPath} {
+		if dir != "" {
+			if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
+				logger.Error("could not create required directory", "path", dir, "error", mkErr)
+				os.Exit(1)
+			}
+		}
+	}
+
 	// 1. Build overlay FS for content (4-layer: theme → content → config → defaults)
 	contentOverlay, err := overlayfs.NewFromPaths(*themePath, *contentPath, *configPath, blogflow.Defaults)
 	if err != nil {
