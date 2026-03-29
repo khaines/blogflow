@@ -15,31 +15,35 @@ import (
 // TestListHandler_ConfigReload verifies that after SetConfig, the list
 // handler serves the updated site title.
 func TestListHandler_ConfigReload(t *testing.T) {
-	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
 	deps := testDeps(t, posts, nil)
 
-	// Initial request — list page title is "Posts".
+	// Initial request — testDeps sets PostsPerPage=2, so 3 posts → 2 pages.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	handlers.ListHandler(deps)(rec, req)
 
 	initial := rec.Body.String()
-	if !strings.Contains(initial, "Posts") {
-		t.Fatalf("expected 'Posts' title in initial response, got: %s", initial)
+	if !strings.Contains(initial, "posts=2|page=1|total=2") {
+		t.Fatalf("expected 2-per-page pagination in initial response, got: %s", initial)
 	}
 
-	// Swap config with updated PostsPerPage — list should reflect new pagination.
+	// Swap config: PostsPerPage 2→1 changes pagination from 2 pages to 3.
 	newCfg := config.Default()
 	newCfg.Content.PostsPerPage = 1
 	deps.SetConfig(newCfg)
 
-	// Second request should reflect the new pagination (1 post per page).
+	// Second request should reflect the new pagination (1 post per page, 3 total pages).
 	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec2 := httptest.NewRecorder()
 	handlers.ListHandler(deps)(rec2, req2)
 
 	body := rec2.Body.String()
-	if !strings.Contains(body, "posts=1|page=1|total=1") {
+	if !strings.Contains(body, "posts=1|page=1|total=3") {
 		t.Errorf("expected pagination change after config reload, got: %s", body)
 	}
 }
