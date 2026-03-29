@@ -83,11 +83,12 @@ type Pagination struct {
 // site.homepage configuration. When homepage is "page:<slug>", it renders
 // that page; otherwise it delegates to ListHandler (post list).
 func HomeHandler(deps *Deps) http.HandlerFunc {
+	listFallback := ListHandler(deps)
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := deps.LoadConfig()
 		hp := cfg.Site.Homepage
 		if hp == "" || hp == "post_list" {
-			ListHandler(deps)(w, r)
+			listFallback(w, r)
 			return
 		}
 
@@ -97,7 +98,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 		if !ok {
 			slog.Warn("homepage page not found, falling back to post list",
 				"slug", slug, "homepage", hp)
-			ListHandler(deps)(w, r)
+			listFallback(w, r)
 			return
 		}
 
