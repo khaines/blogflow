@@ -94,9 +94,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: containerImage
           args: [
             '--content'
-            '/data/content/docs'
-            '--config'
-            '/data/content/docs/config'
+            '/data/content'
           ]
           volumeMounts: [
             {
@@ -146,12 +144,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: '5m'
             }
             {
-              name: 'BLOGFLOW_SYNC_SPARSE_DIRS'
-              value: 'docs'
+              name: 'BLOGFLOW_SITE_HOMEPAGE'
+              value: 'static:docs/index.html'
             }
             {
-              name: 'BLOGFLOW_SITE_HOMEPAGE'
-              value: 'static:index.html'
+              name: 'BLOGFLOW_CONTENT_POSTS_DIR'
+              value: 'docs'
             }
             {
               name: 'BLOGFLOW_SITE_TITLE'
