@@ -1,3 +1,10 @@
+---
+title: "Content Deploy Setup"
+slug: "content-deploy-setup"
+date: 2026-03-23
+tags: ["deployment", "webhook", "ci-cd"]
+description: "Configure automatic content deployment from a Git repository."
+---
 # Content Deploy Setup
 
 How to configure automatic content deployment from a separate Git repository.
@@ -49,7 +56,7 @@ Any push to the `main` branch will automatically trigger a content refresh on yo
 
 After a webhook-triggered reload, the content index is rebuilt immediately, but
 cached rendered HTML is only replaced once its TTL expires. See the
-[Cache Invalidation on Content Reload](content-authoring-guide.md#cache-invalidation-on-content-reload)
+[Cache Invalidation on Content Reload](content-authoring.md#cache-invalidation-on-content-reload)
 section in the Content Authoring Guide for details and workarounds.
 
 To minimize the stale window, lower the cache TTL in `site.yaml`:
