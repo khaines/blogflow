@@ -41,7 +41,7 @@ jobs:
             --template-file deploy/azure/main.bicep \
             --parameters \
               location="eastus2" \
-              scaleMinReplicas=0 \
+              scaleMinReplicas=1 \
               scaleMaxReplicas=2 \
               environmentName="${{ secrets.AZURE_ENVIRONMENT_NAME }}" \
               ghcrUsername="${{ github.repository_owner }}" \
