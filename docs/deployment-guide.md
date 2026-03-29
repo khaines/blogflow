@@ -1,3 +1,10 @@
+---
+title: "Deployment Guide"
+slug: "deployment-guide"
+date: 2026-03-23
+tags: ["deployment", "kubernetes", "docker", "helm"]
+description: "How to deploy BlogFlow: local dev, K8s sidecar, K8s webhook, Docker production."
+---
 # Deployment Guide
 
 > How to deploy BlogFlow in four patterns: local development, Kubernetes with

@@ -143,6 +143,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 // index is replaced (content sync).
 func serveStaticHome(w http.ResponseWriter, r *http.Request, deps *Deps, hp string, fallback http.HandlerFunc) {
 	if cached := deps.staticHTML.Load(); cached != nil {
+		w.Header().Del("Content-Security-Policy")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(*cached)
 		return
@@ -166,6 +167,9 @@ func serveStaticHome(w http.ResponseWriter, r *http.Request, deps *Deps, hp stri
 
 	deps.staticHTML.Store(&data)
 
+	// Static homepage pages manage their own CSP via <meta> tags or inline
+	// styles. Remove the server-set CSP so it does not block inline content.
+	w.Header().Del("Content-Security-Policy")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(data)
 }
@@ -191,7 +195,7 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 			Site:       cfg.Site,
 			Feed:       cfg.Feed,
 			Posts:      paged,
-			Title:      cfg.Site.Title,
+			Title:      "Posts",
 			Pagination: pag,
 		}
 
@@ -232,7 +236,7 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 			Site:       cfg.Site,
 			Feed:       cfg.Feed,
 			Posts:      paged,
-			Title:      cfg.Site.Title,
+			Title:      "Posts",
 			Pagination: pag,
 		}
 

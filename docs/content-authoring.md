@@ -1,3 +1,10 @@
+---
+title: "Content Authoring Guide"
+slug: "content-authoring"
+date: 2026-03-23
+tags: ["content", "markdown", "front-matter"]
+description: "How to write blog content for BlogFlow: markdown, front matter, media."
+---
 # Content Authoring Guide
 
 > **Audience**: Blog authors and content editors  

@@ -1,3 +1,10 @@
+---
+title: "Content Deploy Setup"
+slug: "content-deploy-setup"
+date: 2026-03-23
+tags: ["deployment", "webhook", "ci-cd"]
+description: "Configure automatic content deployment from a Git repository."
+---
 # Content Deploy Setup
 
 How to configure automatic content deployment from a separate Git repository.

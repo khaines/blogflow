@@ -1,3 +1,10 @@
+---
+title: "Theme Development Guide"
+slug: "theme-development"
+date: 2026-03-23
+tags: ["theme", "templates", "css"]
+description: "How to create and customize BlogFlow themes."
+---
 # Theme Development Guide
 
 > **Audience**: Theme developers and front-end engineers  

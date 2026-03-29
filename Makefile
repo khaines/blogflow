@@ -88,9 +88,9 @@ clean:
 	rm -rf bin/ dist/ public/ coverage.out coverage.html
 	go clean -cache -testcache
 
-## docs-site: Run the in-repo documentation site locally
+## docs-site: Run the documentation site locally using BlogFlow
 docs-site: build
-	./bin/blogflow --dev --content ./site --config ./site/config
+	./bin/blogflow --dev --content ./docs --config ./docs/config
 
 ## k8s-lint: Validate K8s manifests and Helm chart with kubeconform
 k8s-lint:
