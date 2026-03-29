@@ -26,7 +26,7 @@ az ad sp create --id <APP_ID>
 az ad app federated-credential create --id <APP_ID> --parameters '{
   "name": "github-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:khaines/blogflow:ref:refs/heads/main",
+  "subject": "repo:khaines/blogflow:environment:production",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 ```
