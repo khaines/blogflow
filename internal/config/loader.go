@@ -409,6 +409,14 @@ var envMap = map[string]func(*Config, string) error{
 		c.Site.Homepage = v
 		return nil
 	},
+	"BLOGFLOW_CONTENT_POSTS_DIR": func(c *Config, v string) error {
+		c.Content.PostsDir = v
+		return nil
+	},
+	"BLOGFLOW_CONTENT_PAGES_DIR": func(c *Config, v string) error {
+		c.Content.PagesDir = v
+		return nil
+	},
 }
 
 // secretEnvVars identifies env vars that should be redacted in logs.
