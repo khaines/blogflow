@@ -39,8 +39,10 @@ jobs:
           az deployment group create \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --template-file deploy/azure/main.bicep \
-            --parameters deploy/azure/parameters/prod.bicepparam \
             --parameters \
+              location="eastus2" \
+              scaleMinReplicas=0 \
+              scaleMaxReplicas=2 \
               environmentName="${{ secrets.AZURE_ENVIRONMENT_NAME }}" \
               ghcrUsername="${{ github.repository_owner }}" \
               ghcrPassword="${{ secrets.GHCR_PASSWORD }}" \
