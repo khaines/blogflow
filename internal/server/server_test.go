@@ -381,11 +381,20 @@ func TestCSPHeader(t *testing.T) {
 	s.httpServer.Handler.ServeHTTP(rec, req)
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	if !strings.Contains(csp, "frame-ancestors") {
-		t.Errorf("CSP missing frame-ancestors directive: %s", csp)
+	required := []string{
+		"default-src 'none'",
+		"script-src 'self'",
+		"style-src 'self'",
+		"frame-ancestors 'self'",
+		"object-src 'none'",
 	}
-	if !strings.Contains(csp, "default-src 'none'") {
-		t.Errorf("CSP missing default-src 'none': %s", csp)
+	for _, directive := range required {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("CSP missing %q: %s", directive, csp)
+		}
+	}
+	if strings.Contains(csp, "'unsafe-inline'") {
+		t.Errorf("CSP must not contain 'unsafe-inline': %s", csp)
 	}
 }
 

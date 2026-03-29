@@ -291,7 +291,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'none'; script-src 'none'; object-src 'none'; "+
+			"default-src 'none'; script-src 'self'; object-src 'none'; "+
 				"connect-src 'none'; style-src 'self'; img-src 'self' https: data:; "+
 				"font-src 'self' https:; base-uri 'self'; form-action 'self'; "+
 				"frame-ancestors 'self'")
