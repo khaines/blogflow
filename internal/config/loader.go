@@ -521,8 +521,21 @@ func Validate(cfg *Config) error {
 		switch {
 		case strings.HasPrefix(hp, "page:") && strings.TrimPrefix(hp, "page:") != "":
 			// valid
-		case strings.HasPrefix(hp, "static:") && strings.TrimPrefix(hp, "static:") != "":
-			// valid
+		case strings.HasPrefix(hp, "static:"):
+			sp := strings.TrimPrefix(hp, "static:")
+			if sp == "" {
+				errs = append(errs, FieldError{
+					Field:   "site.homepage",
+					Value:   hp,
+					Message: `static: requires a non-empty file path`,
+				})
+			} else if !fs.ValidPath(sp) {
+				errs = append(errs, FieldError{
+					Field:   "site.homepage",
+					Value:   hp,
+					Message: `static path must be a clean, relative fs.FS path (no "..", no leading "/")`,
+				})
+			}
 		default:
 			errs = append(errs, FieldError{
 				Field:   "site.homepage",

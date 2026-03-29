@@ -993,3 +993,39 @@ func TestPostsListHandler_Pagination(t *testing.T) {
 		t.Errorf("expected prev=/posts, got body: %s", body)
 	}
 }
+
+func TestHomeHandler_StaticCacheInvalidatedOnSetConfig(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:index.html")
+
+	overlay := fstest.MapFS{
+		"index.html": &fstest.MapFile{
+			Data: []byte(`<p>Static V1</p>`),
+		},
+		"other.html": &fstest.MapFile{
+			Data: []byte(`<p>Other Page</p>`),
+		},
+	}
+	deps.Overlay = overlay
+
+	// First request — populates cache with index.html.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+	if !strings.Contains(rec.Body.String(), "Static V1") {
+		t.Fatalf("expected Static V1, got: %s", rec.Body.String())
+	}
+
+	// Change config to point to other.html; SetConfig must clear cache.
+	cfg := deps.LoadConfig()
+	newCfg := *cfg
+	newCfg.Site.Homepage = "static:other.html"
+	deps.SetConfig(&newCfg)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec2 := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec2, req2)
+	if !strings.Contains(rec2.Body.String(), "Other Page") {
+		t.Errorf("expected Other Page after config change, got: %s", rec2.Body.String())
+	}
+}

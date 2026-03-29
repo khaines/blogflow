@@ -46,8 +46,12 @@ func NewDeps(cfg *config.Config, idx *content.Index, themeEngine *theme.Engine) 
 // LoadConfig returns the current config. Safe for concurrent use.
 func (d *Deps) LoadConfig() *config.Config { return d.config.Load() }
 
-// SetConfig atomically replaces the config. Safe for concurrent use.
-func (d *Deps) SetConfig(cfg *config.Config) { d.config.Store(cfg) }
+// SetConfig atomically replaces the config and clears the cached static
+// homepage so a changed homepage path takes effect immediately.
+func (d *Deps) SetConfig(cfg *config.Config) {
+	d.config.Store(cfg)
+	d.staticHTML.Store(nil) // invalidate; homepage path may have changed
+}
 
 // LoadIndex returns the current content index. Safe for concurrent use.
 func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
@@ -109,7 +113,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 
 		// static:<path> — serve raw HTML from overlay FS, no template wrapping.
 		if strings.HasPrefix(hp, "static:") {
-			serveStaticHome(w, deps, hp, listFallback)
+			serveStaticHome(w, r, deps, hp, listFallback)
 			return
 		}
 
@@ -137,7 +141,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 // serveStaticHome reads a static HTML file from the overlay FS and writes it
 // directly to the response. The content is cached and only re-read when the
 // index is replaced (content sync).
-func serveStaticHome(w http.ResponseWriter, deps *Deps, hp string, fallback http.HandlerFunc) {
+func serveStaticHome(w http.ResponseWriter, r *http.Request, deps *Deps, hp string, fallback http.HandlerFunc) {
 	if cached := deps.staticHTML.Load(); cached != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(*cached)
@@ -148,7 +152,7 @@ func serveStaticHome(w http.ResponseWriter, deps *Deps, hp string, fallback http
 	if deps.Overlay == nil {
 		slog.Warn("static homepage: overlay FS not configured, falling back to post list",
 			"path", filePath, "homepage", hp)
-		fallback(w, &http.Request{URL: &url.URL{Path: "/"}})
+		fallback(w, r)
 		return
 	}
 
@@ -156,7 +160,7 @@ func serveStaticHome(w http.ResponseWriter, deps *Deps, hp string, fallback http
 	if err != nil {
 		slog.Warn("static homepage file not found, falling back to post list",
 			"path", filePath, "homepage", hp, "error", err)
-		fallback(w, &http.Request{URL: &url.URL{Path: "/"}})
+		fallback(w, r)
 		return
 	}
 
