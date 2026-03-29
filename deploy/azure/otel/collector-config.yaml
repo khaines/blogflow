@@ -1,0 +1,39 @@
+# OTel Collector configuration for BlogFlow
+# Receives traces and metrics from BlogFlow via OTLP HTTP, scrapes Prometheus
+# metrics from the internal metrics port, and exports to Azure Monitor.
+
+receivers:
+  # OTLP receiver — accepts traces and metrics from BlogFlow
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Prometheus scraper — pulls metrics from BlogFlow's internal metrics port
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: blogflow
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["localhost:9090"]
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 256
+
+exporters:
+  azuremonitor:
+    connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azuremonitor]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [batch]
+      exporters: [azuremonitor]
