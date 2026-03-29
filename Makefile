@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt docker clean run dev smoke-test e2e k8s-lint
+.PHONY: build test lint fmt docker clean run dev smoke-test e2e k8s-lint docs-site
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -87,6 +87,10 @@ e2e:
 clean:
 	rm -rf bin/ dist/ public/ coverage.out coverage.html
 	go clean -cache -testcache
+
+## docs-site: Run the in-repo documentation site locally
+docs-site: build
+	./bin/blogflow --dev --content ./site --config ./site/config
 
 ## k8s-lint: Validate K8s manifests and Helm chart with kubeconform
 k8s-lint:

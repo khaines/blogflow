@@ -27,6 +27,7 @@ type SiteConfig struct {
 	BaseURL     string       `yaml:"base_url"`
 	Language    string       `yaml:"language"`
 	Author      AuthorConfig `yaml:"author"`
+	Homepage    string       `yaml:"homepage"` // "post_list" (default), "page:<slug>", or "static:<path>"
 }
 
 // AuthorConfig holds the site author details.
@@ -109,6 +110,7 @@ func Default() *Config {
 			BaseURL:     "http://localhost:8080",
 			Language:    "en",
 			Author:      AuthorConfig{}, // intentionally empty per design
+			Homepage:    "post_list",
 		},
 		Content: ContentConfig{
 			PostsDir:      "posts",

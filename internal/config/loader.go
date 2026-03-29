@@ -405,6 +405,10 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.MetricsPort = n
 		return nil
 	},
+	"BLOGFLOW_SITE_HOMEPAGE": func(c *Config, v string) error {
+		c.Site.Homepage = v
+		return nil
+	},
 }
 
 // secretEnvVars identifies env vars that should be redacted in logs.
@@ -510,6 +514,35 @@ func Validate(cfg *Config) error {
 			Value:   cfg.Site.BaseURL,
 			Message: "must be a valid URL with http or https scheme and a non-empty host",
 		})
+	}
+
+	// Site.Homepage: must be "post_list", "page:<slug>", or "static:<path>"
+	if hp := cfg.Site.Homepage; hp != "" && hp != "post_list" {
+		switch {
+		case strings.HasPrefix(hp, "page:") && strings.TrimPrefix(hp, "page:") != "":
+			// valid
+		case strings.HasPrefix(hp, "static:"):
+			sp := strings.TrimPrefix(hp, "static:")
+			if sp == "" {
+				errs = append(errs, FieldError{
+					Field:   "site.homepage",
+					Value:   hp,
+					Message: `static: requires a non-empty file path`,
+				})
+			} else if !fs.ValidPath(sp) {
+				errs = append(errs, FieldError{
+					Field:   "site.homepage",
+					Value:   hp,
+					Message: `static path must be a clean, relative fs.FS path (no "..", no leading "/")`,
+				})
+			}
+		default:
+			errs = append(errs, FieldError{
+				Field:   "site.homepage",
+				Value:   hp,
+				Message: `must be "post_list", "page:<slug>", or "static:<path>" with a non-empty value`,
+			})
+		}
 	}
 
 	// Content paths: no absolute paths, no ".."

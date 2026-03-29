@@ -4,11 +4,13 @@ package handlers
 
 import (
 	"bytes"
+	"io/fs"
 	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/khaines/blogflow/internal/config"
@@ -23,6 +25,14 @@ type Deps struct {
 	config atomic.Pointer[config.Config]
 	index  atomic.Pointer[content.Index]
 	Theme  *theme.Engine
+
+	// Overlay is the layered filesystem (content → theme → defaults).
+	// Used by HomeHandler to serve static HTML files.
+	Overlay fs.FS
+
+	// staticHTML caches the rendered static homepage content.
+	// Cleared on content sync (SetIndex).
+	staticHTML atomic.Pointer[[]byte]
 }
 
 // NewDeps creates a Deps with the given dependencies.
@@ -36,14 +46,22 @@ func NewDeps(cfg *config.Config, idx *content.Index, themeEngine *theme.Engine) 
 // LoadConfig returns the current config. Safe for concurrent use.
 func (d *Deps) LoadConfig() *config.Config { return d.config.Load() }
 
-// SetConfig atomically replaces the config. Safe for concurrent use.
-func (d *Deps) SetConfig(cfg *config.Config) { d.config.Store(cfg) }
+// SetConfig atomically replaces the config and clears the cached static
+// homepage so a changed homepage path takes effect immediately.
+func (d *Deps) SetConfig(cfg *config.Config) {
+	d.config.Store(cfg)
+	d.staticHTML.Store(nil) // invalidate; homepage path may have changed
+}
 
 // LoadIndex returns the current content index. Safe for concurrent use.
 func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
 
-// SetIndex atomically replaces the content index. Safe for concurrent use.
-func (d *Deps) SetIndex(idx *content.Index) { d.index.Store(idx) }
+// SetIndex atomically replaces the content index and clears cached
+// static homepage content so the next request re-reads from the overlay FS.
+func (d *Deps) SetIndex(idx *content.Index) {
+	d.index.Store(idx)
+	d.staticHTML.Store(nil) // invalidate static homepage cache
+}
 
 // PostCount returns the number of posts in the current index.
 // Implements server.ContentChecker.
@@ -76,6 +94,109 @@ type Pagination struct {
 	NextPage    int
 	PrevURL     string
 	NextURL     string
+}
+
+// HomeHandler returns a handler for the root route that respects the
+// site.homepage configuration:
+//   - "post_list" or "": paginated post list
+//   - "page:<slug>":     renders a content page through the theme
+//   - "static:<path>":   serves a raw HTML file from the overlay FS
+func HomeHandler(deps *Deps) http.HandlerFunc {
+	listFallback := ListHandler(deps)
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
+		hp := cfg.Site.Homepage
+		if hp == "" || hp == "post_list" {
+			listFallback(w, r)
+			return
+		}
+
+		// static:<path> — serve raw HTML from overlay FS, no template wrapping.
+		if strings.HasPrefix(hp, "static:") {
+			serveStaticHome(w, r, deps, hp, listFallback)
+			return
+		}
+
+		slug := strings.TrimPrefix(hp, "page:")
+		idx := deps.LoadIndex()
+		page, ok := idx.PageBySlug[slug]
+		if !ok {
+			slog.Warn("homepage page not found, falling back to post list",
+				"slug", slug, "homepage", hp)
+			listFallback(w, r)
+			return
+		}
+
+		data := &PageData{
+			Site:  cfg.Site,
+			Feed:  cfg.Feed,
+			Page:  page,
+			Title: page.Title,
+		}
+
+		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
+	}
+}
+
+// serveStaticHome reads a static HTML file from the overlay FS and writes it
+// directly to the response. The content is cached and only re-read when the
+// index is replaced (content sync).
+func serveStaticHome(w http.ResponseWriter, r *http.Request, deps *Deps, hp string, fallback http.HandlerFunc) {
+	if cached := deps.staticHTML.Load(); cached != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(*cached)
+		return
+	}
+
+	filePath := strings.TrimPrefix(hp, "static:")
+	if deps.Overlay == nil {
+		slog.Warn("static homepage: overlay FS not configured, falling back to post list",
+			"path", filePath, "homepage", hp)
+		fallback(w, r)
+		return
+	}
+
+	data, err := fs.ReadFile(deps.Overlay, filePath)
+	if err != nil {
+		slog.Warn("static homepage file not found, falling back to post list",
+			"path", filePath, "homepage", hp, "error", err)
+		fallback(w, r)
+		return
+	}
+
+	deps.staticHTML.Store(&data)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+// PostsListHandler returns a handler for /posts (paginated post list).
+// This provides a dedicated post-list route that works regardless of
+// the homepage configuration.
+func PostsListHandler(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
+		idx := deps.LoadIndex()
+		perPage := cfg.Content.PostsPerPage
+
+		page := queryInt(r, "page", 1)
+		if page < 1 {
+			page = 1
+		}
+
+		paged, pag := paginate(idx.Posts, page, perPage)
+		setPageURLs(pag, postsPageURL)
+
+		data := &PageData{
+			Site:       cfg.Site,
+			Feed:       cfg.Feed,
+			Posts:      paged,
+			Title:      cfg.Site.Title,
+			Pagination: pag,
+		}
+
+		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
+	}
 }
 
 // ListHandler returns a handler for the home page (paginated post list).
@@ -284,6 +405,14 @@ func listPageURL(page int) string {
 		return "/"
 	}
 	return "/page/" + strconv.Itoa(page)
+}
+
+// postsPageURL returns the canonical URL for a page in the /posts list.
+func postsPageURL(page int) string {
+	if page <= 1 {
+		return "/posts"
+	}
+	return "/posts?page=" + strconv.Itoa(page)
 }
 
 // tagPageURL returns the URL for a page in a tag-filtered listing.

@@ -115,7 +115,7 @@ func TestRequestIDMiddleware_InContext(t *testing.T) {
 
 	var ctxID string
 	opts := testRouteOptions()
-	opts.ListHandler = func(w http.ResponseWriter, r *http.Request) {
+	opts.HomeHandler = func(w http.ResponseWriter, r *http.Request) {
 		ctxID = RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}

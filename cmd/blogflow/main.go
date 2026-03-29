@@ -179,6 +179,7 @@ func main() {
 
 	// 7. Build handler dependencies
 	deps := handlers.NewDeps(cfg, idx, themeEngine)
+	deps.Overlay = contentOverlay
 
 	// Wire config reload → handlers: when config changes, update deps atomically
 	cfgLoader.OnChange(func(newCfg *config.Config) {
@@ -224,13 +225,15 @@ func main() {
 	sitemapHandler := handlers.NewSitemapHandler(deps)
 
 	routeOpts := server.RouteOptions{
-		ListHandler:    handlers.ListHandler(deps),
-		PostHandler:    handlers.PostHandler(deps),
-		PageHandler:    handlers.PageHandler(deps),
-		TagHandler:     handlers.TagHandler(deps),
-		FeedHandler:    feedHandler.ServeHTTP,
-		SitemapHandler: sitemapHandler.ServeHTTP,
-		StaticFS:       staticFS,
+		HomeHandler:      handlers.HomeHandler(deps),
+		ListHandler:      handlers.ListHandler(deps),
+		PostsListHandler: handlers.PostsListHandler(deps),
+		PostHandler:      handlers.PostHandler(deps),
+		PageHandler:      handlers.PageHandler(deps),
+		TagHandler:       handlers.TagHandler(deps),
+		FeedHandler:      feedHandler.ServeHTTP,
+		SitemapHandler:   sitemapHandler.ServeHTTP,
+		StaticFS:         staticFS,
 	}
 	if ws, ok := syncStrategy.(*gitops.WebhookStrategy); ok {
 		routeOpts.WebhookHandler = ws.Handler()

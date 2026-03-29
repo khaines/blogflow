@@ -716,3 +716,316 @@ func TestListHandler_PageURLs(t *testing.T) {
 		}
 	})
 }
+
+// testDepsWithHomepage builds a Deps with a custom homepage config.
+func testDepsWithHomepage(t *testing.T, posts, pages []*content.Post, homepage string) *handlers.Deps {
+	t.Helper()
+
+	idx := &content.Index{
+		Posts:      posts,
+		BySlug:     make(map[string]*content.Post),
+		ByTag:      make(map[string][]*content.Post),
+		ByYear:     make(map[int][]*content.Post),
+		Pages:      pages,
+		PageBySlug: make(map[string]*content.Post),
+	}
+	for _, p := range posts {
+		idx.BySlug[p.Slug] = p
+		for _, tag := range p.Tags {
+			idx.ByTag[tag] = append(idx.ByTag[tag], p)
+		}
+	}
+	for _, p := range pages {
+		idx.PageBySlug[p.Slug] = p
+	}
+
+	tmplFS := fstest.MapFS{
+		"templates/base.html": &fstest.MapFile{
+			Data: []byte(`{{block "content" .}}{{end}}`),
+		},
+		"templates/list.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}{{.Title}}|posts={{len .Posts}}|page={{.Pagination.CurrentPage}}|total={{.Pagination.TotalPages}}|prev={{.Pagination.PrevURL}}|next={{.Pagination.NextURL}}{{end}}`),
+		},
+		"templates/post.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}post:{{.Post.Slug}}|{{.Title}}{{end}}`),
+		},
+		"templates/page.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}page:{{.Page.Slug}}|{{.Title}}{{end}}`),
+		},
+		"templates/404.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}404:{{.Title}}{{end}}`),
+		},
+	}
+	eng, err := theme.NewEngine(tmplFS)
+	if err != nil {
+		t.Fatalf("creating theme engine: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Content.PostsPerPage = 2
+	cfg.Site.Homepage = homepage
+
+	return handlers.NewDeps(cfg, idx, eng)
+}
+
+func TestHomeHandler_DefaultPostList(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+	}
+	deps := testDepsWithHomepage(t, posts, nil, "post_list")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=2") {
+		t.Errorf("expected post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_EmptyHomepageDefaultsToPostList(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_PageHomepage(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	pages := []*content.Post{makePage("landing", "Welcome")}
+	deps := testDepsWithHomepage(t, posts, pages, "page:landing")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "page:landing") {
+		t.Errorf("expected page:landing, got body: %s", body)
+	}
+	if !strings.Contains(body, "Welcome") {
+		t.Errorf("expected Welcome, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_MissingPageFallsBackToList(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "page:nonexistent")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fallback to list), got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected fallback to post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_StaticServesRawHTML(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:index.html")
+	deps.Overlay = fstest.MapFS{
+		"index.html": &fstest.MapFile{
+			Data: []byte(`<!DOCTYPE html><html><body>Static Home</body></html>`),
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if body != `<!DOCTYPE html><html><body>Static Home</body></html>` {
+		t.Errorf("expected raw HTML, got: %s", body)
+	}
+	// Must not contain template output (no wrapping).
+	if strings.Contains(body, "posts=") || strings.Contains(body, "page:") {
+		t.Error("static homepage should not be template-wrapped")
+	}
+}
+
+func TestHomeHandler_StaticContentType(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:pages/home.html")
+	deps.Overlay = fstest.MapFS{
+		"pages/home.html": &fstest.MapFile{
+			Data: []byte(`<h1>Hello</h1>`),
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if ct != "text/html; charset=utf-8" {
+		t.Errorf("expected text/html; charset=utf-8, got: %s", ct)
+	}
+}
+
+func TestHomeHandler_StaticNotFoundFallsBack(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:missing.html")
+	deps.Overlay = fstest.MapFS{} // empty FS — file doesn't exist
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fallback to list), got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected fallback to post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_StaticCacheInvalidatedOnSetIndex(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:index.html")
+
+	overlay := fstest.MapFS{
+		"index.html": &fstest.MapFile{
+			Data: []byte(`<p>Version 1</p>`),
+		},
+	}
+	deps.Overlay = overlay
+
+	// First request — populates cache.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if !strings.Contains(rec.Body.String(), "Version 1") {
+		t.Fatalf("expected Version 1, got: %s", rec.Body.String())
+	}
+
+	// Simulate content sync: update the overlay FS and call SetIndex.
+	overlay["index.html"] = &fstest.MapFile{
+		Data: []byte(`<p>Version 2</p>`),
+	}
+	deps.SetIndex(deps.LoadIndex())
+
+	// Second request — should re-read from FS.
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec2 := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec2, req2)
+
+	if !strings.Contains(rec2.Body.String(), "Version 2") {
+		t.Errorf("expected Version 2 after cache invalidation, got: %s", rec2.Body.String())
+	}
+}
+
+func TestPostsListHandler(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
+	pages := []*content.Post{makePage("landing", "Welcome")}
+	deps := testDepsWithHomepage(t, posts, pages, "page:landing")
+
+	req := httptest.NewRequest(http.MethodGet, "/posts", nil)
+	rec := httptest.NewRecorder()
+	handlers.PostsListHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=2") {
+		t.Errorf("expected 2 posts on page 1, got body: %s", body)
+	}
+	if !strings.Contains(body, "next=/posts?page=2") {
+		t.Errorf("expected next=/posts?page=2, got body: %s", body)
+	}
+}
+
+func TestPostsListHandler_Pagination(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
+	deps := testDepsWithHomepage(t, posts, nil, "post_list")
+
+	req := httptest.NewRequest(http.MethodGet, "/posts?page=2", nil)
+	rec := httptest.NewRecorder()
+	handlers.PostsListHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected 1 post on page 2, got body: %s", body)
+	}
+	if !strings.Contains(body, "prev=/posts") {
+		t.Errorf("expected prev=/posts, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_StaticCacheInvalidatedOnSetConfig(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "static:index.html")
+
+	overlay := fstest.MapFS{
+		"index.html": &fstest.MapFile{
+			Data: []byte(`<p>Static V1</p>`),
+		},
+		"other.html": &fstest.MapFile{
+			Data: []byte(`<p>Other Page</p>`),
+		},
+	}
+	deps.Overlay = overlay
+
+	// First request — populates cache with index.html.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+	if !strings.Contains(rec.Body.String(), "Static V1") {
+		t.Fatalf("expected Static V1, got: %s", rec.Body.String())
+	}
+
+	// Change config to point to other.html; SetConfig must clear cache.
+	cfg := deps.LoadConfig()
+	newCfg := *cfg
+	newCfg.Site.Homepage = "static:other.html"
+	deps.SetConfig(&newCfg)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec2 := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec2, req2)
+	if !strings.Contains(rec2.Body.String(), "Other Page") {
+		t.Errorf("expected Other Page after config change, got: %s", rec2.Body.String())
+	}
+}

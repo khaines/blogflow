@@ -90,22 +90,30 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 
 // RouteOptions holds the handler functions injected into the server.
 type RouteOptions struct {
-	ListHandler    http.HandlerFunc
-	PostHandler    http.HandlerFunc
-	PageHandler    http.HandlerFunc
-	TagHandler     http.HandlerFunc
-	FeedHandler    http.HandlerFunc
-	SitemapHandler http.HandlerFunc
-	WebhookHandler http.HandlerFunc
-	StaticFS       fs.FS
+	HomeHandler      http.HandlerFunc
+	ListHandler      http.HandlerFunc
+	PostsListHandler http.HandlerFunc
+	PostHandler      http.HandlerFunc
+	PageHandler      http.HandlerFunc
+	TagHandler       http.HandlerFunc
+	FeedHandler      http.HandlerFunc
+	SitemapHandler   http.HandlerFunc
+	WebhookHandler   http.HandlerFunc
+	StaticFS         fs.FS
 }
 
 // RegisterRoutes sets up all HTTP routes. Call this after content and theme are loaded.
 // contentHandler, pageHandler, etc. are injected as http.HandlerFunc.
 func (s *Server) RegisterRoutes(opts RouteOptions) {
 	// Nil-handler guards for required routes.
+	if opts.HomeHandler == nil {
+		panic("server: RegisterRoutes requires HomeHandler")
+	}
 	if opts.ListHandler == nil {
 		panic("server: RegisterRoutes requires ListHandler")
+	}
+	if opts.PostsListHandler == nil {
+		panic("server: RegisterRoutes requires PostsListHandler")
 	}
 	if opts.PostHandler == nil {
 		panic("server: RegisterRoutes requires PostHandler")
@@ -121,7 +129,8 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	}
 
 	// Content routes
-	s.mux.HandleFunc("GET /{$}", opts.ListHandler)
+	s.mux.HandleFunc("GET /{$}", opts.HomeHandler)
+	s.mux.HandleFunc("GET /posts", opts.PostsListHandler)
 	s.mux.HandleFunc("GET /page/{page}", opts.ListHandler)
 	s.mux.HandleFunc("GET /posts/{slug}", opts.PostHandler)
 	s.mux.HandleFunc("GET /pages/{slug}", opts.PageHandler)
