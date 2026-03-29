@@ -1065,7 +1065,10 @@ func TestValidate_Homepage(t *testing.T) {
 		{"empty (defaults to post_list)", "", false},
 		{"post_list", "post_list", false},
 		{"valid page slug", "page:landing", false},
+		{"valid static path", "static:index.html", false},
+		{"valid static nested path", "static:pages/index.html", false},
 		{"page: with empty slug", "page:", true},
+		{"static: with empty path", "static:", true},
 		{"invalid value", "something_else", true},
 		{"page without colon", "pagelanding", true},
 	}

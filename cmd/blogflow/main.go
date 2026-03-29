@@ -179,6 +179,7 @@ func main() {
 
 	// 7. Build handler dependencies
 	deps := handlers.NewDeps(cfg, idx, themeEngine)
+	deps.Overlay = contentOverlay
 
 	// Wire config reload → handlers: when config changes, update deps atomically
 	cfgLoader.OnChange(func(newCfg *config.Config) {

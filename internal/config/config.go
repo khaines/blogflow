@@ -27,7 +27,7 @@ type SiteConfig struct {
 	BaseURL     string       `yaml:"base_url"`
 	Language    string       `yaml:"language"`
 	Author      AuthorConfig `yaml:"author"`
-	Homepage    string       `yaml:"homepage"` // "post_list" (default) or "page:<slug>"
+	Homepage    string       `yaml:"homepage"` // "post_list" (default), "page:<slug>", or "static:<path>"
 }
 
 // AuthorConfig holds the site author details.

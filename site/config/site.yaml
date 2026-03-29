@@ -2,4 +2,4 @@ site:
   title: "blogflow.io"
   description: "Documentation for BlogFlow — the anti-WordPress blog engine"
   base_url: "https://khaines.github.io/blogflow"
-  homepage: "page:landing"
+  homepage: "static:pages/index.html"

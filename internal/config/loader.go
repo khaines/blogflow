@@ -516,13 +516,18 @@ func Validate(cfg *Config) error {
 		})
 	}
 
-	// Site.Homepage: must be "post_list" or "page:<slug>" with a non-empty slug
+	// Site.Homepage: must be "post_list", "page:<slug>", or "static:<path>"
 	if hp := cfg.Site.Homepage; hp != "" && hp != "post_list" {
-		if !strings.HasPrefix(hp, "page:") || strings.TrimPrefix(hp, "page:") == "" {
+		switch {
+		case strings.HasPrefix(hp, "page:") && strings.TrimPrefix(hp, "page:") != "":
+			// valid
+		case strings.HasPrefix(hp, "static:") && strings.TrimPrefix(hp, "static:") != "":
+			// valid
+		default:
 			errs = append(errs, FieldError{
 				Field:   "site.homepage",
 				Value:   hp,
-				Message: `must be "post_list" or "page:<slug>" with a non-empty slug`,
+				Message: `must be "post_list", "page:<slug>", or "static:<path>" with a non-empty value`,
 			})
 		}
 	}
