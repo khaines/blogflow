@@ -81,11 +81,29 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
     }
     template: {
+      volumes: [
+        {
+          name: 'content'
+          storageType: 'EmptyDir'
+        }
+      ]
       containers: [
         // --- BlogFlow application container ---
         {
           name: 'blogflow'
           image: containerImage
+          args: [
+            '--content'
+            '/data/content/docs'
+            '--config'
+            '/data/content/docs/config'
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'content'
+              mountPath: '/data/content'
+            }
+          ]
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -110,6 +128,38 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'BLOGFLOW_METRICS_PORT'
               value: '9090'
+            }
+            {
+              name: 'BLOGFLOW_SYNC_STRATEGY'
+              value: 'poll'
+            }
+            {
+              name: 'BLOGFLOW_SYNC_REPO'
+              value: 'https://github.com/khaines/blogflow.git'
+            }
+            {
+              name: 'BLOGFLOW_SYNC_BRANCH'
+              value: 'main'
+            }
+            {
+              name: 'BLOGFLOW_SYNC_POLL_INTERVAL'
+              value: '5m'
+            }
+            {
+              name: 'BLOGFLOW_SYNC_SPARSE_DIRS'
+              value: 'docs'
+            }
+            {
+              name: 'BLOGFLOW_SITE_HOMEPAGE'
+              value: 'static:index.html'
+            }
+            {
+              name: 'BLOGFLOW_SITE_TITLE'
+              value: 'blogflow.io'
+            }
+            {
+              name: 'BLOGFLOW_SITE_DESCRIPTION'
+              value: 'Documentation for BlogFlow — the anti-WordPress blog engine'
             }
           ]
           probes: [
