@@ -405,6 +405,10 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.MetricsPort = n
 		return nil
 	},
+	"BLOGFLOW_SITE_HOMEPAGE": func(c *Config, v string) error {
+		c.Site.Homepage = v
+		return nil
+	},
 }
 
 // secretEnvVars identifies env vars that should be redacted in logs.
@@ -510,6 +514,17 @@ func Validate(cfg *Config) error {
 			Value:   cfg.Site.BaseURL,
 			Message: "must be a valid URL with http or https scheme and a non-empty host",
 		})
+	}
+
+	// Site.Homepage: must be "post_list" or "page:<slug>" with a non-empty slug
+	if hp := cfg.Site.Homepage; hp != "" && hp != "post_list" {
+		if !strings.HasPrefix(hp, "page:") || strings.TrimPrefix(hp, "page:") == "" {
+			errs = append(errs, FieldError{
+				Field:   "site.homepage",
+				Value:   hp,
+				Message: `must be "post_list" or "page:<slug>" with a non-empty slug`,
+			})
+		}
 	}
 
 	// Content paths: no absolute paths, no ".."

@@ -716,3 +716,178 @@ func TestListHandler_PageURLs(t *testing.T) {
 		}
 	})
 }
+
+// testDepsWithHomepage builds a Deps with a custom homepage config.
+func testDepsWithHomepage(t *testing.T, posts, pages []*content.Post, homepage string) *handlers.Deps {
+	t.Helper()
+
+	idx := &content.Index{
+		Posts:      posts,
+		BySlug:     make(map[string]*content.Post),
+		ByTag:      make(map[string][]*content.Post),
+		ByYear:     make(map[int][]*content.Post),
+		Pages:      pages,
+		PageBySlug: make(map[string]*content.Post),
+	}
+	for _, p := range posts {
+		idx.BySlug[p.Slug] = p
+		for _, tag := range p.Tags {
+			idx.ByTag[tag] = append(idx.ByTag[tag], p)
+		}
+	}
+	for _, p := range pages {
+		idx.PageBySlug[p.Slug] = p
+	}
+
+	tmplFS := fstest.MapFS{
+		"templates/base.html": &fstest.MapFile{
+			Data: []byte(`{{block "content" .}}{{end}}`),
+		},
+		"templates/list.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}{{.Title}}|posts={{len .Posts}}|page={{.Pagination.CurrentPage}}|total={{.Pagination.TotalPages}}|prev={{.Pagination.PrevURL}}|next={{.Pagination.NextURL}}{{end}}`),
+		},
+		"templates/post.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}post:{{.Post.Slug}}|{{.Title}}{{end}}`),
+		},
+		"templates/page.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}page:{{.Page.Slug}}|{{.Title}}{{end}}`),
+		},
+		"templates/404.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}404:{{.Title}}{{end}}`),
+		},
+	}
+	eng, err := theme.NewEngine(tmplFS)
+	if err != nil {
+		t.Fatalf("creating theme engine: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Content.PostsPerPage = 2
+	cfg.Site.Homepage = homepage
+
+	return handlers.NewDeps(cfg, idx, eng)
+}
+
+func TestHomeHandler_DefaultPostList(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+	}
+	deps := testDepsWithHomepage(t, posts, nil, "post_list")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=2") {
+		t.Errorf("expected post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_EmptyHomepageDefaultsToPostList(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected post list, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_PageHomepage(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	pages := []*content.Post{makePage("landing", "Welcome")}
+	deps := testDepsWithHomepage(t, posts, pages, "page:landing")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "page:landing") {
+		t.Errorf("expected page:landing, got body: %s", body)
+	}
+	if !strings.Contains(body, "Welcome") {
+		t.Errorf("expected Welcome, got body: %s", body)
+	}
+}
+
+func TestHomeHandler_MissingPageFallsBackToList(t *testing.T) {
+	posts := []*content.Post{makePost("a", "Alpha", nil)}
+	deps := testDepsWithHomepage(t, posts, nil, "page:nonexistent")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handlers.HomeHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fallback to list), got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected fallback to post list, got body: %s", body)
+	}
+}
+
+func TestPostsListHandler(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
+	pages := []*content.Post{makePage("landing", "Welcome")}
+	deps := testDepsWithHomepage(t, posts, pages, "page:landing")
+
+	req := httptest.NewRequest(http.MethodGet, "/posts", nil)
+	rec := httptest.NewRecorder()
+	handlers.PostsListHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=2") {
+		t.Errorf("expected 2 posts on page 1, got body: %s", body)
+	}
+	if !strings.Contains(body, "next=/posts?page=2") {
+		t.Errorf("expected next=/posts?page=2, got body: %s", body)
+	}
+}
+
+func TestPostsListHandler_Pagination(t *testing.T) {
+	posts := []*content.Post{
+		makePost("a", "Alpha", nil),
+		makePost("b", "Beta", nil),
+		makePost("c", "Gamma", nil),
+	}
+	deps := testDepsWithHomepage(t, posts, nil, "post_list")
+
+	req := httptest.NewRequest(http.MethodGet, "/posts?page=2", nil)
+	rec := httptest.NewRecorder()
+	handlers.PostsListHandler(deps)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "posts=1") {
+		t.Errorf("expected 1 post on page 2, got body: %s", body)
+	}
+	if !strings.Contains(body, "prev=/posts") {
+		t.Errorf("expected prev=/posts, got body: %s", body)
+	}
+}

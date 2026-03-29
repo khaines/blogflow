@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/khaines/blogflow/internal/config"
@@ -76,6 +77,68 @@ type Pagination struct {
 	NextPage    int
 	PrevURL     string
 	NextURL     string
+}
+
+// HomeHandler returns a handler for the root route that respects the
+// site.homepage configuration. When homepage is "page:<slug>", it renders
+// that page; otherwise it delegates to ListHandler (post list).
+func HomeHandler(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
+		hp := cfg.Site.Homepage
+		if hp == "" || hp == "post_list" {
+			ListHandler(deps)(w, r)
+			return
+		}
+
+		slug := strings.TrimPrefix(hp, "page:")
+		idx := deps.LoadIndex()
+		page, ok := idx.PageBySlug[slug]
+		if !ok {
+			slog.Warn("homepage page not found, falling back to post list",
+				"slug", slug, "homepage", hp)
+			ListHandler(deps)(w, r)
+			return
+		}
+
+		data := &PageData{
+			Site:  cfg.Site,
+			Feed:  cfg.Feed,
+			Page:  page,
+			Title: page.Title,
+		}
+
+		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
+	}
+}
+
+// PostsListHandler returns a handler for /posts (paginated post list).
+// This provides a dedicated post-list route that works regardless of
+// the homepage configuration.
+func PostsListHandler(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := deps.LoadConfig()
+		idx := deps.LoadIndex()
+		perPage := cfg.Content.PostsPerPage
+
+		page := queryInt(r, "page", 1)
+		if page < 1 {
+			page = 1
+		}
+
+		paged, pag := paginate(idx.Posts, page, perPage)
+		setPageURLs(pag, postsPageURL)
+
+		data := &PageData{
+			Site:       cfg.Site,
+			Feed:       cfg.Feed,
+			Posts:      paged,
+			Title:      cfg.Site.Title,
+			Pagination: pag,
+		}
+
+		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
+	}
 }
 
 // ListHandler returns a handler for the home page (paginated post list).
@@ -284,6 +347,14 @@ func listPageURL(page int) string {
 		return "/"
 	}
 	return "/page/" + strconv.Itoa(page)
+}
+
+// postsPageURL returns the canonical URL for a page in the /posts list.
+func postsPageURL(page int) string {
+	if page <= 1 {
+		return "/posts"
+	}
+	return "/posts?page=" + strconv.Itoa(page)
 }
 
 // tagPageURL returns the URL for a page in a tag-filtered listing.

@@ -1055,3 +1055,47 @@ func TestValidate_MetricsPort_OutOfRange(t *testing.T) {
 		})
 	}
 }
+
+func TestValidate_Homepage(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"empty (defaults to post_list)", "", false},
+		{"post_list", "post_list", false},
+		{"valid page slug", "page:landing", false},
+		{"page: with empty slug", "page:", true},
+		{"invalid value", "something_else", true},
+		{"page without colon", "pagelanding", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Site.Homepage = tc.value
+			err := Validate(cfg)
+			if tc.wantErr && err == nil {
+				t.Error("expected validation error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected validation error: %v", err)
+			}
+			if tc.wantErr && err != nil {
+				cfgErr, ok := err.(*ConfigError)
+				if !ok {
+					t.Fatalf("expected *ConfigError, got %T", err)
+				}
+				found := false
+				for _, fe := range cfgErr.Errors {
+					if fe.Field == "site.homepage" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Error("expected site.homepage field error")
+				}
+			}
+		})
+	}
+}

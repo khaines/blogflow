@@ -32,13 +32,15 @@ func stubHandler(body string) http.HandlerFunc {
 
 func testRouteOptions() RouteOptions {
 	return RouteOptions{
-		ListHandler:    stubHandler("list"),
-		PostHandler:    stubHandler("post"),
-		PageHandler:    stubHandler("page"),
-		TagHandler:     stubHandler("tags"),
-		FeedHandler:    stubHandler("feed"),
-		SitemapHandler: stubHandler("sitemap"),
-		WebhookHandler: stubHandler("webhook"),
+		HomeHandler:      stubHandler("home"),
+		ListHandler:      stubHandler("list"),
+		PostsListHandler: stubHandler("posts-list"),
+		PostHandler:      stubHandler("post"),
+		PageHandler:      stubHandler("page"),
+		TagHandler:       stubHandler("tags"),
+		FeedHandler:      stubHandler("feed"),
+		SitemapHandler:   stubHandler("sitemap"),
+		WebhookHandler:   stubHandler("webhook"),
 	}
 }
 
@@ -423,7 +425,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	panicOpts := testRouteOptions()
-	panicOpts.ListHandler = func(w http.ResponseWriter, r *http.Request) {
+	panicOpts.HomeHandler = func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
 	}
 	s.RegisterRoutes(panicOpts)
@@ -444,7 +446,7 @@ func TestRecoveryMiddleware_HeadersAlreadySent(t *testing.T) {
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	panicOpts := testRouteOptions()
-	panicOpts.ListHandler = func(w http.ResponseWriter, r *http.Request) {
+	panicOpts.HomeHandler = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "partial")
 		panic("late panic after headers sent")
