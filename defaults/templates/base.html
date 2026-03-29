@@ -22,20 +22,6 @@
         {{block "content" .}}{{end}}
     </main>
     {{template "partials/footer.html" .}}
-    <script src="/static/js/mermaid.min.js"></script>
-    <script>
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'
-      });
-      document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {
-        var pre = el.parentElement;
-        var div = document.createElement('div');
-        div.className = 'mermaid';
-        div.textContent = el.textContent;
-        pre.parentElement.replaceChild(div, pre);
-      });
-      mermaid.run();
-    </script>
+    <script src="/static/js/mermaid-init.js" defer></script>
 </body>
 </html>
