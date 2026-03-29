@@ -173,6 +173,17 @@ Use backslashes to escape Markdown syntax: \*not italic\*, \[not a link\].
 
 Literal backticks in inline code: `` `code` `` uses double backticks.
 
+## Diagrams
+
+BlogFlow renders Mermaid diagrams in code blocks:
+
+```mermaid
+graph LR
+    A[Write Markdown] --> B[Push to Git]
+    B --> C[BlogFlow Syncs]
+    C --> D[Blog Updated]
+```
+
 ## HTML in Markdown
 
 BlogFlow sanitizes raw HTML in Markdown for security. Stick to standard Markdown syntax for best results — the goldmark renderer handles everything you need.
