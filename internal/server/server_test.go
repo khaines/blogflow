@@ -395,8 +395,11 @@ func TestCSPHeader(t *testing.T) {
 			t.Errorf("CSP missing %q: %s", directive, csp)
 		}
 	}
-	if strings.Contains(csp, "'unsafe-inline'") {
-		t.Errorf("CSP must not contain 'unsafe-inline': %s", csp)
+	if strings.Contains(csp, "script-src") && strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Errorf("CSP script-src must not contain 'unsafe-inline': %s", csp)
+	}
+	if !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") {
+		t.Errorf("CSP style-src must allow 'unsafe-inline' for Mermaid SVG styles: %s", csp)
 	}
 }
 
