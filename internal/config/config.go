@@ -28,6 +28,12 @@ type SiteConfig struct {
 	Language    string       `yaml:"language"`
 	Author      AuthorConfig `yaml:"author"`
 	Homepage    string       `yaml:"homepage"` // "post_list" (default), "page:<slug>", or "static:<path>"
+	Social      SocialConfig `yaml:"social"`
+}
+
+// SocialConfig holds social media account identifiers.
+type SocialConfig struct {
+	Twitter string `yaml:"twitter"` // Twitter/X username (without @)
 }
 
 // AuthorConfig holds the site author details.

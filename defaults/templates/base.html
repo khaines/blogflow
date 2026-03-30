@@ -11,6 +11,13 @@
     <meta property="og:description" content="{{block "og_description" .}}{{.Site.Description}}{{end}}">
     <meta property="og:type" content="{{block "og_type" .}}website{{end}}">
     <meta property="og:url" content="{{block "og_url" .}}{{.Site.BaseURL}}{{end}}">
+    {{if .Post}}{{if .Post.Image}}<meta property="og:image" content="{{.Post.Image}}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="{{.Post.Image}}">
+    {{else}}<meta name="twitter:card" content="summary">
+    {{end}}{{else}}<meta name="twitter:card" content="summary">
+    {{end}}
+    {{if .Site.Social.Twitter}}<meta name="twitter:site" content="@{{.Site.Social.Twitter}}">{{end}}
     <link rel="icon" href="/static/images/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/css/main.css">
     {{if .Feed.Enabled}}<link rel="alternate" type="application/atom+xml" href="/feed.xml" title="{{.Site.Title}} Feed">{{end}}
