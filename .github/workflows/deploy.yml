@@ -72,7 +72,9 @@ jobs:
               ghcrUsername="${{ github.repository_owner }}" \
               ghcrPassword="${{ secrets.GHCR_PASSWORD }}" \
               appInsightsConnectionString="${{ secrets.APPINSIGHTS_CONNECTION_STRING }}" \
-              containerImage="ghcr.io/${{ github.repository }}:${{ steps.image.outputs.tag }}"
+              containerImage="ghcr.io/${{ github.repository }}:${{ steps.image.outputs.tag }}" \
+              customDomainName="${{ secrets.CUSTOM_DOMAIN_NAME }}" \
+              customDomainCertificateId="${{ secrets.CUSTOM_DOMAIN_CERT_ID }}"
 
       # Image-only update — after Publish or manual (default)
       # Creates a new revision without full infra redeploy
