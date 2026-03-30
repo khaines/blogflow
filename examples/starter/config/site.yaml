@@ -1,0 +1,82 @@
+# BlogFlow Site Configuration — Starter Template
+# ================================================
+#
+# Customize your blog by editing the values below. BlogFlow merges these
+# with its built-in defaults — you only need to specify what you want to
+# override.
+#
+# Configuration priority (highest first):
+#   1. Environment variables (BLOGFLOW_*)
+#   2. This file (site.yaml)
+#   3. Built-in defaults
+#
+# Security note: NEVER put secrets (tokens, passwords, API keys) in this
+# file. Use environment variables for sensitive values.
+
+# ---------------------------------------------------------------------------
+# Site identity — displayed in templates, feeds, and meta tags
+# ---------------------------------------------------------------------------
+site:
+  title: "My Blog"                          # Site title (header and <title>)
+  description: "A blog powered by BlogFlow" # Meta description for SEO and feeds
+  base_url: "http://localhost:8080"          # Canonical base URL (use HTTPS in production)
+                                             # Override: BLOGFLOW_SITE_BASE_URL
+  language: "en"                             # BCP 47 language code
+  author:
+    name: ""                                 # Default author name for posts
+    email: ""                                # Author email (used in feeds)
+
+# ---------------------------------------------------------------------------
+# Content — where posts and pages live, how they're displayed
+# ---------------------------------------------------------------------------
+content:
+  posts_dir: "posts"          # Blog post directory (relative to content root)
+  pages_dir: "pages"          # Static pages directory (about, contact, etc.)
+  # media_dir: "media"        # Images and other media
+  posts_per_page: 10          # Posts on the index page (1–100)
+  date_format: "January 2, 2006"  # Go time layout for displayed dates
+  # summary_length: 200       # Characters for post summaries (50–1000)
+
+# ---------------------------------------------------------------------------
+# Theme — visual theme selection
+# ---------------------------------------------------------------------------
+theme:
+  name: "default"             # Theme name ("default" or a custom theme)
+  # path: ""                  # Path to custom theme directory (leave empty for default)
+
+# ---------------------------------------------------------------------------
+# Server — HTTP server settings
+# ---------------------------------------------------------------------------
+server:
+  port: 8080                  # Listen port. Override: BLOGFLOW_SERVER_PORT
+  # read_timeout: "5s"        # Max request read time
+  # write_timeout: "10s"      # Max response write time
+  # idle_timeout: "120s"      # Keep-alive idle timeout
+
+# ---------------------------------------------------------------------------
+# Cache — in-memory rendered content cache
+# ---------------------------------------------------------------------------
+cache:
+  enabled: true               # Enable/disable render cache
+  ttl: "1h"                   # Cache entry time-to-live (max 24h)
+  # max_entries: 1000         # Maximum cached pages (0–100000)
+
+# ---------------------------------------------------------------------------
+# Sync — how BlogFlow detects content changes
+# ---------------------------------------------------------------------------
+sync:
+  strategy: "watch"           # "watch" (local dev), "webhook", or "sidecar" (k8s)
+                              # Override: BLOGFLOW_SYNC_STRATEGY
+  # webhook:
+  #   path: "/api/webhook"
+  #   branch_filter: "main"
+  #   rate_limit: 10          # Max webhook requests per minute
+  #   secret: (use BLOGFLOW_WEBHOOK_SECRET env var — never put secrets here)
+
+# ---------------------------------------------------------------------------
+# Feed — RSS/Atom feed generation
+# ---------------------------------------------------------------------------
+feed:
+  enabled: true               # Serve a feed at /feed.xml (or /feed.atom)
+  type: "atom"                # "atom" or "rss"
+  items: 20                   # Posts in the feed (1–100)
