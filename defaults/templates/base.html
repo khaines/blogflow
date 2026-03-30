@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; script-src 'self'; object-src 'none'; connect-src 'none'; style-src 'self'; img-src 'self' https: data:; font-src 'self' https:; base-uri 'self'; form-action 'self'">
+          content="default-src 'none'; script-src 'self'; object-src 'none'; connect-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self' https:; base-uri 'self'; form-action 'self'">
     <title>{{block "title" .}}{{.Site.Title}}{{end}}</title>
     <meta name="description" content="{{block "meta_description" .}}{{.Site.Description}}{{end}}">
     <meta property="og:title" content="{{block "og_title" .}}{{.Site.Title}}{{end}}">
