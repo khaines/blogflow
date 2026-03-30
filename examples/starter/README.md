@@ -11,8 +11,8 @@ Copy or fork this directory to start your blog in minutes.
 # Copy the starter directory
 cp -r examples/starter ~/my-blog
 
-# Run BlogFlow pointing at your content
-blogflow --content ~/my-blog
+# Run BlogFlow pointing at your content and config
+blogflow --content ~/my-blog --config ~/my-blog/config
 ```
 
 Open <http://localhost:8080> to see your blog.
@@ -24,10 +24,14 @@ Open <http://localhost:8080> to see your blog.
 services:
   blogflow:
     image: ghcr.io/khaines/blogflow:latest
+    command: ["--content", "/data/content", "--config", "/data/config"]
     ports:
       - "8080:8080"
     volumes:
-      - ./my-blog:/content
+      - ./my-blog/posts:/data/content/posts:ro
+      - ./my-blog/pages:/data/content/pages:ro
+      - ./my-blog/static:/data/content/static:ro
+      - ./my-blog/config:/data/config:ro
     environment:
       BLOGFLOW_SYNC_STRATEGY: watch
 ```
@@ -61,8 +65,8 @@ Every Markdown file starts with YAML front matter between `---` fences:
 ```yaml
 ---
 title: "My Post Title"          # Required — displayed as the heading
-slug: "my-post-title"           # Required — URL path segment (/posts/my-post-title)
 date: 2026-03-30                # Required — publish date (YYYY-MM-DD)
+slug: "my-post-title"           # Optional — URL path segment (derived from filename if omitted)
 tags: ["go", "blogging"]        # Optional — list of tags for filtering
 description: "A short summary"  # Optional — used in feeds and meta tags
 draft: false                    # Optional — set to true to hide from listings

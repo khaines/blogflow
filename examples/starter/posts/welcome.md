@@ -35,8 +35,8 @@ BlogFlow picks up changes automatically — no rebuild step required.
 
 ## What's next?
 
-- Check out the [Getting Started](../posts/getting-started) guide for configuration tips
+- Check out the [Getting Started](/posts/getting-started) guide for configuration tips
 - Edit `config/site.yaml` to set your blog title and author info
-- Replace the [About](../pages/about) page with your own bio
+- Replace the [About](/about) page with your own bio
 
 Happy writing! ✍️
