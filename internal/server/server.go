@@ -295,7 +295,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 		s.logger.Info("request",
 			"method", r.Method,
-			"path", r.URL.RequestURI(),
+			"path", redactRequestURI(r),
 			"status", wrapped.statusCode,
 			"duration", time.Since(start),
 			"remote", r.RemoteAddr,
@@ -303,6 +303,16 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			"request_id", RequestIDFromContext(r.Context()),
 		)
 	})
+}
+
+// redactRequestURI returns the request URI with sensitive query parameters masked.
+func redactRequestURI(r *http.Request) string {
+	q := r.URL.Query()
+	if q.Get("token") == "" {
+		return r.URL.RequestURI()
+	}
+	q.Set("token", "[REDACTED]")
+	return r.URL.Path + "?" + q.Encode()
 }
 
 func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {

@@ -305,10 +305,11 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 
 		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  cfg.Site,
-			Feed:  cfg.Feed,
-			Page:  page,
-			Title: page.Title,
+			Site:    cfg.Site,
+			Feed:    cfg.Feed,
+			Page:    page,
+			Title:   page.Title,
+			Preview: IsPreview(r.Context()),
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
@@ -323,8 +324,21 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 		preview := IsPreview(r.Context())
 
 		idx := deps.LoadIndex()
-		posts, ok := idx.ByTag[tag]
-		if !ok || len(posts) == 0 {
+		posts := idx.ByTag[tag]
+
+		// In preview mode, include drafts that carry the requested tag.
+		if preview {
+			for _, d := range idx.Drafts {
+				for _, t := range d.Tags {
+					if t == tag {
+						posts = append(posts, d)
+						break
+					}
+				}
+			}
+		}
+
+		if len(posts) == 0 {
 			NotFoundHandler(deps)(w, r)
 			return
 		}
@@ -355,9 +369,10 @@ func NotFoundHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  cfg.Site,
-			Feed:  cfg.Feed,
-			Title: "Page Not Found",
+			Site:    cfg.Site,
+			Feed:    cfg.Feed,
+			Title:   "Page Not Found",
+			Preview: IsPreview(r.Context()),
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/404.html", data, http.StatusNotFound)

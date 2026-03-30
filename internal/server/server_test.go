@@ -566,6 +566,27 @@ func TestLoggingMiddleware_RequestURI(t *testing.T) {
 	}
 }
 
+func TestLoggingMiddleware_RedactsToken(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	cfg := defaultTestConfig()
+	s := New(cfg, logger)
+	s.RegisterRoutes(testRouteOptions())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz?preview=true&token=super-secret", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
+	logged := buf.String()
+	if strings.Contains(logged, "super-secret") {
+		t.Errorf("log must not contain raw token, got: %s", logged)
+	}
+	if !strings.Contains(logged, "REDACTED") {
+		t.Errorf("log should contain REDACTED for token, got: %s", logged)
+	}
+}
+
 func TestHealthEndpoint_CacheControl(t *testing.T) {
 	s := newTestServer(t)
 

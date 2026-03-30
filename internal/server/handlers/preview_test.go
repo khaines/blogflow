@@ -38,6 +38,14 @@ func previewDeps(t *testing.T, token string) *handlers.Deps {
 		Content: template.HTML("<p>Draft content</p>"), //nolint:gosec
 	}
 
+	aboutPage := &content.Post{
+		FrontMatter: content.FrontMatter{
+			Title: "About",
+		},
+		Slug:    "about",
+		Content: template.HTML("<p>About page</p>"), //nolint:gosec
+	}
+
 	idx := &content.Index{
 		Posts:       []*content.Post{published},
 		Drafts:      []*content.Post{draft},
@@ -45,8 +53,8 @@ func previewDeps(t *testing.T, token string) *handlers.Deps {
 		DraftBySlug: map[string]*content.Post{"my-draft": draft},
 		ByTag:       map[string][]*content.Post{"go": {published}},
 		ByYear:      map[int][]*content.Post{2025: {published}},
-		Pages:       nil,
-		PageBySlug:  make(map[string]*content.Post),
+		Pages:       []*content.Post{aboutPage},
+		PageBySlug:  map[string]*content.Post{"about": aboutPage},
 	}
 
 	tmplFS := fstest.MapFS{
@@ -59,8 +67,11 @@ func previewDeps(t *testing.T, token string) *handlers.Deps {
 		"templates/post.html": &fstest.MapFile{
 			Data: []byte(`{{define "content"}}preview={{.Preview}}|post:{{.Post.Slug}}|draft={{.Post.Draft}}{{end}}`),
 		},
+		"templates/page.html": &fstest.MapFile{
+			Data: []byte(`{{define "content"}}preview={{.Preview}}|page:{{.Page.Slug}}{{end}}`),
+		},
 		"templates/404.html": &fstest.MapFile{
-			Data: []byte(`{{define "content"}}404{{end}}`),
+			Data: []byte(`{{define "content"}}preview={{.Preview}}|404{{end}}`),
 		},
 	}
 	eng, err := theme.NewEngine(tmplFS)
@@ -223,5 +234,76 @@ func TestPreview_PreviewFlagNotSetOnQueryOnly(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "preview=false") {
 		t.Errorf("expected preview=false without token, got body: %s", body)
+	}
+}
+
+func TestPreview_TagHandler_IncludesDraftsInPreview(t *testing.T) {
+	deps := previewDeps(t, "secret-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/tags/go?preview=true&token=secret-token", nil)
+	req.SetPathValue("tag", "go")
+	rec := httptest.NewRecorder()
+	wrapWithPreview(deps, handlers.TagHandler(deps)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "my-draft") {
+		t.Errorf("expected draft post in tag listing in preview mode, got body: %s", body)
+	}
+	if !strings.Contains(body, "preview=true") {
+		t.Errorf("expected preview=true, got body: %s", body)
+	}
+}
+
+func TestPreview_TagHandler_ExcludesDraftsWithoutToken(t *testing.T) {
+	deps := previewDeps(t, "secret-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/tags/go", nil)
+	req.SetPathValue("tag", "go")
+	rec := httptest.NewRecorder()
+	wrapWithPreview(deps, handlers.TagHandler(deps)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "my-draft") {
+		t.Errorf("draft should be hidden in tag listing without token, got body: %s", body)
+	}
+}
+
+func TestPreview_PageHandler_ShowsBanner(t *testing.T) {
+	deps := previewDeps(t, "secret-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/pages/about?preview=true&token=secret-token", nil)
+	req.SetPathValue("slug", "about")
+	rec := httptest.NewRecorder()
+	wrapWithPreview(deps, handlers.PageHandler(deps)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "preview=true") {
+		t.Errorf("expected preview=true on page handler, got body: %s", body)
+	}
+}
+
+func TestPreview_NotFoundHandler_ShowsBanner(t *testing.T) {
+	deps := previewDeps(t, "secret-token")
+
+	req := httptest.NewRequest(http.MethodGet, "/posts/nonexistent?preview=true&token=secret-token", nil)
+	req.SetPathValue("slug", "nonexistent")
+	rec := httptest.NewRecorder()
+	wrapWithPreview(deps, handlers.PostHandler(deps)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "preview=true") {
+		t.Errorf("expected preview=true on 404 page, got body: %s", body)
 	}
 }
