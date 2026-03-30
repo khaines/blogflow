@@ -130,7 +130,7 @@ Posts live in `content/posts/` as markdown files with YAML front matter:
 ```yaml
 ---
 title: "My First Post"
-date: 2025-06-15T09:00:00Z
+date: 2026-03-23T09:00:00Z
 tags: ["go", "blogging"]
 draft: false
 ---

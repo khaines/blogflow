@@ -1,7 +1,7 @@
 ---
 title: "Markdown Features"
 slug: "markdown-features"
-date: 2025-01-25
+date: 2026-03-23
 tags: ["markdown", "reference", "blogflow"]
 description: "A showcase of all Markdown features supported by BlogFlow's goldmark renderer."
 draft: false
@@ -96,7 +96,7 @@ YAML (front matter example):
 ---
 title: "My Post"
 slug: "my-post"
-date: 2025-01-25
+date: 2026-03-23
 tags: ["go", "blog"]
 draft: false
 ---

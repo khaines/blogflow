@@ -9,7 +9,7 @@ description: "How to write blog content for BlogFlow: markdown, front matter, me
 
 > **Audience**: Blog authors and content editors  
 > **Prerequisite**: BlogFlow binary installed or running via Docker  
-> **Last Updated**: 2025-07-16
+> **Last Updated**: 2026-03-30
 
 This guide covers everything you need to write, organize, and publish content
 with BlogFlow. Start at [Writing Posts](#1-writing-posts) if you just want to
@@ -29,8 +29,8 @@ parses front matter up to **64 KB**.
 ---
 title: "Deploying to Kubernetes"
 slug: "deploying-to-kubernetes"
-date: 2025-06-20
-updated: 2025-07-01
+date: 2026-03-20
+updated: 2026-03-25
 tags: ["kubernetes", "devops"]
 categories: ["infrastructure"]
 author: "Jane Doe"
@@ -67,9 +67,9 @@ reading_time: 8
 
 Dates in front matter accept:
 
-- **Date only**: `2025-06-20` (interpreted as midnight UTC)
-- **Full RFC 3339**: `2025-06-20T14:30:00Z`
-- **With timezone**: `2025-06-20T14:30:00-07:00`
+- **Date only**: `2026-03-20` (interpreted as midnight UTC)
+- **Full RFC 3339**: `2026-03-20T14:30:00Z`
+- **With timezone**: `2026-03-20T14:30:00-07:00`
 
 Display format is controlled by `content.date_format` in `site.yaml` (default:
 `"January 2, 2006"`, following Go time layout conventions).
@@ -97,7 +97,7 @@ Draft posts are skipped during content scanning and never served.
 ```yaml
 ---
 title: "Work in Progress"
-date: 2025-07-10
+date: 2026-03-25
 draft: true
 ---
 ```
@@ -109,7 +109,7 @@ Override the default `post.html` template for a specific post:
 ```yaml
 ---
 title: "Photo Gallery"
-date: 2025-07-01
+date: 2026-03-22
 template: "gallery.html"
 ---
 ```

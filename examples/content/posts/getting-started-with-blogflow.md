@@ -1,7 +1,7 @@
 ---
 title: "Getting Started with BlogFlow"
 slug: "getting-started-with-blogflow"
-date: 2025-01-20
+date: 2026-03-23
 tags: ["tutorial", "blogflow", "go"]
 description: "A step-by-step guide to setting up your blog with BlogFlow, from first post to custom configuration."
 author: "BlogFlow Team"
@@ -56,7 +56,7 @@ Create `my-blog/content/posts/first-post.md`:
 ---
 title: "My First Post"
 slug: "my-first-post"
-date: 2025-01-20
+date: 2026-03-23
 tags: ["hello"]
 description: "My very first blog post."
 ---
