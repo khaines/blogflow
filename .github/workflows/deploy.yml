@@ -46,7 +46,14 @@ jobs:
 
       - name: Compute image tag
         id: image
-        run: echo "tag=sha-$(echo $GITHUB_SHA | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # After Publish: use the SHA tag that was just built
+            echo "tag=sha-$(echo ${{ github.event.workflow_run.head_sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          else
+            # Push/manual: use :main (always exists, avoids race with Publish)
+            echo "tag=main" >> "$GITHUB_OUTPUT"
+          fi
 
       # Full Bicep deploy — only on infra changes or explicit manual trigger
       - name: Deploy Bicep template (full)
