@@ -1,0 +1,67 @@
+# Content Deploy — Trigger BlogFlow webhook on content push
+#
+# This workflow notifies your BlogFlow instance whenever you push to main.
+# It sends a signed webhook payload so BlogFlow can pull the latest content.
+#
+# Required repository secrets:
+#   BLOGFLOW_WEBHOOK_URL    — Your BlogFlow webhook endpoint (e.g. https://blog.example.com/api/webhook)
+#   BLOGFLOW_WEBHOOK_SECRET — Shared secret for HMAC-SHA256 signature (min 32 chars)
+#
+# See: https://github.com/khaines/blogflow/blob/main/docs/deployment-guide.md
+
+name: Deploy Content
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger BlogFlow Webhook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.BLOGFLOW_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.BLOGFLOW_WEBHOOK_SECRET }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          # Build payload safely via jq (prevents JSON injection)
+          PAYLOAD=$(jq -n \
+            --arg ref "refs/heads/$REF_NAME" \
+            --arg repo "$REPO_NAME" \
+            --arg sha "$COMMIT_SHA" \
+            --arg msg "$COMMIT_MSG" \
+            '{ref: $ref, repository: {full_name: $repo}, head_commit: {id: $sha, message: $msg}}')
+
+          # Compute HMAC-SHA256 signature
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+
+          # Send webhook
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+            -H "X-GitHub-Event: push" \
+            -H "X-GitHub-Delivery: $RUN_ID" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL")
+
+          echo "Webhook response: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Webhook failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✅ Content deploy triggered successfully"
+          echo "📝 Commit: $COMMIT_MSG"
+          echo "🔗 $SERVER_URL/$REPO_NAME/commit/$COMMIT_SHA"
