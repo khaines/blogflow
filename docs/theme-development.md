@@ -9,7 +9,7 @@ description: "How to create and customize BlogFlow themes."
 
 > **Audience**: Theme developers and front-end engineers  
 > **Prerequisite**: Familiarity with HTML, CSS, and Go `html/template` syntax  
-> **Last Updated**: 2025-07-16
+> **Last Updated**: 2026-03-30
 
 This guide covers how to build, customize, and override BlogFlow themes. Start
 with the [directory structure](#1-theme-directory-structure) to understand the

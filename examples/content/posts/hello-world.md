@@ -1,7 +1,7 @@
 ---
 title: "Hello, World!"
 slug: "hello-world"
-date: 2025-01-15
+date: 2026-03-23
 tags: ["intro", "blogflow"]
 description: "Welcome to BlogFlow — a compact blog engine powered by Go and Markdown."
 draft: false
