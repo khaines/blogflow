@@ -100,6 +100,11 @@ type RouteOptions struct {
 	SitemapHandler   http.HandlerFunc
 	WebhookHandler   http.HandlerFunc
 	StaticFS         fs.FS
+
+	// PreviewMiddleware wraps content handlers to check for a valid preview
+	// token and annotate the request context when present.
+	// If nil, preview mode is disabled.
+	PreviewMiddleware func(http.Handler) http.Handler
 }
 
 // RegisterRoutes sets up all HTTP routes. Call this after content and theme are loaded.
@@ -128,13 +133,19 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 		panic("server: RegisterRoutes requires SitemapHandler")
 	}
 
-	// Content routes
-	s.mux.HandleFunc("GET /{$}", opts.HomeHandler)
-	s.mux.HandleFunc("GET /posts", opts.PostsListHandler)
-	s.mux.HandleFunc("GET /page/{page}", opts.ListHandler)
-	s.mux.HandleFunc("GET /posts/{slug}", opts.PostHandler)
-	s.mux.HandleFunc("GET /pages/{slug}", opts.PageHandler)
-	s.mux.HandleFunc("GET /tags/{tag}", opts.TagHandler)
+	// Content routes — wrapped with preview middleware when configured.
+	wrap := func(h http.HandlerFunc) http.Handler {
+		if opts.PreviewMiddleware != nil {
+			return opts.PreviewMiddleware(h)
+		}
+		return h
+	}
+	s.mux.Handle("GET /{$}", wrap(opts.HomeHandler))
+	s.mux.Handle("GET /posts", wrap(opts.PostsListHandler))
+	s.mux.Handle("GET /page/{page}", wrap(opts.ListHandler))
+	s.mux.Handle("GET /posts/{slug}", wrap(opts.PostHandler))
+	s.mux.Handle("GET /pages/{slug}", wrap(opts.PageHandler))
+	s.mux.Handle("GET /tags/{tag}", wrap(opts.TagHandler))
 
 	// Feed
 	if s.config.Feed.Enabled {

@@ -119,7 +119,7 @@ func TestScan_MultiplePosts(t *testing.T) {
 	}
 }
 
-func TestScan_SkipDrafts(t *testing.T) {
+func TestScan_DraftsStoredSeparately(t *testing.T) {
 	fs := fstest.MapFS{
 		"posts/published.md": &fstest.MapFile{
 			Data: []byte(mkPost("Published", "pub", "2025-06-01", nil, false, "Content.\n")),
@@ -134,10 +134,70 @@ func TestScan_SkipDrafts(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(idx.Posts) != 1 {
-		t.Fatalf("expected 1 post (draft skipped), got %d", len(idx.Posts))
+		t.Fatalf("expected 1 published post, got %d", len(idx.Posts))
 	}
 	if idx.Posts[0].Slug != "pub" {
 		t.Errorf("expected published post, got slug %q", idx.Posts[0].Slug)
+	}
+	if len(idx.Drafts) != 1 {
+		t.Fatalf("expected 1 draft, got %d", len(idx.Drafts))
+	}
+	if idx.Drafts[0].Slug != "draft" {
+		t.Errorf("expected draft slug %q, got %q", "draft", idx.Drafts[0].Slug)
+	}
+	if idx.DraftBySlug["draft"] != idx.Drafts[0] {
+		t.Error("DraftBySlug lookup failed for draft")
+	}
+	// Drafts must not appear in the published index
+	if idx.BySlug["draft"] != nil {
+		t.Error("draft should not appear in BySlug (published index)")
+	}
+}
+
+func TestScan_DraftsSortedByDate(t *testing.T) {
+	fs := fstest.MapFS{
+		"posts/old-draft.md": &fstest.MapFile{
+			Data: []byte(mkPost("Old Draft", "old-draft", "2024-01-01", nil, true, "Old.\n")),
+		},
+		"posts/new-draft.md": &fstest.MapFile{
+			Data: []byte(mkPost("New Draft", "new-draft", "2025-06-01", nil, true, "New.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Drafts) != 2 {
+		t.Fatalf("expected 2 drafts, got %d", len(idx.Drafts))
+	}
+	if idx.Drafts[0].Slug != "new-draft" {
+		t.Errorf("drafts[0] = %q, want %q (date descending)", idx.Drafts[0].Slug, "new-draft")
+	}
+	if idx.Drafts[1].Slug != "old-draft" {
+		t.Errorf("drafts[1] = %q, want %q", idx.Drafts[1].Slug, "old-draft")
+	}
+}
+
+func TestScan_DraftPageSkipped(t *testing.T) {
+	fs := fstest.MapFS{
+		"pages/draft-page.md": &fstest.MapFile{
+			Data: []byte(mkPost("Draft Page", "draft-page", "2025-01-01", nil, true, "Draft page.\n")),
+		},
+		"pages/about.md": &fstest.MapFile{
+			Data: []byte(mkPost("About", "about", "2025-01-01", nil, false, "About page.\n")),
+		},
+	}
+
+	idx, err := newTestScanner().Scan(fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(idx.Pages) != 1 {
+		t.Fatalf("expected 1 page (draft page skipped), got %d", len(idx.Pages))
+	}
+	if len(idx.Drafts) != 0 {
+		t.Errorf("draft pages should not go into Drafts list, got %d", len(idx.Drafts))
 	}
 }
 

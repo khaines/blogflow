@@ -82,6 +82,7 @@ type PageData struct {
 	Tag        string          // current tag filter
 	Title      string          // page title override
 	Pagination *Pagination
+	Preview    bool // true when the request is in preview mode
 }
 
 // Pagination holds paging metadata for list views.
@@ -128,10 +129,11 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 		}
 
 		data := &PageData{
-			Site:  cfg.Site,
-			Feed:  cfg.Feed,
-			Page:  page,
-			Title: page.Title,
+			Site:    cfg.Site,
+			Feed:    cfg.Feed,
+			Page:    page,
+			Title:   page.Title,
+			Preview: IsPreview(r.Context()),
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
@@ -182,13 +184,19 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 		cfg := deps.LoadConfig()
 		idx := deps.LoadIndex()
 		perPage := cfg.Content.PostsPerPage
+		preview := IsPreview(r.Context())
+
+		posts := idx.Posts
+		if preview {
+			posts = mergedPosts(idx)
+		}
 
 		page := queryInt(r, "page", 1)
 		if page < 1 {
 			page = 1
 		}
 
-		paged, pag := paginate(idx.Posts, page, perPage)
+		paged, pag := paginate(posts, page, perPage)
 		setPageURLs(pag, postsPageURL)
 
 		data := &PageData{
@@ -197,6 +205,7 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 			Posts:      paged,
 			Title:      "Posts",
 			Pagination: pag,
+			Preview:    preview,
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
@@ -210,6 +219,12 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 		cfg := deps.LoadConfig()
 		idx := deps.LoadIndex()
 		perPage := cfg.Content.PostsPerPage
+		preview := IsPreview(r.Context())
+
+		posts := idx.Posts
+		if preview {
+			posts = mergedPosts(idx)
+		}
 
 		page, pathBased := parsePage(r)
 		if page < 0 {
@@ -224,12 +239,12 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 		}
 
 		// For path-based requests, return 404 for out-of-range pages.
-		if pathBased && !validPage(len(idx.Posts), page, perPage) {
+		if pathBased && !validPage(len(posts), page, perPage) {
 			NotFoundHandler(deps)(w, r)
 			return
 		}
 
-		paged, pag := paginate(idx.Posts, page, perPage)
+		paged, pag := paginate(posts, page, perPage)
 		setPageURLs(pag, listPageURL)
 
 		data := &PageData{
@@ -238,6 +253,7 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 			Posts:      paged,
 			Title:      "Posts",
 			Pagination: pag,
+			Preview:    preview,
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
@@ -249,9 +265,13 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 func PostHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
+		preview := IsPreview(r.Context())
 
 		idx := deps.LoadIndex()
 		post, ok := idx.BySlug[slug]
+		if !ok && preview {
+			post, ok = idx.DraftBySlug[slug]
+		}
 		if !ok {
 			NotFoundHandler(deps)(w, r)
 			return
@@ -259,10 +279,11 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 
 		cfg := deps.LoadConfig()
 		data := &PageData{
-			Site:  cfg.Site,
-			Feed:  cfg.Feed,
-			Post:  post,
-			Title: post.Title,
+			Site:    cfg.Site,
+			Feed:    cfg.Feed,
+			Post:    post,
+			Title:   post.Title,
+			Preview: preview,
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/post.html", data, http.StatusOK)
@@ -299,6 +320,7 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 func TagHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tag := r.PathValue("tag")
+		preview := IsPreview(r.Context())
 
 		idx := deps.LoadIndex()
 		posts, ok := idx.ByTag[tag]
@@ -321,6 +343,7 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			Tag:        tag,
 			Title:      "Posts tagged \"" + tag + "\"",
 			Pagination: pag,
+			Preview:    preview,
 		}
 
 		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
@@ -339,6 +362,28 @@ func NotFoundHandler(deps *Deps) http.HandlerFunc {
 
 		renderTemplate(w, r, deps.Theme, "templates/404.html", data, http.StatusNotFound)
 	}
+}
+
+// mergedPosts returns published + draft posts merged and sorted by date
+// descending. Used in preview mode to include drafts in listings.
+func mergedPosts(idx *content.Index) []*content.Post {
+	if len(idx.Drafts) == 0 {
+		return idx.Posts
+	}
+	merged := make([]*content.Post, 0, len(idx.Posts)+len(idx.Drafts))
+	i, j := 0, 0
+	for i < len(idx.Posts) && j < len(idx.Drafts) {
+		if idx.Posts[i].Date.After(idx.Drafts[j].Date) || idx.Posts[i].Date.Equal(idx.Drafts[j].Date) {
+			merged = append(merged, idx.Posts[i])
+			i++
+		} else {
+			merged = append(merged, idx.Drafts[j])
+			j++
+		}
+	}
+	merged = append(merged, idx.Posts[i:]...)
+	merged = append(merged, idx.Drafts[j:]...)
+	return merged
 }
 
 // paginate returns a page slice and pagination metadata for the given posts.

@@ -22,12 +22,13 @@ type Config struct {
 
 // SiteConfig holds site identity settings.
 type SiteConfig struct {
-	Title       string       `yaml:"title"`
-	Description string       `yaml:"description"`
-	BaseURL     string       `yaml:"base_url"`
-	Language    string       `yaml:"language"`
-	Author      AuthorConfig `yaml:"author"`
-	Homepage    string       `yaml:"homepage"` // "post_list" (default), "page:<slug>", or "static:<path>"
+	Title        string       `yaml:"title"`
+	Description  string       `yaml:"description"`
+	BaseURL      string       `yaml:"base_url"`
+	Language     string       `yaml:"language"`
+	Author       AuthorConfig `yaml:"author"`
+	Homepage     string       `yaml:"homepage"` // "post_list" (default), "page:<slug>", or "static:<path>"
+	PreviewToken string       `yaml:"-"`        // never from YAML — env var only (BLOGFLOW_PREVIEW_TOKEN)
 }
 
 // AuthorConfig holds the site author details.
@@ -161,6 +162,9 @@ func (c Config) LogValue() slog.Value {
 	r := noMethods(c)
 	if r.Sync.Webhook.Secret != "" {
 		r.Sync.Webhook.Secret = "[REDACTED]"
+	}
+	if r.Site.PreviewToken != "" {
+		r.Site.PreviewToken = "[REDACTED]"
 	}
 	return slog.AnyValue(r)
 }

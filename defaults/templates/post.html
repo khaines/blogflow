@@ -9,7 +9,7 @@
 {{/* .Content must be template.HTML — caller is responsible for sanitizing markdown output before wrapping. */}}
 <article class="post">
     <header class="post-header">
-        <h1>{{.Post.Title}}</h1>
+        <h1>{{if .Post.Draft}}<span class="draft-badge">[DRAFT]</span> {{end}}{{.Post.Title}}</h1>
         {{template "post-meta" .Post}}
     </header>
     <div class="post-content">

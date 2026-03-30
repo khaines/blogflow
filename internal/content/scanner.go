@@ -30,13 +30,15 @@ type Post struct {
 
 // Index is the in-memory content index, built by scanning the content directory.
 type Index struct {
-	Posts      []*Post            // sorted by date descending
-	BySlug     map[string]*Post   // O(1) slug lookup
-	ByTag      map[string][]*Post // posts by tag
-	ByYear     map[int][]*Post    // posts by year
-	Pages      []*Post            // static pages (from pages/ dir), sorted by weight asc then title
-	PageBySlug map[string]*Post   // O(1) page slug lookup
-	scanErrors []error            // collected errors in best-effort mode
+	Posts       []*Post            // sorted by date descending
+	Drafts      []*Post            // draft posts, sorted by date descending
+	BySlug      map[string]*Post   // O(1) slug lookup (published only)
+	DraftBySlug map[string]*Post   // O(1) slug lookup (drafts only)
+	ByTag       map[string][]*Post // posts by tag
+	ByYear      map[int][]*Post    // posts by year
+	Pages       []*Post            // static pages (from pages/ dir), sorted by weight asc then title
+	PageBySlug  map[string]*Post   // O(1) page slug lookup
+	scanErrors  []error            // collected errors in best-effort mode
 }
 
 // Errors returns any errors collected during a best-effort scan.
@@ -128,6 +130,7 @@ func (s *Scanner) ScanContext(ctx context.Context, contentFS fs.FS, opts ...Scan
 
 	span.SetAttributes(
 		attribute.Int("content.posts_found", len(idx.Posts)),
+		attribute.Int("content.drafts_found", len(idx.Drafts)),
 		attribute.Int("content.pages_found", len(idx.Pages)),
 		attribute.Int("content.errors_skipped", errCount),
 		attribute.Int64("content.duration_ms", duration.Milliseconds()),
@@ -157,10 +160,11 @@ func (s *Scanner) Scan(contentFS fs.FS, opts ...ScanOption) (*Index, error) {
 	)
 
 	idx := &Index{
-		BySlug:     make(map[string]*Post),
-		ByTag:      make(map[string][]*Post),
-		ByYear:     make(map[int][]*Post),
-		PageBySlug: make(map[string]*Post),
+		BySlug:      make(map[string]*Post),
+		DraftBySlug: make(map[string]*Post),
+		ByTag:       make(map[string][]*Post),
+		ByYear:      make(map[int][]*Post),
+		PageBySlug:  make(map[string]*Post),
 	}
 
 	var errCount int
@@ -208,6 +212,11 @@ func (s *Scanner) Scan(contentFS fs.FS, opts ...ScanOption) (*Index, error) {
 		return idx.Posts[i].Date.After(idx.Posts[j].Date)
 	})
 
+	// Sort drafts by date descending
+	sort.SliceStable(idx.Drafts, func(i, j int) bool {
+		return idx.Drafts[i].Date.After(idx.Drafts[j].Date)
+	})
+
 	// Sort pages by weight ascending, then title alphabetically as tiebreaker
 	sort.SliceStable(idx.Pages, func(i, j int) bool {
 		if idx.Pages[i].Weight != idx.Pages[j].Weight {
@@ -231,6 +240,7 @@ func (s *Scanner) Scan(contentFS fs.FS, opts ...ScanOption) (*Index, error) {
 
 	s.logger.Info("content scan completed",
 		"posts", len(idx.Posts),
+		"drafts", len(idx.Drafts),
 		"pages", len(idx.Pages),
 		"errors_skipped", errCount,
 		"collected_errors", len(idx.scanErrors),
@@ -283,12 +293,22 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage, bestE
 		if fm == nil {
 			return nil // no front matter, skip
 		}
-		if fm.Draft {
-			return nil // skip drafts
+
+		// Drafts for pages are skipped entirely; draft posts are stored
+		// in the separate Drafts list for preview mode.
+		if fm.Draft && isPage {
+			return nil // skip draft pages
 		}
 
-		if !isPage && fm.Date.IsZero() {
+		if !isPage && !fm.Draft && fm.Date.IsZero() {
 			s.logger.Warn("skipping file: post missing required date",
+				"path", filePath,
+			)
+			skipped++
+			return nil
+		}
+		if !isPage && fm.Draft && fm.Date.IsZero() {
+			s.logger.Warn("skipping draft: post missing required date",
 				"path", filePath,
 			)
 			skipped++
@@ -350,6 +370,18 @@ func (s *Scanner) scanDir(contentFS fs.FS, dir string, idx *Index, isPage, bestE
 			}
 			idx.Pages = append(idx.Pages, post)
 			idx.PageBySlug[slug] = post
+		} else if fm.Draft {
+			if existing, ok := idx.DraftBySlug[slug]; ok {
+				dupeErr := fmt.Errorf("duplicate draft slug %q: %s conflicts with %s", slug, filePath, existing.Path)
+				if bestEffort {
+					idx.scanErrors = append(idx.scanErrors, dupeErr)
+					skipped++
+					return nil
+				}
+				return dupeErr
+			}
+			idx.Drafts = append(idx.Drafts, post)
+			idx.DraftBySlug[slug] = post
 		} else {
 			if existing, ok := idx.BySlug[slug]; ok {
 				dupeErr := fmt.Errorf("duplicate post slug %q: %s conflicts with %s", slug, filePath, existing.Path)

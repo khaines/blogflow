@@ -417,11 +417,16 @@ var envMap = map[string]func(*Config, string) error{
 		c.Content.PagesDir = v
 		return nil
 	},
+	"BLOGFLOW_PREVIEW_TOKEN": func(c *Config, v string) error {
+		c.Site.PreviewToken = v
+		return nil
+	},
 }
 
 // secretEnvVars identifies env vars that should be redacted in logs.
 var secretEnvVars = map[string]bool{
 	"BLOGFLOW_WEBHOOK_SECRET": true,
+	"BLOGFLOW_PREVIEW_TOKEN":  true,
 }
 
 func applyEnvOverrides(cfg *Config, log *slog.Logger) ([]string, error) {

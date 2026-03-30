@@ -6,7 +6,7 @@
     {{range .Posts}}
     <article class="post-summary">
         <header>
-            <h2><a href="/posts/{{.Slug}}">{{.Title}}</a></h2>
+            <h2><a href="/posts/{{.Slug}}">{{if .Draft}}<span class="draft-badge">[DRAFT]</span> {{end}}{{.Title}}</a></h2>
             {{template "post-meta" .}}
         </header>
         {{if .Summary}}<p class="summary">{{.Summary}}</p>{{end}}
