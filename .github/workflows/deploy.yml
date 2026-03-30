@@ -84,4 +84,5 @@ jobs:
           az containerapp update \
             --name "${{ secrets.AZURE_ENVIRONMENT_NAME }}-app" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --container-name blogflow \
             --image "ghcr.io/${{ github.repository }}:${{ steps.image.outputs.tag }}"
