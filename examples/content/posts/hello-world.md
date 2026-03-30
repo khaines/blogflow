@@ -4,6 +4,7 @@ slug: "hello-world"
 date: 2026-03-23
 tags: ["intro", "blogflow"]
 description: "Welcome to BlogFlow — a compact blog engine powered by Go and Markdown."
+image: "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=1200"
 draft: false
 ---
 
