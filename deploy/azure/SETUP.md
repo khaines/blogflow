@@ -111,14 +111,56 @@ In **Settings → Environments → production → Environment secrets**, add:
 The workflow also runs automatically when the **Publish** workflow completes
 on main (i.e., after a new container image is pushed to GHCR).
 
-## 8. Custom Domain (Optional)
+## 8. Custom Domain + TLS (Optional)
 
 After the first deploy succeeds:
 
-1. Get the Container App FQDN from the Azure Portal (or from the workflow output)
-2. Add a **CNAME** record with your DNS provider:
+### DNS Setup
+
+1. Get the Container App FQDN from the deploy workflow output or Azure Portal
+2. Add a **CNAME** record at your DNS provider:
    ```
-   blogflow.io  CNAME  <container-app-fqdn>
+   www.blogflow.io  CNAME  <container-app-fqdn>
    ```
-3. In the Azure Portal, navigate to the Container App → **Custom domains**
-4. Add the custom domain and enable **Managed certificate** for automatic TLS
+   > **Note:** GoDaddy doesn't support CNAME on apex domains. Use `www` subdomain
+   > + domain forwarding (`blogflow.io` → `https://www.blogflow.io`).
+
+### Bind Domain + Managed TLS Certificate
+
+```bash
+# 1. Add the hostname
+az containerapp hostname add \
+  --name <app-name> \
+  --resource-group <rg-name> \
+  --hostname www.blogflow.io
+
+# 2. Bind with managed certificate (free, auto-renewed)
+az containerapp hostname bind \
+  --name <app-name> \
+  --resource-group <rg-name> \
+  --hostname www.blogflow.io \
+  --environment <env-name> \
+  --validation-method CNAME
+```
+
+### Make it Reproducible via Bicep (optional)
+
+After the managed certificate is provisioned, get its resource ID:
+```bash
+az containerapp env certificate list \
+  --name <env-name> \
+  --resource-group <rg-name> \
+  --query "[?properties.subjectName=='www.blogflow.io'].id" -o tsv
+```
+
+Then add these environment secrets:
+- `CUSTOM_DOMAIN_NAME` = `www.blogflow.io`
+- `CUSTOM_DOMAIN_CERT_ID` = the certificate resource ID
+
+And pass them in the deploy workflow's full Bicep step:
+```
+customDomainName="${{ secrets.CUSTOM_DOMAIN_NAME }}"
+customDomainCertificateId="${{ secrets.CUSTOM_DOMAIN_CERT_ID }}"
+```
+
+This ensures the domain binding survives a full infrastructure redeploy.

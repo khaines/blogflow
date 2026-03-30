@@ -47,6 +47,12 @@ param scaleMinReplicas int = 0
 @maxValue(10)
 param scaleMaxReplicas int = 2
 
+@description('Custom domain hostname (e.g. www.blogflow.io). Empty = no custom domain.')
+param customDomainName string = ''
+
+@description('Managed certificate resource ID for custom domain TLS. Empty = no TLS binding.')
+param customDomainCertificateId string = ''
+
 // ---------------------------------------------------------------------------
 // Parameters — secrets (must come from GitHub Secrets / CLI --parameters)
 // ---------------------------------------------------------------------------
@@ -85,6 +91,8 @@ module containerApp 'modules/container-app.bicep' = {
     appInsightsConnectionString: appInsightsConnectionString
     scaleMinReplicas: scaleMinReplicas
     scaleMaxReplicas: scaleMaxReplicas
+    customDomainName: customDomainName
+    customDomainCertificateId: customDomainCertificateId
   }
 }
 

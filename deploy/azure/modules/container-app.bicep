@@ -37,6 +37,12 @@ param scaleMinReplicas int = 0
 @description('Maximum replica count')
 param scaleMaxReplicas int = 2
 
+@description('Custom domain hostname (e.g. www.blogflow.io). Empty = no custom domain.')
+param customDomainName string = ''
+
+@description('Managed certificate ID for custom domain TLS. Required when customDomainName is set.')
+param customDomainCertificateId string = ''
+
 // ---------------------------------------------------------------------------
 // Container App
 // ---------------------------------------------------------------------------
@@ -49,7 +55,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: environmentId
     configuration: {
-      activeRevisionsMode: 'Single'
+      activeRevisionsMode: 'Multiple'
 
       // --- Ingress: external HTTPS on port 8080 ---
       ingress: {
@@ -57,6 +63,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
+        customDomains: customDomainName != '' ? [
+          {
+            name: customDomainName
+            certificateId: customDomainCertificateId
+            bindingType: customDomainCertificateId != '' ? 'SniEnabled' : 'Disabled'
+          }
+        ] : []
       }
 
       // --- Container registry credentials (GHCR) ---
@@ -167,17 +180,27 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 path: '/healthz'
                 port: 8080
               }
-              initialDelaySeconds: 5
+              initialDelaySeconds: 10
               periodSeconds: 15
             }
             {
               type: 'Readiness'
               httpGet: {
-                path: '/readyz'
+                path: '/readyz?strict=true'
                 port: 8080
               }
-              initialDelaySeconds: 3
-              periodSeconds: 10
+              initialDelaySeconds: 5
+              periodSeconds: 5
+              failureThreshold: 30
+            }
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/readyz?strict=true'
+                port: 8080
+              }
+              periodSeconds: 2
+              failureThreshold: 60
             }
           ]
         }
