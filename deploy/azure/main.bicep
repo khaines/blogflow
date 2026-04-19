@@ -3,9 +3,12 @@
 // ============================================================================
 // Deploys BlogFlow to Azure Container Apps with:
 //   - Serverless Container Apps Environment (Consumption plan)
-//   - Log Analytics workspace for container diagnostics
-//   - Container App with OTel Collector sidecar
-//   - System-assigned managed identity
+//   - Log Analytics workspace for container diagnostics (7-day retention)
+//   - Azure Monitor workspace for Prometheus metrics (Phase 2)
+//   - ACA managed OpenTelemetry agent:
+//       • Traces → Application Insights
+//       • Metrics → NOT exported yet (see Phase 2 in SETUP.md)
+//   - Container App with system-assigned managed identity
 //
 // All account-specific values (subscription, resource group, connection
 // strings, credentials) are passed as parameters — never hardcoded.
@@ -61,15 +64,15 @@ param customDomainCertificateId string = ''
 @secure()
 param ghcrPassword string
 
-@description('Application Insights connection string for OTel telemetry export')
+@description('Application Insights connection string for trace export')
 @secure()
 param appInsightsConnectionString string
 
 // ---------------------------------------------------------------------------
-// Module: Container Apps Environment + Log Analytics
+// Module: Azure Monitor Workspace (Prometheus metrics destination)
 // ---------------------------------------------------------------------------
-module environment 'modules/container-app-env.bicep' = {
-  name: 'container-app-env'
+module monitorWorkspace 'modules/monitor-workspace.bicep' = {
+  name: 'monitor-workspace'
   params: {
     location: location
     environmentName: environmentName
@@ -77,7 +80,19 @@ module environment 'modules/container-app-env.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Module: Container App (BlogFlow + OTel Collector sidecar)
+// Module: Container Apps Environment + Log Analytics + OTel routing
+// ---------------------------------------------------------------------------
+module environment 'modules/container-app-env.bicep' = {
+  name: 'container-app-env'
+  params: {
+    location: location
+    environmentName: environmentName
+    appInsightsConnectionString: appInsightsConnectionString
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module: Container App (BlogFlow — no sidecar)
 // ---------------------------------------------------------------------------
 module containerApp 'modules/container-app.bicep' = {
   name: 'container-app'
@@ -88,7 +103,6 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
-    appInsightsConnectionString: appInsightsConnectionString
     scaleMinReplicas: scaleMinReplicas
     scaleMaxReplicas: scaleMaxReplicas
     customDomainName: customDomainName
@@ -108,3 +122,9 @@ output containerAppName string = containerApp.outputs.name
 
 @description('Log Analytics workspace ID')
 output logAnalyticsWorkspaceId string = environment.outputs.logAnalyticsWorkspaceId
+
+@description('Azure Monitor workspace ID (Prometheus metrics)')
+output monitorWorkspaceId string = monitorWorkspace.outputs.workspaceId
+
+@description('Prometheus query endpoint (for Grafana / PromQL dashboards)')
+output prometheusQueryEndpoint string = monitorWorkspace.outputs.prometheusQueryEndpoint

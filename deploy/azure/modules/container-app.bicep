@@ -1,9 +1,14 @@
 // ============================================================================
-// Container App — BlogFlow with OTel Collector sidecar
+// Container App — BlogFlow (sidecar-free)
 // ============================================================================
-// Runs the BlogFlow container with embedded content (docs site baked into the
-// image). An OTel Collector sidecar receives traces and metrics from BlogFlow
-// via OTLP HTTP, scrapes Prometheus metrics, and exports to Azure Monitor.
+// Runs the BlogFlow container. Telemetry is handled by the ACA managed
+// OpenTelemetry agent (configured on the environment):
+//   - Traces → Application Insights
+//   - Metrics → not exported via OTel (app still exposes /metrics on :8080)
+//
+// The ACA managed OTel agent automatically injects OTEL_EXPORTER_OTLP_ENDPOINT
+// and other standard OTel env vars at runtime. BlogFlow's OTel SDK discovers
+// the agent automatically.
 //
 // Identity: System-assigned managed identity for Azure integration.
 // ============================================================================
@@ -27,10 +32,6 @@ param ghcrUsername string
 @secure()
 param ghcrPassword string
 
-@description('App Insights connection string for OTel Collector export')
-@secure()
-param appInsightsConnectionString string
-
 @description('Minimum replica count')
 param scaleMinReplicas int = 0
 
@@ -46,7 +47,7 @@ param customDomainCertificateId string = ''
 // ---------------------------------------------------------------------------
 // Container App
 // ---------------------------------------------------------------------------
-resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource containerApp 'Microsoft.App/containerApps@2024-10-02-preview' = {
   name: appName
   location: location
   identity: {
@@ -87,10 +88,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'ghcr-password'
           value: ghcrPassword
         }
-        {
-          name: 'appinsights-cs'
-          value: appInsightsConnectionString
-        }
       ]
     }
     template: {
@@ -120,25 +117,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '0.5Gi'
           }
           env: [
+            // OTel env vars (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME, etc.)
+            // are auto-injected by the ACA managed OTel agent. We only set the
+            // exporter types so BlogFlow's OTel SDK knows to initialize.
             {
               name: 'OTEL_TRACES_EXPORTER'
               value: 'otlp'
             }
             {
+              // Metrics are NOT exported via OTel agent (Phase 2).
+              // Setting 'none' prevents the SDK from pushing metrics to the
+              // managed agent. BlogFlow still exposes /metrics on :8080 for
+              // future Prometheus scraping.
               name: 'OTEL_METRICS_EXPORTER'
-              value: 'otlp'
-            }
-            {
-              name: 'OTEL_SERVICE_NAME'
-              value: 'blogflow'
-            }
-            {
-              name: 'OTEL_EXPORTER_OTLP_ENDPOINT'
-              value: 'http://localhost:4318'
-            }
-            {
-              name: 'BLOGFLOW_METRICS_PORT'
-              value: '9090'
+              value: 'none'
             }
             {
               name: 'BLOGFLOW_SYNC_STRATEGY'
@@ -204,29 +196,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ]
         }
-        // --- OTel Collector sidecar ---
-        {
-          name: 'otel-collector'
-          image: 'ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.121.0'
-          args: [
-            '--config'
-            'env:OTEL_COLLECTOR_CONFIG'
-          ]
-          resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
-          }
-          env: [
-            {
-              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-              secretRef: 'appinsights-cs'
-            }
-            {
-              name: 'OTEL_COLLECTOR_CONFIG'
-              value: loadTextContent('../otel/collector-config.yaml')
-            }
-          ]
-        }
+        // OTel Collector sidecar REMOVED — the ACA managed OTel agent
+        // handles trace/metrics routing at the environment level.
       ]
 
       // --- Scaling ---
