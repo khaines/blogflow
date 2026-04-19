@@ -43,3 +43,7 @@ coverage.html
 
 # Content (user-provided, not committed to engine repo)
 /data/
+
+# Compiled ARM templates (generated from Bicep)
+deploy/azure/**/*.json
+!deploy/azure/parameters/*.json

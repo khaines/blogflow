@@ -3,7 +3,7 @@
 // ============================================================================
 // Deploys BlogFlow to Azure Container Apps with:
 //   - Serverless Container Apps Environment (Consumption plan)
-//   - Log Analytics workspace for container diagnostics (7-day retention)
+//   - Log Analytics workspace for container diagnostics
 //   - Azure Monitor workspace for Prometheus metrics (Phase 2)
 //   - ACA managed OpenTelemetry agent:
 //       • Traces → Application Insights
@@ -68,6 +68,11 @@ param ghcrPassword string
 @secure()
 param appInsightsConnectionString string
 
+@description('Log Analytics workspace retention in days (7–730). Lower values reduce storage costs.')
+@minValue(7)
+@maxValue(730)
+param logRetentionDays int = 30
+
 // ---------------------------------------------------------------------------
 // Module: Azure Monitor Workspace (Prometheus metrics destination)
 // ---------------------------------------------------------------------------
@@ -88,6 +93,7 @@ module environment 'modules/container-app-env.bicep' = {
     location: location
     environmentName: environmentName
     appInsightsConnectionString: appInsightsConnectionString
+    logRetentionDays: logRetentionDays
   }
 }
 

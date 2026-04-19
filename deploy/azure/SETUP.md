@@ -117,7 +117,7 @@ In **Settings → Environments → production → Environment secrets**, add:
 4. Click **Run workflow**
 
 The deployment creates:
-- **Log Analytics workspace** — container diagnostics (7-day retention)
+- **Log Analytics workspace** — container diagnostics (default 30-day retention)
 - **Azure Monitor workspace** — Prometheus metrics destination (provisioned for Phase 2)
 - **Container Apps Environment** — with managed OTel agent routing:
   - Traces → Application Insights
@@ -174,6 +174,10 @@ misconfiguration, or Azure outage), follow these steps to revert:
    `BLOGFLOW_METRICS_PORT=9090` env vars
 3. Restore `otel/collector-config.yaml` to its active (uncommented) state
 4. Redeploy with `full_deploy=true`
+
+> **⚠️ Warning:** Rolling back re-enables metrics export to App Insights →
+> Log Analytics, which will resume the PerGB2018 ingestion costs this change
+> was designed to eliminate. Use as a temporary measure only.
 
 > **Note**: The original sidecar config is preserved (commented out) in
 > `otel/collector-config.yaml` for reference.
@@ -244,7 +248,7 @@ BlogFlow app ──── /metrics (port 8080) ──── available for future
 
 Azure Monitor workspace ──── provisioned, awaiting Phase 2 DCE/DCR setup
 
-Container Apps runtime ──console logs──▶ Log Analytics workspace (7-day retention)
+Container Apps runtime ──console logs──▶ Log Analytics workspace (default 30-day retention)
 ```
 
 **Key design decisions:**
