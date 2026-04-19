@@ -2,6 +2,14 @@
 
 ## main / unreleased
 
+### Deploy
+
+* [BUGFIX] Deploy: Stop app metrics going to Log Analytics via App Insights — removes OTel Collector sidecar, uses ACA managed OTel agent for traces only. #184
+* [ENHANCEMENT] Deploy: Provision Azure Monitor workspace for future Prometheus metrics (Phase 2). #184
+* [ENHANCEMENT] Deploy: Parameterize Log Analytics retention (`logRetentionDays`, default 30). #184
+* [ENHANCEMENT] Deploy: Add custom domain and TLS certificate parameters to deploy workflow. #184
+* [ENHANCEMENT] Deploy: Complete SETUP.md rewrite with Phase 1/2 architecture, rollback procedure, and verification steps. #184
+
 ## 0.3.0 / 2026-03-27
 
 ### BlogFlow
