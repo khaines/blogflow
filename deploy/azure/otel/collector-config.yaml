@@ -9,7 +9,7 @@
 #
 # REPLACED BY: ACA managed OpenTelemetry agent (configured in container-app-env.bicep)
 #   - Traces → Application Insights (correct)
-#   - Metrics → Azure Monitor for Prometheus via OTLP (correct)
+#   - Metrics → NOT exported (Phase 2 will route to Azure Monitor for Prometheus via DCE/DCR)
 #
 # The OTel Collector sidecar has been removed from container-app.bicep.
 # This file is kept for reference only.

@@ -47,7 +47,7 @@ param customDomainCertificateId string = ''
 // ---------------------------------------------------------------------------
 // Container App
 // ---------------------------------------------------------------------------
-resource containerApp 'Microsoft.App/containerApps@2024-10-02-preview' = {
+resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
   identity: {
@@ -117,20 +117,16 @@ resource containerApp 'Microsoft.App/containerApps@2024-10-02-preview' = {
             memory: '0.5Gi'
           }
           env: [
-            // OTel env vars (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME, etc.)
-            // are auto-injected by the ACA managed OTel agent. We only set the
-            // exporter types so BlogFlow's OTel SDK knows to initialize.
+            // The ACA managed OTel agent auto-injects OTEL_EXPORTER_OTLP_ENDPOINT.
+            // BlogFlow hardcodes OTEL_SERVICE_NAME='blogflow' in code (cmd/blogflow/main.go).
+            // We only set the trace exporter type so BlogFlow's OTel SDK initializes tracing.
+            // OTEL_METRICS_EXPORTER is intentionally UNSET (not "none") because BlogFlow's
+            // init code checks `os.Getenv != ""` — any non-empty value enables the metrics
+            // bridge. Leaving it unset skips metrics initialization entirely. See Phase 2
+            // in SETUP.md for future metrics export.
             {
               name: 'OTEL_TRACES_EXPORTER'
               value: 'otlp'
-            }
-            {
-              // Metrics are NOT exported via OTel agent (Phase 2).
-              // Setting 'none' prevents the SDK from pushing metrics to the
-              // managed agent. BlogFlow still exposes /metrics on :8080 for
-              // future Prometheus scraping.
-              name: 'OTEL_METRICS_EXPORTER'
-              value: 'none'
             }
             {
               name: 'BLOGFLOW_SYNC_STRATEGY'

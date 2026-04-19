@@ -6,6 +6,7 @@
 //   - Managed OpenTelemetry agent that routes:
 //       • Traces → Application Insights
 //       • Metrics → NOT exported (Phase 2: DCE/DCR → Azure Monitor workspace)
+//       • Logs → NOT exported via OTel (container logs go directly to LA)
 //
 // Uses 2024-10-02-preview API for openTelemetryConfiguration support.
 //
@@ -26,6 +27,11 @@ param environmentName string
 @secure()
 param appInsightsConnectionString string
 
+@description('Log Analytics workspace retention in days (7–730). Lower values reduce storage costs.')
+@minValue(7)
+@maxValue(730)
+param logRetentionDays int = 30
+
 // ---------------------------------------------------------------------------
 // Log Analytics Workspace
 // ---------------------------------------------------------------------------
@@ -36,7 +42,7 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
     sku: {
       name: 'PerGB2018'
     }
-    retentionInDays: 7
+    retentionInDays: logRetentionDays
   }
 }
 
@@ -71,6 +77,9 @@ resource environment 'Microsoft.App/managedEnvironments@2024-10-02-preview' = {
         destinations: ['appInsights']
       }
       metricsConfiguration: {
+        destinations: []
+      }
+      logsConfiguration: {
         destinations: []
       }
     }
