@@ -83,10 +83,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
 
       // --- Secrets ---
+      // NOTE: 'appinsights-cs' is retained as a placeholder during the transition
+      // from sidecar to managed OTel agent. Active revisions still reference it.
+      // Remove after all old revisions using it have been deactivated.
       secrets: [
         {
           name: 'ghcr-password'
           value: ghcrPassword
+        }
+        {
+          name: 'appinsights-cs'
+          value: 'deprecated-see-env-level-config'
         }
       ]
     }
