@@ -21,7 +21,6 @@ func spanFromRecorder(t *testing.T, r *http.Request, fn func(*http.Request)) tra
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	ctx, span := tp.Tracer("test").Start(r.Context(), "test-span")
-	defer span.End()
 
 	fn(r.WithContext(ctx))
 
@@ -34,48 +33,60 @@ func spanFromRecorder(t *testing.T, r *http.Request, fn func(*http.Request)) tra
 }
 
 func TestRecordContentView_PostCounter(t *testing.T) {
-	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues("post", "hello"))
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePost, "hello"))
 
 	req := httptest.NewRequest(http.MethodGet, "/posts/hello", nil)
-	RecordContentView(req, "post", "hello", "Hello World", []string{"go", "blog"})
+	RecordContentView(req, ContentTypePost, "hello", "Hello World", []string{"go", "blog"})
 
-	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues("post", "hello"))
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePost, "hello"))
 	if after-before != 1 {
 		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
 	}
 }
 
 func TestRecordContentView_PageCounter(t *testing.T) {
-	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues("page", "about"))
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePage, "about"))
 
 	req := httptest.NewRequest(http.MethodGet, "/pages/about", nil)
-	RecordContentView(req, "page", "about", "About Me", nil)
+	RecordContentView(req, ContentTypePage, "about", "About Me", nil)
 
-	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues("page", "about"))
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePage, "about"))
 	if after-before != 1 {
 		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
 	}
 }
 
 func TestRecordContentView_TagCounter(t *testing.T) {
-	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues("tag", "golang"))
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeTag, "golang"))
 
 	req := httptest.NewRequest(http.MethodGet, "/tags/golang", nil)
-	RecordContentView(req, "tag", "golang", "", nil)
+	RecordContentView(req, ContentTypeTag, "golang", "", nil)
 
-	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues("tag", "golang"))
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeTag, "golang"))
 	if after-before != 1 {
 		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
 	}
 }
 
 func TestRecordContentView_ListCounter(t *testing.T) {
-	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues("list", ""))
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeList, ""))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	RecordContentView(req, "list", "", "Posts", nil)
+	RecordContentView(req, ContentTypeList, "", "Posts", nil)
 
-	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues("list", ""))
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeList, ""))
+	if after-before != 1 {
+		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
+	}
+}
+
+func TestRecordContentView_PostsListCounter(t *testing.T) {
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePostsList, ""))
+
+	req := httptest.NewRequest(http.MethodGet, "/posts", nil)
+	RecordContentView(req, ContentTypePostsList, "", "Posts", nil)
+
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePostsList, ""))
 	if after-before != 1 {
 		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
 	}
@@ -84,14 +95,14 @@ func TestRecordContentView_ListCounter(t *testing.T) {
 func TestRecordContentView_MultipleIncrements(t *testing.T) {
 	// Use a unique slug to avoid interference from other tests.
 	slug := "multi-test-post"
-	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues("post", slug))
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePost, slug))
 
 	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/posts/"+slug, nil)
-		RecordContentView(req, "post", slug, "Multi Test", nil)
+		RecordContentView(req, ContentTypePost, slug, "Multi Test", nil)
 	}
 
-	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues("post", slug))
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypePost, slug))
 	if after-before != 5 {
 		t.Errorf("expected counter to increment by 5, got delta %f", after-before)
 	}
@@ -100,10 +111,10 @@ func TestRecordContentView_MultipleIncrements(t *testing.T) {
 func TestRecordContentView_SpanAttributes_Post(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/posts/hello", nil)
 	stub := spanFromRecorder(t, req, func(r *http.Request) {
-		RecordContentView(r, "post", "hello-span", "Hello Span", []string{"go", "testing"})
+		RecordContentView(r, ContentTypePost, "hello-span", "Hello Span", []string{"go", "testing"})
 	})
 
-	assertAttr(t, stub.Attributes, "content.type", "post")
+	assertAttr(t, stub.Attributes, "content.type", ContentTypePost)
 	assertAttr(t, stub.Attributes, "content.slug", "hello-span")
 	assertAttr(t, stub.Attributes, "content.title", "Hello Span")
 	assertSliceAttr(t, stub.Attributes, "content.tags", []string{"go", "testing"})
@@ -112,10 +123,10 @@ func TestRecordContentView_SpanAttributes_Post(t *testing.T) {
 func TestRecordContentView_SpanAttributes_NoTags(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/pages/about", nil)
 	stub := spanFromRecorder(t, req, func(r *http.Request) {
-		RecordContentView(r, "page", "about-span", "About Span", nil)
+		RecordContentView(r, ContentTypePage, "about-span", "About Span", nil)
 	})
 
-	assertAttr(t, stub.Attributes, "content.type", "page")
+	assertAttr(t, stub.Attributes, "content.type", ContentTypePage)
 	assertAttr(t, stub.Attributes, "content.slug", "about-span")
 	assertAttr(t, stub.Attributes, "content.title", "About Span")
 	assertNoAttr(t, stub.Attributes, "content.tags")
@@ -124,13 +135,21 @@ func TestRecordContentView_SpanAttributes_NoTags(t *testing.T) {
 func TestRecordContentView_SpanAttributes_EmptySlug(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	stub := spanFromRecorder(t, req, func(r *http.Request) {
-		RecordContentView(r, "list", "", "Posts", nil)
+		RecordContentView(r, ContentTypeList, "", "Posts", nil)
 	})
 
-	assertAttr(t, stub.Attributes, "content.type", "list")
+	assertAttr(t, stub.Attributes, "content.type", ContentTypeList)
 	assertAttr(t, stub.Attributes, "content.slug", "")
 	assertAttr(t, stub.Attributes, "content.title", "Posts")
 	assertNoAttr(t, stub.Attributes, "content.tags")
+}
+
+func TestRecordContentView_NoopSpan(t *testing.T) {
+	// When OTel is not configured, SpanFromContext returns a no-op span.
+	// RecordContentView must not panic in this case.
+	req := httptest.NewRequest(http.MethodGet, "/posts/safe", nil)
+	RecordContentView(req, ContentTypePost, "safe", "Safe Post", []string{"test"})
+	// No panic = pass. Counter still increments.
 }
 
 // assertAttr checks that the attribute list contains the given key with the

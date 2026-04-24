@@ -127,7 +127,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		RecordContentView(r, "home", slug, page.Title, page.Tags)
+		RecordContentView(r, ContentTypeHome, slug, page.Title, page.Tags)
 
 		data := &PageData{
 			Site:  cfg.Site,
@@ -193,7 +193,7 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 		paged, pag := paginate(idx.Posts, page, perPage)
 		setPageURLs(pag, postsPageURL)
 
-		RecordContentView(r, "list", "", "Posts", nil)
+		RecordContentView(r, ContentTypePostsList, "", "Posts", nil)
 
 		data := &PageData{
 			Site:       cfg.Site,
@@ -207,7 +207,6 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 	}
 }
 
-// ListHandler returns a handler for the home page (paginated post list).
 // Route: GET /{$} and GET /page/{page}
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +235,7 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 		paged, pag := paginate(idx.Posts, page, perPage)
 		setPageURLs(pag, listPageURL)
 
-		RecordContentView(r, "list", "", "Posts", nil)
+		RecordContentView(r, ContentTypeList, "", "Posts", nil)
 
 		data := &PageData{
 			Site:       cfg.Site,
@@ -263,7 +262,7 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		RecordContentView(r, "post", slug, post.Title, post.Tags)
+		RecordContentView(r, ContentTypePost, slug, post.Title, post.Tags)
 
 		cfg := deps.LoadConfig()
 		data := &PageData{
@@ -290,7 +289,7 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		RecordContentView(r, "page", slug, page.Title, page.Tags)
+		RecordContentView(r, ContentTypePage, slug, page.Title, page.Tags)
 
 		cfg := deps.LoadConfig()
 		data := &PageData{
@@ -317,7 +316,7 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		RecordContentView(r, "tag", tag, "", nil)
+		RecordContentView(r, ContentTypeTag, tag, "", nil)
 
 		cfg := deps.LoadConfig()
 		page := queryInt(r, "page", 1)
