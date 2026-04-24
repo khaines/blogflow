@@ -2,6 +2,15 @@
 
 ## main / unreleased
 
+### BlogFlow
+
+* [FEATURE] Handlers: Content analytics — `blogflow_content_views_total{type, slug}` Prometheus counter for content popularity tracking. #186
+* [FEATURE] Handlers: OTel span attributes (`content.type`, `content.slug`, `content.title`, `content.tags`) on all content-serving requests. #186
+
+### Documentation
+
+* [ENHANCEMENT] Docs: Content analytics section in deployment guide with PromQL examples and span attribute reference. #186
+
 ### Deploy
 
 * [BUGFIX] Deploy: Stop app metrics going to Log Analytics via App Insights — removes OTel Collector sidecar, uses ACA managed OTel agent for traces only. #184
