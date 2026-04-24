@@ -207,6 +207,7 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 	}
 }
 
+// ListHandler returns a handler for the home page (paginated post list).
 // Route: GET /{$} and GET /page/{page}
 func ListHandler(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
