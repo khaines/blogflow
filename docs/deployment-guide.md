@@ -971,6 +971,7 @@ Prometheus metrics are always available. No extra configuration is needed.
 |---------|---------|
 | Endpoint | `/metrics` on the main port, or on a dedicated `metrics_port` |
 | RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
+| Content analytics | Views per content item: `blogflow_content_views_total{type, slug}` |
 | Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
 | Go runtime | Goroutines, memory, GC pause duration, open file descriptors |
 | Grafana dashboard | [Pre-built JSON](../examples/grafana/) — import and go |
@@ -982,6 +983,24 @@ server:
   port: 8080
   metrics_port: 9090   # /metrics served here only
 ```
+
+#### Content analytics
+
+`blogflow_content_views_total` is a Prometheus counter incremented on every
+successful content serve. Use it to answer "which posts are popular?":
+
+```promql
+# Top 10 posts in the last 7 days
+topk(10, increase(blogflow_content_views_total{type="post"}[7d]))
+
+# Total views by content type
+sum by (type) (increase(blogflow_content_views_total[24h]))
+```
+
+| Label | Values | Description |
+|-------|--------|-------------|
+| `type` | `post`, `page`, `tag`, `list`, `posts_list`, `home` | Content type served |
+| `slug` | e.g. `hello-world`, `about` | Content identifier (empty for list/posts\_list; page slug for home) |
 
 ### OpenTelemetry (opt-in)
 
@@ -1003,6 +1022,7 @@ OTEL_SERVICE_NAME=blogflow        # default: "blogflow"
 **What gets traced:**
 
 - HTTP requests (method, path, status, duration)
+- Content views — span attributes: `content.type`, `content.slug`, `content.title`, `content.tags`
 - Content scans (directory walk, front-matter parsing)
 - Git operations (clone, pull, diff)
 - Template rendering (template name, render duration)
