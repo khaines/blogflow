@@ -92,6 +92,18 @@ func TestRecordContentView_PostsListCounter(t *testing.T) {
 	}
 }
 
+func TestRecordContentView_HomeCounter(t *testing.T) {
+	before := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeHome, "welcome"))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	RecordContentView(req, ContentTypeHome, "welcome", "Welcome", nil)
+
+	after := testutil.ToFloat64(contentViewsTotal.WithLabelValues(ContentTypeHome, "welcome"))
+	if after-before != 1 {
+		t.Errorf("expected counter to increment by 1, got delta %f", after-before)
+	}
+}
+
 func TestRecordContentView_MultipleIncrements(t *testing.T) {
 	// Use a unique slug to avoid interference from other tests.
 	slug := "multi-test-post"

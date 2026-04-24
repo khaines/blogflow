@@ -36,7 +36,8 @@ func init() {
 // found and matched to the request — not that the response was delivered.
 //
 // contentType is one of the ContentType* constants.
-// slug is the content identifier (empty for list and home views).
+// slug is the content identifier (empty for list and posts_list views;
+// the page slug for home-as-page views).
 // title is the human-readable content title (empty for tags and lists).
 // tags is the content item's tag list; pass nil for content types where
 // tagging is not meaningful (tag views, list views).
