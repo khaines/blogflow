@@ -1000,7 +1000,7 @@ sum by (type) (increase(blogflow_content_views_total[24h]))
 | Label | Values | Description |
 |-------|--------|-------------|
 | `type` | `post`, `page`, `tag`, `list`, `posts_list`, `home` | Content type served |
-| `slug` | e.g. `hello-world`, `about` | Content identifier (empty for list/posts\_list/home) |
+| `slug` | e.g. `hello-world`, `about` | Content identifier (empty for list/posts\_list; page slug for home) |
 
 ### OpenTelemetry (opt-in)
 
