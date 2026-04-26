@@ -15,13 +15,13 @@ updates:
     groups:
       opentelemetry:
         patterns:
-          - "go.opentelemetry.io/*"
+          - "go.opentelemetry.io/**"
       golang-x:
         patterns:
-          - "golang.org/x/*"
+          - "golang.org/x/**"
       google:
         patterns:
-          - "google.golang.org/*"
+          - "google.golang.org/**"
 
   - package-ecosystem: "github-actions"
     directory: "/"
