@@ -6,10 +6,22 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    reviewers:
+      - "khaines"
     labels:
       - "dependencies"
     commit-message:
-      prefix: "fix(deps)"
+      prefix: "chore(deps)"
+    groups:
+      opentelemetry:
+        patterns:
+          - "go.opentelemetry.io/*"
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+      google:
+        patterns:
+          - "google.golang.org/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -17,6 +29,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    reviewers:
+      - "khaines"
     labels:
       - "dependencies"
       - "ci"
@@ -29,8 +43,10 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    reviewers:
+      - "khaines"
     labels:
       - "dependencies"
       - "docker"
     commit-message:
-      prefix: "fix(deps)"
+      prefix: "build(deps)"
