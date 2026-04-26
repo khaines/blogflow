@@ -2,6 +2,8 @@
 
 ## main / unreleased
 
+## 0.4.0 / 2026-04-26
+
 ### BlogFlow
 
 * [FEATURE] Handlers: Content analytics — `blogflow_content_views_total{type, slug}` Prometheus counter for content popularity tracking. #186
@@ -18,6 +20,19 @@
 * [ENHANCEMENT] Deploy: Parameterize Log Analytics retention (`logRetentionDays`, default 30). #184
 * [ENHANCEMENT] Deploy: Add custom domain and TLS certificate parameters to deploy workflow. #184
 * [ENHANCEMENT] Deploy: Complete SETUP.md rewrite with Phase 1/2 architecture, rollback procedure, and verification steps. #184
+
+### Dependencies
+
+* [CHANGE] Deps: Bump github.com/yuin/goldmark from 1.7.17 to 1.8.2. #196
+* [CHANGE] Deps: Bump the golang-x group with 2 updates. #195
+* [CHANGE] Deps: Bump azure/setup-helm from 4 to 5. #194
+* [CHANGE] Deps: Bump docker/setup-buildx-action from 3 to 4. #193
+* [CHANGE] Deps: Bump docker/login-action from 3 to 4. #192
+* [CHANGE] Deps: Bump docker/build-push-action from 6 to 7. #191
+* [CHANGE] Deps: Bump actions/checkout from 4 to 6. #190
+* [CHANGE] Deps: Bump distroless/static-debian12 base image digest. #189
+* [BUGFIX] Deps: Resolve 6 open code scanning alerts and enable Dependabot. #188
+* [BUGFIX] Deps: Bump grpc to v1.79.3 and circl to v1.6.3 (security). #160
 
 ## 0.3.0 / 2026-03-27
 
