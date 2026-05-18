@@ -253,6 +253,7 @@ func main() {
 
 	// 11. Start sync strategy (non-fatal: a blog with embedded defaults has nothing to watch)
 	syncCtx, syncCancel := context.WithCancel(context.Background())
+	defer syncCancel()
 	if err := syncStrategy.Start(syncCtx); err != nil {
 		logger.Warn("sync strategy disabled — content will not auto-reload",
 			"strategy", syncStrategy.Name(), "reason", err)
