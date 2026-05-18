@@ -2,9 +2,23 @@
 
 ## main / unreleased
 
+## 0.4.1 / 2026-05-18
+
 ### BlogFlow
 
-* [BUGFIX] cmd/blogflow: `defer` the sync-strategy context cancel function so the context is always released on early-exit paths (silences gosec G118).
+* [BUGFIX] cmd/blogflow: `defer` the sync-strategy context cancel function so the context is always released on early-exit paths (silences gosec G118). #207
+
+### Dependencies
+
+* [BUGFIX] Deps: Upgrade `go-git/v5` to v5.19.0 and `go-billy/v5` to v5.9.0 — addresses CVE-2026-44973 (go-billy path traversal), CVE-2026-45022 (go-git object parsing), and CVE-2026-44740 (go-billy symlink loops). #206
+* [CHANGE] Deps: Bump `github.com/go-git/go-git/v5` from 5.18.0 to 5.19.0. #205
+* [CHANGE] Deps: Bump the golang-x group with 2 updates. #204
+* [CHANGE] Deps: Bump `github.com/fsnotify/fsnotify` from 1.9.0 to 1.10.1. #203
+* [CHANGE] Deps: Bump `github.com/alecthomas/chroma/v2` from 2.23.1 to 2.24.1. #202
+* [CHANGE] Deps: Bump `actions/setup-go` from 5 to 6. #201
+* [CHANGE] Deps: Bump `azure/login` from 2 to 3. #200
+* [CHANGE] Deps: Bump `docker/metadata-action` from 5 to 6. #199
+* [CHANGE] Deps: Bump `aquasecurity/trivy-action` from 0.35.0 to 0.36.0. #198
 
 ## 0.4.0 / 2026-04-26
 
