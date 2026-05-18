@@ -2,9 +2,9 @@
 
 ## main / unreleased
 
-### Dependencies
+### BlogFlow
 
-* [BUGFIX] Deps: Upgrade `go-git/v5` to v5.19.0 and `go-billy/v5` to v5.9.0 to address CVE-2026-44973 (go-billy path traversal), CVE-2026-45022 (go-git object parsing), and CVE-2026-44740 (go-billy symlink loops).
+* [BUGFIX] cmd/blogflow: `defer` the sync-strategy context cancel function so the context is always released on early-exit paths (silences gosec G118).
 
 ## 0.4.0 / 2026-04-26
 
