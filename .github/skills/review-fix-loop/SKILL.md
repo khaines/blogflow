@@ -82,6 +82,46 @@ Before the first review round, verify that the PR's changes are scoped correctly
 
 **Important**: Scope verification is about traceability and preventing scope creep. It is NOT about blocking legitimate changes that are tightly coupled to the issue (e.g., updating a test file alongside the implementation, or fixing a typo noticed while working). Use judgment — the goal is to catch "this PR also refactors the theme engine" situations, not "this PR also added a missing import."
 
+### 1.5 Capture Run Identity (MANDATORY)
+
+Before entering the review loop, capture and persist a Run Identity tuple. These values are consumed by later phases — never re-derive from outside.
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+PR_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PR_URL=$(gh pr view --json url --jq '.url')
+INITIAL_HEAD_SHA=$(git rev-parse HEAD)
+LOOP_START_UTC=$(date -u +%FT%T%Z)
+```
+
+- `PR_NUMBER` — resolves against current branch (never accepts externally passed PR number)
+- `INITIAL_HEAD_SHA` — HEAD at loop start; used for halt marker queries and deviation handling
+- `LOOP_START_UTC` — loop-start timestamp in ISO-8601 UTC; uses in gate checks as epoch
+
+### 1.6 Halt-Marker Check (MANDATORY)
+
+Before entering the review loop, query the PR for any open halt markers from a prior RFL invocation:
+
+```bash
+gh pr view {PR_NUMBER} --json comments \
+  --jq '.comments[] \
+    | select(.body | contains("<!-- blogflow-rfl-halt pr={PR_NUMBER} ")) \
+    | {url: .url, createdAt: .createdAt, body_preview: (.body[0:300])}'
+```
+
+For each halt marker returned, check whether a matching closure comment exists:
+
+```bash
+gh pr view {PR_NUMBER} --json comments \
+  --jq '.comments[] \
+    | select(.body | contains("<!-- blogflow-rfl-halt-resolved pr={PR_NUMBER} " \
+        + "halt_head=<halt_head_from_marker> "))'
+```
+
+If **any** halt marker has no matching closure comment, **STOP** — do NOT proceed past Phase 1. Surface a hard error listing each unresolved halt marker (URL, halt_head, reason). The human must either (a) reply with explicit acknowledgment and direct the next RFL to post the closure comment, or (b) re-run the failing CI checks and confirm green. Only after every open halt marker has a closure comment may the orchestrator enter Phase 2.
+
+This prevents re-entry into RFL when prior CI failures remain unresolved.
+
 ---
 
 ## Phase 2: Review (Invoke review-pr)
@@ -137,20 +177,115 @@ For every finding, apply the dismissal rules in priority order to classify it as
 
 ### 3.3 Check Termination Conditions
 
+**The ONLY acceptable successful termination is a full 5/5 rating from every council slot with zero actionable findings.** There is no "good enough" carve-out. Sub-5 ratings from any slot block merge regardless of finding count or deferral legitimacy.
+
 **Stop the loop** if ANY of these are true:
 
-1. **Target rating achieved** — the current rating meets or exceeds `target_rating` AND there are no remaining Critical or High actionable findings. Proceed to Phase 6.
-2. **Max rounds reached** — `current_round >= max_rounds`. Proceed to Phase 6 with a note that the limit was hit.
-3. **No progress** — the count of actionable findings has not decreased from the previous round AND no findings were fixed. This prevents infinite loops on unfixable issues. Proceed to Phase 6.
+1. **Target rating achieved** — **every** council slot returns a `5/5` rating AND there are zero actionable findings at any severity (Critical, High, Medium, Low). INFO-level findings do not block termination. Proceed to §3.4.
+2. **Max rounds reached** — `current_round >= max_rounds`. Proceed to §3.4. A max-rounds termination with any actionable findings remaining is a **failed RFL** — the PR is NOT merge-ready.
+3. **No progress** — the count of actionable findings has not decreased from the previous round AND no findings were fixed. Proceed to §3.4. Treated as a failed RFL.
 
-**Below-target with no actionable findings — DO NOT terminate.**
+**Sub-5/5 with no actionable findings — DO NOT terminate.**
 
-If the rating is below `target_rating` but the round produced zero actionable findings (all findings were dismissed or deferred), apply the following escalation before terminating:
+If any reviewer returned a rating below 5 — even with zero actionable findings — the loop MUST continue. Treat the gap as actionable:
 
-1. **Re-examine all dismissed High+ findings from this round and previous rounds.** For each one, ask: "Is the dismissal rationale genuinely solid, or was this dismissed to avoid work?" Challenge dismissals that cite convenience rather than impossibility.
-2. **Re-examine all deferred findings.** Verify each deferral meets the strict Deferral Policy in `dismissal-rules.md`. If any deferral doesn't meet all three criteria, reclassify it as actionable and continue fixing.
-3. **If re-examination yields new actionable findings**, continue the loop (do not terminate).
-4. **If re-examination confirms all dismissals/deferrals are legitimate**, terminate with a detailed rationale explaining why 5/5 was not achievable in this PR. This rationale must be included in the progression report and PR review comment.
+1. **Re-prompt the dissenting reviewer** with a single question: "What specific, concrete change to this PR would raise your rating from {N}/5 to 5/5? Reply with actionable line-level findings, or explicitly state 'no change needed; rating revised to 5/5'."
+2. **If the reviewer produces actionable findings**, add them to the current round's finding set (round counter does NOT advance), then proceed to §3.4.
+3. **If the reviewer revises to 5/5**, capture that as the official R{n}-revised rating and re-check termination conditions.
+4. **If the reviewer cannot articulate a concrete fix and refuses to revise to 5/5**, that is a protocol failure — do NOT terminate. Surface the impasse to the human reviewer. Proceed to §3.4 before surfacing.**
+
+If none of the termination conditions are met, proceed to §3.4.
+
+### 3.4 Deferral Filing Checkpoint (MANDATORY)
+
+Every finding classified as **Deferred** in §3.2 MUST have a GitHub issue filed and recorded in the `deferrals` table **before** proceeding to Phase 4, advancing to Phase 6, or posting any convergence report. A deferral without an issue number is not valid — it remains Actionable.
+
+#### 3.4.1 Deferrals Table (session SQL)
+
+On first use, create the table:
+
+```sql
+CREATE TABLE IF NOT EXISTS deferrals (
+  pr              INTEGER NOT NULL,
+  round           INTEGER NOT NULL,
+  finding_id      TEXT    NOT NULL,
+  severity        TEXT    NOT NULL,
+  summary         TEXT    NOT NULL,
+  deferral_reason TEXT    NOT NULL,
+  source          TEXT    NOT NULL DEFAULT 'session-filed',
+  issue_number    INTEGER,
+  filed_at        TIMESTAMP,
+  PRIMARY KEY (pr, finding_id)
+);
+```
+
+`source` provenance: `'session-filed'` for in-loop classification; `'reconciled-from-github'` for rows rebuilt from GitHub on fresh sessions. `issue_number`, `filed_at`, and `source` MUST be append-only.
+
+When a finding is classified as Deferred:
+
+```sql
+INSERT INTO deferrals (pr, round, finding_id, severity, summary, deferral_reason, source)
+VALUES (?, ?, ?, ?, ?, ?, 'session-filed')
+ON CONFLICT (pr, finding_id) DO UPDATE SET
+  round = excluded.round, severity = excluded.severity,
+  summary = excluded.summary, deferral_reason = excluded.deferral_reason;
+```
+
+#### 3.4.2 Filing the Issue
+
+For every row where `issue_number IS NULL`, create a GitHub issue via `gh issue create` with:
+
+1. **Run-identity marker** (first line):
+   ```html
+   <!-- blogflow-deferral pr={PR_NUMBER} finding_id={finding_id} severity={severity} -->
+   ```
+   (severity LOWERCASE in marker)
+
+2. **Backlink to PR**: "Deferred from PR #{PR_NUMBER} — finding {finding.id}"
+
+3. **Quoted finding** (per rating-rubric Finding Body Format Contract):
+   ```
+   **Finding ({Severity}, {ReviewerSlot} {Round}):** {finding text}
+   ```
+
+4. **Deferral rationale**: why it cannot be fixed in this PR, and risk assessment.
+
+5. **Protected-domain assessment** (on its own line):
+   ```
+   Protected-domain assessment: none
+   ```
+   (`security`, `content-integrity`, `data-integrity`, `cryptography` are NOT allowed — hard error)
+
+6. **Concrete acceptance criteria** so the issue is actionable later.
+
+Required labels: `type:tech-debt`, at least one of `service:*` OR `tech-debt`, and `priority:*`. After creation, verify labels via `gh issue view $N --json labels`. Missing labels → apply and re-verify.
+
+```sql
+UPDATE deferrals SET issue_number = ?, filed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE pr = ? AND finding_id = ? AND issue_number IS NULL;
+```
+
+#### 3.4.3 Enforcement Query (the gate)
+
+Before advancing to Phase 4, re-dispatching council, or posting a convergence report, run BOTH:
+
+**(a) Session-SQL check**:
+```sql
+SELECT pr, round, finding_id, severity, summary
+FROM deferrals WHERE pr = ? AND issue_number IS NULL;
+```
+If any row returned, file missing issues and re-run. Only empty result set is accepted.
+
+**(b) GitHub-issue cross-check**:
+```bash
+gh issue list --state all --search "blogflow-deferral pr=${PR_NUMBER} in:body" \
+  --json number,title,body,state --jq '.[] | {number, state, title, body}'
+```
+For each issue: parse marker regex, reconcile OPEN/CLOSED state, verify protected-domain = `none`, verify labels present, verify severity cross-check. INSERT reconciliation rows with `source = 'reconciled-from-github'` for any OPEN issues not in local `deferrals` table.
+
+**Only when both (a) returns empty AND (b) is reconciled does the gate permit progression.**
+
+**§3.4 runs on EVERY branch out of §3.3 — non-negotiable. There is no path from §3.3 to either Phase 4 or Phase 6 that bypasses §3.4.**
 
 If none of the termination conditions are met, proceed to Phase 4.
 
@@ -259,18 +394,30 @@ Return to **Phase 2** for the next review round. Increment the round counter.
 
 Regardless of termination reason, run one final review-pr pass (including Phase 8 — GitHub Feedback) to post the conclusive review to the PR. If the loop exited due to `max_rounds` or `no_progress`, include a note in the review body explaining why the loop stopped and listing any actionable findings that remain unresolved.
 
+Immediately after the final review pass completes, capture:
+
+```bash
+FINAL_HEAD_SHA=$(git rev-parse HEAD)    # after all fix commits pushed
+FINAL_ROUND_COUNT={total_counted_rounds}
+```
+
+These populate the run-identity marker and are consumed by §6.4 and §6.6.
+
 ### 6.2 Generate Progression Report
 
 Compile the full round-by-round progression:
 
 ```markdown
-## Review-Fix Loop Report
+## RFL Report for PR #{PR_NUMBER}
 
-**PR**: #{number} — {title}
-**Branch**: {branch_name}
-**Rounds completed**: {count}
+<!-- blogflow-rfl-report pr={PR_NUMBER} head={FINAL_HEAD_SHA} rounds={FINAL_ROUND_COUNT} -->
+
+**PR**: #{PR_NUMBER} — {title}
+**Branch**: {PR_BRANCH}
+**HEAD SHA**: `{FINAL_HEAD_SHA}`
+**Rounds completed**: {FINAL_ROUND_COUNT}
 **Final rating**: {rating}/5 ⭐ — {label}
-**Termination reason**: {Target achieved | Max rounds | No progress | Below target — all dismissals/deferrals verified legitimate}
+**Termination reason**: {Target achieved (5/5 from all slots) | Max rounds (FAILED RFL) | No progress (FAILED RFL)}
 
 ### Progression
 
@@ -280,6 +427,16 @@ Compile the full round-by-round progression:
 | R2    | {n}/5  | {c}         | {h}     | {m}       | {l}    | {i}     | {f}   | {d}       |
 | ...   | ...    | ...         | ...     | ...       | ...    | ...     | ...   | ...       |
 
+### Council Composition Audit
+
+Per round, verbatim `(agent_type, model)` pairs for each slot:
+
+| Round | Slot | `agent_type` | `model` | Dispatch HEAD |
+|-------|------|--------------|---------|---------------|
+| R1 | Architect | `general-purpose` | `claude-opus-4.7` | `{sha}` |
+| R1 | Balanced  | `general-purpose` | `claude-sonnet-4.6` | `{sha}` |
+| R1 | Quality   | `general-purpose` | `gpt-5.5` | `{sha}` |
+| R1 | Security  | `cloud-native-security-sme` | `claude-opus-4.7` | `{sha}` |
 ### Findings Addressed
 {For each fixed finding across all rounds:}
 - **{finding.id}** ({severity}) — {brief description} → Fixed in R{round}
@@ -288,9 +445,9 @@ Compile the full round-by-round progression:
 {For each dismissed finding:}
 - **{finding.id}** ({severity}) — {brief description} → {dismissal_reason}
 
-### Findings Deferred
-{For findings noted for follow-up:}
-- **{finding.id}** ({severity}) — {brief description} → {deferral_reason}
+### Findings Deferred (from deferrals table joined to issue_number)
+- **{finding.id}** ({severity}) — {brief description} → #{issue_number} [{source}] ({deferral_reason})
+- Every row has non-NULL `issue_number` (§3.4.3 gate). `source`: `session-filed` or `reconciled-from-github`.
 
 ### Commits
 {List of fix commits with SHAs and messages}
@@ -299,6 +456,70 @@ Compile the full round-by-round progression:
 ### 6.3 Post Final Summary
 
 If the PR is on GitHub, post the progression report as a PR comment (not a review — a standalone comment) so it serves as a permanent record of the review-fix process.
+
+### 6.4 Verify the Final Report Was Posted (MANDATORY)
+
+**The orchestrator MUST not claim the loop terminated successfully until it has verified, on GitHub, that the progression report comment exists on the PR.**
+
+Verification procedure:
+1. **Use Run Identity from §1.5.** Query:
+   ```bash
+   gh pr view {PR_NUMBER} --json comments \
+     --jq '.comments[] \
+       | select(.body | contains("\u003c!-- blogflow-rfl-report pr={PR_NUMBER} head={FINAL_HEAD_SHA} rounds={FINAL_ROUND_COUNT} \")) \
+       | {url: .url, createdAt: .createdAt, body_preview: (.body[0:300])}'
+   ```
+2. **Validate the matched comment body.** It MUST contain:
+   - `## RFL Report` as a heading
+   - The progression table header `| Round | Rating |`
+   - The substring `**Final rating**:` 
+   - `createdAt` newer than `LOOP_START_UTC` from §1.5
+   - At least 800 characters in length
+   If any check fails, treat as missing. Post with retry cap of 2 re-post attempts (3 total). On double failure: HARD ERROR — do NOT declare terminated.
+3. **Capture the verified comment URL** and report as: `RFL Report: <url>`
+4. **Only after the comment URL is verified** may the orchestrator proceed to §6.5.
+
+### 6.5 Council Composition Audit (MANDATORY)
+
+Before declaring the loop terminated, audit the council composition record:
+
+1. **Enumerate every counted round** in the progression report.
+2. **For each round, locate the per-slot composition row** in the `### Council Composition Audit` table.
+3. **Verify each row** lists an exact `(agent_type, model)` pair from the protocol table (review-pr Phase 3).
+4. **Missing composition data** → treat the round as INVALID. Dispatch a full 4-model council at current HEAD as a new counted corrective round (label `R{n}-corrective`).
+5. **Uncorrected deviation** → dispatch a corrective round at current HEAD. Annotate as `R{n}-superseded`. The corrective replaces the deviant in convergence math.
+6. **Only after every counted round passes** may the loop proceed to §6.6.
+
+### 6.6 CI Status Verification (MANDATORY)
+
+Local build/test/lint output is NOT sufficient evidence of CI green. Before declaring the loop terminated, the orchestrator MUST poll the GitHub status check rollup.
+
+Verification procedure:
+1. **Resolve post-fix HEAD and required-check set.**
+   ```bash
+   POST_FIX_HEAD=$(git rev-parse HEAD)
+   REQUIRED_CHECKS=$(gh api "repos/{owner}/{repo}/branches/{base_branch}/protection/required_status_checks" \
+     --jq '(.contexts // [])[], (.checks // [])[].context' 2>/dev/null || printf 'Lint\nBuild\nTest\nDocker')
+   ```
+2. **Query the status check rollup** at post-fix HEAD:
+   ```bash
+   gh pr view {PR_NUMBER} --json statusCheckRollup,headRefOid \
+     --jq '{head: .headRefOid, checks: [.statusCheckRollup[] | {
+              kind: (.__typename // "unknown"),
+              name: (.name // .context),
+              conclusion: (.conclusion // .state)}]}'
+   ```
+   Confirm `.head` equals `POST_FIX_HEAD`. If mismatched, wait 10s and re-fetch (<= 5 retries).
+3. **Classify every check:**
+   - `SUCCESS` → ✅ passing
+   - `FAILURE | TIMED_OUT | CANCELLED | ACTION_REQUIRED` → ❌ failing
+   - `SKIPPED` → ⚠️ invalid for required checks (unless path-filtered, see step 3a)
+   - Missing but required → ❌ **hard failure**
+4. **In-flight checks:** poll every 30s (45 min cap). On timeout: STOP and surface to human with `gh run list --branch {PR_BRANCH} --limit 10`.
+5. **Failing checks:** treat as new actionable findings (severity High). Re-enter §3.3 → §3.4 → Phase 4.
+6. **Only after every required check is SUCCESS** may the loop be declared terminated.
+
+Post a `### CI Status Verification` section in the progression report listing verified HEAD, every check conclusion, and any rerun or path-filter-skip rationale.
 
 ---
 
@@ -322,11 +543,14 @@ If the PR is on GitHub, post the progression report as a PR comment (not a revie
 Every PR must have ALL of the following before it can be considered merge-ready:
 
 1. **Full 4-model council RFL** completed (not a "quick verification" or "spot check" — the complete multi-model review pipeline)
-2. **5/5⭐ rating** achieved, or below-target with all deferrals verified legitimate and tracked as GitHub issues
-3. **§2.1 triage verification** completed for any round with 5+ dismissals or any dismissed findings in protected domains (security, content integrity, data integrity, cryptography)
-4. **Dismissed findings audited** — real items identified and tracked as backlog issues with specific GitHub issue numbers
-5. **Full progression report posted** as a PR comment containing: round-by-round progression table, all findings addressed, all findings dismissed with rationale, all findings deferred with issue numbers, all backlog issues created, commit SHAs
-6. **CI green** on all checks (Build, Lint, Test, Docker) — no exceptions, no "it's just Docker" or "it's a pre-existing failure"
+2. **5/5⭐ rating from ALL council slots** with zero actionable findings (strict — no sub-5 acceptable, no carve-outs)
+3. **Council composition verified** — every round's `(agent_type, model)` pairs match the review-pr protocol table (§3.1)
+4. **§2.1 triage verification** completed for any round with 5+ dismissals or any dismissed findings in protected domains (security, content integrity, data integrity, cryptography)
+5. **All deferred findings** tracked as GitHub issues with `blogflow-deferral` markers, required labels, and `protected-domain assessment: none`
+6. **Full progression report posted** as PR comment with: council composition audit table, all findings addressed/dismissed/deferred with issue numbers, commit SHAs
+7. **Report post verified** — run-identity marker query (§6.4) confirms comment exists; verified URL reported
+8. **CI green** on all required checks (fetched from branch-protection via §6.6) — no exceptions, no "it's just Docker" or "it's a pre-existing failure"
+9. **No open halt markers** on the PR at termination time
 
 ### What is NOT acceptable
 
