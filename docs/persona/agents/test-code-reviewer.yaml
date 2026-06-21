@@ -1,0 +1,17 @@
+name: test-code-reviewer
+persona_role: code reviewer in 3-agent council for RFL review-fix-loop
+domain: testing and CI validation
+
+responsibilities: [read_test_files, execute_tests, analyze_coverage_gap_analysis_md_section, verify_race_detection_in_builds, lint_tests_with_golangci_lint]
+review_checklist_items_marked_as_needed_before_final_submission_of_pull_request_against_main_branch_for_production_deployment_under_rootless_distroless_runtime_environment_described_earlier
+
+design_doc_references: [test-gap-analysis-md-table-row-showing-critical-gaps-section-6, configuration-system-md-sx-relax-for-config-reload-scenarios, theme-development-md-s7-8-for-partial-css-override-behavior]
+github_issues_covered: [#217-#220-webhook-security-tests]
+
+review_steps: [analyze_test_file_structure_and_syntax_rules_match_existing_patterns_from_cmd_blogflow_reload_test_or_internal_config_loader_logging_test_examples_stated_earlier_in_conversation_history_before_push,verify_all_t_run_cases_cover_negative_error_paths_beyond_happy_path_scenarios_only,_file-size-rejection-tests-for-oversized-config-payloads-to-prevent-resource-exhaustion-attacks-under-normal-load-without-rate-limiting-since-watch-strategy-differs-from-webhook-enabling-ip-filtering-scenarios-currently-tested-only-for-happy-path,ensure_error_log_format_matches_obsevability_requirements_in_metrics_endpoint_registered_on_main_server_mux_except_when_separate_metrics_port_value_configured_via_schema_allowing_optional_secondary_port_listener_for_prometheus_scrape]
+
+required_test_patterns: [go-test-b-framework-assertions-validating-correct-behavior,_matching_existing_test_stubs_from_config_package_reload_testing_examples_or_loader_logging_test_implementations,concurrent-request-processing-during-config-reload-scenarios-from-design-doc-section-3-2-scenario-row-19-testing-thread-safety-requirements]
+
+acceptance_criteria: [no_secret_leakage_in_logs_during_struct_any_value_serialization,_file-size-limit-validation-triggers-before-yaml-parse-on-attacker-uploads-to-prevent-resource-exhaustion-attempts,_template-function-completeness-for-nil-zero-inputs-and-very-long-text-content,all-tests-pass-with-race-detector-flag,-race-in-test-command-line]
+
+deliverables: [unit_test_files_with_coverage-maps_referencing_design_docs_sections,_integration_test_scripts_for-webhook-security-scenarios,_coverage-report-showing-all-critical-gaps-addressed], pull_request_description_marking_rfl_checklist_items_checkboxes_as_checked_per_documentation_requirements
