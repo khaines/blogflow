@@ -78,7 +78,7 @@ Example:
 
 ## Multi-Model Consensus Scoring
 
-When the skill runs in multi-model council mode (4+ models reviewing independently), each finding is tagged with a consensus label.
+When the skill runs in multi-model council mode (4 models reviewing independently), each finding is tagged with a consensus label.
 
 ### Consensus Thresholds
 

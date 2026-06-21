@@ -79,7 +79,7 @@ Read the agent mapping file at `.github/skills/review-pr/agent-map.md`. This fil
 
 ### 2.2 Match Files to Agents
 
-For each changed file, determine which agent persona(s) are relevant based on the file patterns and paths defined in the agent map. The 10 available agents (defined in `.claude/agents/`) are:
+For each changed file, determine which agent persona(s) are relevant based on the file patterns and paths defined in the agent map. The 10 available agents (defined in `.github/agents/`) are:
 
 - `cloud-native-distributed-systems-architect`
 - `cloud-native-front-end-engineer`
@@ -123,10 +123,38 @@ Dispatch **4 parallel reviews** using the `task` tool with the `general-purpose`
 
 | Model | Parameter Value | Review Focus |
 |---|---|---|
-| Claude Opus 4.6 | `claude-opus-4.6` | Deep reasoning — architecture implications, subtle bugs, design flaws |
+| Claude Opus 4.7 | `claude-opus-4.7` | Deep reasoning — architecture implications, subtle bugs, design flaws |
 | Claude Sonnet 4.6 | `claude-sonnet-4.6` | Balanced — code quality, patterns, maintainability |
-| GPT 5.4 | `gpt-5.4` | Alternative perspective — different pattern recognition |
-| Gemini 3 Pro | `gemini-3-pro-preview` | Cross-validation — consensus tie-breaking |
+| GPT 5.5 | `gpt-5.5` | Alternative perspective — different pattern recognition |
+| Claude Opus 4.7 (Security) | `claude-opus-4.7` | Security focus — HMAC validation, path traversal, secrets handling, content integrity |
+
+**Note on the Security slot:** The fourth reviewer uses the same Opus 4.7 model but is dispatched with a security-focused agent type to bring specialized security domain expertise for BlogFlow's content integrity, secret handling, and path traversal protection.
+
+### 3.1 Council Composition Verification (MANDATORY)
+
+After dispatching the 4 reviewers and **before** reporting any "unanimous N/N" result, the orchestrator MUST verify that the actual `model` parameter passed to each `task` tool call exactly matches the protocol table above. **Model-param drift produces falsely-confident unanimity reports — this verification is non-negotiable.**
+
+Verification procedure for every round:
+
+1. **Read back each dispatch.** For each of the 4 reviewers, look at the actual `model` argument you passed (not what you intended to pass — what is literally in the tool call).
+2. **Compare against the protocol table** verbatim. The four required `(slot, agent_type, model)` tuples are:
+
+   | Slot | `agent_type` | `model` |
+   |---|---|---|
+   | Architect | `general-purpose` | `claude-opus-4.7` |
+   | Balanced  | `general-purpose` | `claude-sonnet-4.6` |
+   | Quality   | `general-purpose` | `gpt-5.5` |
+   | Security  | `cloud-native-security-sme` | `claude-opus-4.7` |
+
+   All four tuples MUST be present exactly once. A round is INVALID if any slot's actual `(agent_type, model)` pair does not match its row.
+3. **If any slot used an off-protocol pair**, the round is INVALID. You must:
+   - Re-dispatch the affected slot with the correct `(agent_type, model)` pair
+   - At most ONE corrective re-dispatch is allowed per slot. If it fails again, STOP and surface a hard error.
+   - Document the deviation in the round's report.
+4. **Composition verification gates ALL aggregate-rating claims.** Do not write or post any claim of council unanimity, consensus, or aggregate rating until composition for every counted round has been verified.
+5. **Capture the verified composition** in the per-round record: slot name, `agent_type` argument verbatim, `model` argument verbatim, dispatch HEAD SHA (`git rev-parse HEAD` at dispatch time), and dispatch timestamp.
+
+---
 
 Each model receives the same input package:
 
