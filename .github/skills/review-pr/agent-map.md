@@ -1,187 +1,174 @@
-# PR Review — Agent Mapping Reference
+# PR Review — Agent Mapping for BlogFlow
 
-This file maps file patterns and content signals to the specialist agent personas used during pull-request reviews. The `review-pr` skill consults this map to decide which agents should participate in a given review.
-
-**How it works:**
-
-1. For every changed file in a PR, match its path against the **File Pattern → Agent** table.
-2. Apply the **Priority Rules** to decide which agents are included vs. advisory.
-3. Run the **Content-Based Detection** heuristics for additional agent triggers that path patterns alone cannot capture.
-4. Assemble the final reviewer set — every matched agent reviews the files that triggered it; the agent with the most file matches is designated the **primary** reviewer.
+Maps file patterns to specialist agent personas. The `review-pr` skill matches changed files against these patterns and activates all matching agents.
 
 ---
 
-## 1. File Pattern → Agent Mapping
-
-### cloud-native-systems-engineer
-
-> Go services, HTTP handlers, content pipeline logic, configuration loading, backend diagnosability.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `*.go` | High | Go source files |
-| `*_test.go` | High | Go test files |
-| `go.mod`, `go.sum` | High | Go module dependency files |
-| `cmd/**` | High | Go service entry-points |
-| `internal/**` | High | Internal packages |
-
-### cloud-native-front-end-engineer
-
-> Semantic, accessible HTML templates, CSS theming, static assets, theme rendering.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `defaults/templates/**` | High | Default theme HTML templates |
-| `defaults/static/**` | High | Default static assets (CSS, JS, images) |
-| `*.html` | High | HTML template files |
-| `*.css` | High | Stylesheets |
-| `*.js` | High | JavaScript files |
-| `**/theme*/**` | High | Theme-related directories |
+## Agent → File Patterns
 
 ### cloud-native-distributed-systems-architect
+**Domain:** System architecture, overlay FS design, content pipeline topology, multi-repo coordination, reliability/security/observability trade-offs.
 
-> Component boundaries, content pipeline topology, reliability / security / observability trade-offs.
+| Pattern | Trigger |
+|---------|---------|
+| `docs/engineering/design/**` | Design docs and ADRs |
+| `docs/engineering/adr/**` | Architecture Decision Records |
+| `docs/engineering/research/**` | Architecture research |
+| `*.md` with "architecture" or "topology" in filename | Architecture content |
+| `internal/overlayfs/**` | Overlay filesystem changes |
+| `internal/content/**` | Content pipeline topology changes |
+| New service/component directories | Introduces new component |
 
-| Pattern | Priority | Notes |
-|---|---|---|
-| `docs/engineering/adr/*` | Critical | Architecture Decision Records |
-| `docs/engineering/design/*` | Critical | Design documents |
-| `docs/engineering/research/*` | Critical | Architecture research documents |
-| `*.md` with "architecture" in path | Critical | Architecture-related Markdown |
-| _(new component)_ | Critical | Any file that introduces a new component — detected at review time |
-| _(component-to-component changes)_ | Critical | Changes to inter-component communication patterns |
+### cloud-native-systems-engineer
+**Domain:** Go services, go-git, goldmark, HTTP server, overlay FS internals, configuration system.
 
-### cloud-native-security-sme
+| Pattern | Trigger |
+|---------|---------|
+| `*.go` | All Go source code |
+| `internal/config/**` | Configuration system changes |
+| `internal/gitops/**` | Git sync, webhook, polling |
+| `internal/overlayfs/**` | Overlay filesystem core |
+| `internal/server/**` | HTTP server and routing |
+| `go.mod`, `go.sum` | Go module dependency changes |
+| `cmd/**` | CLI and entry-point changes |
 
-> Auth, credential handling, webhook signature verification, secrets management, secure delivery.
+### cloud-native-front-end-engineer
+**Domain:** Default theme, templates, CSS, responsive design, accessibility, static assets.
 
-| Pattern | Priority | Notes |
-|---|---|---|
-| `**/auth/**` | Critical | Authentication code |
-| `**/security/**` | Critical | Security modules |
-| `**/crypto/**` | Critical | Cryptographic code |
-| `**/*secret*` | Critical | Secrets handling |
-| `**/*credential*` | Critical | Credential management |
-| `**/*token*` | Critical | Token handling |
-| `**/webhook/**` | Critical | Webhook signature verification |
-| `.env*` | Critical | Environment variable files |
-| `**/gitops/**` | Critical | Git operations with auth |
+| Pattern | Trigger |
+|---------|---------|
+| `defaults/templates/**` | Default template changes |
+| `defaults/static/**` | Default CSS/JS/image changes |
+| `*.html` | HTML template changes |
+| `*.css` | Stylesheet changes |
+| `*.yaml` in `defaults/` or `theme/` | Theme metadata changes |
+| `internal/theme/**` | Theme engine changes |
 
 ### cloud-native-site-reliability-engineer
+**Domain:** Container health, webhook reliability, cache SLOs, K8s manifests, CI/CD, rollout safety.
 
-> SLOs, observability, rollout safety, incident response, recovery readiness, toil reduction.
+| Pattern | Trigger |
+|---------|---------|
+| `k8s/**`, `helm/**`, `deploy/**` | K8s and deploy manifests |
+| `Dockerfile*` | Container definition changes |
+| `.github/workflows/**` | CI/CD pipeline changes |
+| `internal/otel/**` | Tracing/metrics instrumentation |
+| `internal/server/server.go` | Server health, readiness, metrics |
+| `internal/content/renderer.go` | Content pipeline performance |
 
-| Pattern | Priority | Notes |
-|---|---|---|
-| `deploy/**` | High | Deployment manifests |
-| `Dockerfile*` | High | Container definitions |
-| `docker-compose*` | High | Compose files |
-| `.github/workflows/*` | High | CI/CD workflow definitions |
-| `**/monitoring/**` | High | Monitoring configuration |
-| `**/helm/**` | High | Helm charts |
-| `**/terraform/**` | High | IaC — Terraform (also triggers architect) |
-| `**/pulumi/**` | High | IaC — Pulumi (also triggers architect) |
+### cloud-native-security-sme
+**Domain:** Distroless hardening, HMAC-SHA256 webhook signing, deploy keys (SSH/PAT/GitHub App), secrets handling, CSP headers, path traversal prevention.
+
+| Pattern | Trigger |
+|---------|---------|
+| `**/auth/**` | Authentication code |
+| `**/security/**` | Security modules |
+| `**/*secret*`, `**/*token*`, `**/*credential*` | Secrets and tokens |
+| `**/middleware/**` | HTTP middleware |
+| `internal/gitops/webhook.go` | Webhook security |
+| `.env*` | Environment variable files |
+| **/auth/**, **/credential* patterns | Authentication, authorization |
+| `internal/overlayfs/**` | Path validation and traversal prevention |
 
 ### technical-writer
+**Domain:** Content authoring docs, theme guide, API reference, gitflow workflow, changelog.
 
-> Documentation architecture, docs-as-code, tutorials, troubleshooting guides.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `docs/**/*.md` | Standard | Documentation files (except ADRs/design → architect) |
-| `**/*.md` | Standard | Any Markdown file in any directory |
-| `*.md` (root) | Standard | Root-level docs: README, CONTRIBUTING, etc. |
-| `CHANGELOG*` | Standard | Changelog |
+| Pattern | Trigger |
+|---------|---------|
+| `**/*.md` | All Markdown documentation |
+| `docs/**` | Documentation directory |
+| `CHANGELOG.md` | Changelog updates |
+| `README.md` | README updates |
+| `docs/engineering/design/**` | Design document changes |
 
 ### product-manager
+**Domain:** Feature roadmap, UX trade-offs, blog content workflow, user expectations, prioritization.
 
-> Product direction, user-value framing, roadmap trade-offs, outcome-based recommendations.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `docs/product/**` | Standard | Product strategy documents |
+| Pattern | Trigger |
+|---------|---------|
+| `docs/engineering/adr/**` | Architecture decisions (product impact) |
+| `CHANGELOG.md` | Changelog content strategy |
+| `docs/persona/agents/**` | Agent persona changes |
+| `docs/**` | Documentation with user-facing implications |
 
 ### program-manager
+**Domain:** Phase tracking, cross-repo coordination, execution governance, milestone delivery.
 
-> Multi-workstream planning, dependency mapping, execution control, risk management.
+| Pattern | Trigger |
+|---------|---------|
+| `.github/workflows/**` | CI/CD pipeline coordination |
+| `docs/engineering/design/**` | Design docs with multi-phase implications |
+| `README.md` | Project overview updates |
+| All PRs with files across 3+ domains | Cross-repo coordination needed |
 
-| Pattern | Priority | Notes |
-|---|---|---|
-| `docs/product/*execution*` | Standard | Execution plan documents |
-| `**/roadmap*` | Standard | Roadmap documents |
+### solutions-engineer
+**Domain:** Quick-start, deployment guides, integration patterns, developer experience.
 
-### solutions-engineer-developer-success-architect
-
-> Onboarding, quickstart guides, getting-started flows, developer success.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `**/quickstart*/**` | Standard | Quick-start guides |
-| `**/getting-started*/**` | Standard | Getting-started guides |
-| `**/onboarding/**` | Standard | Onboarding flows |
+| Pattern | Trigger |
+|---------|---------|
+| `cmd/**` | CLI behavior changes |
+| `docs/deployment-guide.md` | Deployment guide updates |
+| `.github/skills/**` | Developer experience changes |
+| `README.md` | Getting-started changes |
+| `defaults/` | Zero-config experience changes |
 
 ### privacy-compliance-grc-lead
+**Domain:** GDPR for blog content, data retention policies, cookie compliance, PII handling, secrets management.
 
-> GDPR, privacy controls, compliance operations, audit evidence.
-
-| Pattern | Priority | Notes |
-|---|---|---|
-| `**/compliance/**` | High | Compliance code and config |
-| `**/gdpr/**` | High | GDPR-specific code |
-| `**/privacy/**` | High | Privacy controls (also triggers security SME) |
-| `**/consent/**` | High | Consent management |
-
----
-
-## 2. Priority Rules
-
-### Priority Levels
-
-| Level | Behaviour | Agents |
-|---|---|---|
-| **Critical** | **Always** included when patterns match, regardless of how many other agents are active. | `cloud-native-security-sme`, `cloud-native-distributed-systems-architect` |
-| **High** | Included when their patterns match. These are the domain-specialist agents. | `cloud-native-systems-engineer`, `cloud-native-front-end-engineer`, `cloud-native-site-reliability-engineer`, `privacy-compliance-grc-lead` |
-| **Standard** | Included only when the file falls within their **primary** domain — i.e., no higher-priority agent also claims the file, or the file belongs squarely to the Standard agent's area. | `technical-writer`, `product-manager`, `program-manager`, `solutions-engineer-developer-success-architect` |
-
-### Multi-Agent Resolution
-
-1. **All matching agents review.** If a file matches patterns for more than one agent, every matching agent is added to the reviewer set for that file.
-2. **Primary agent designation.** The agent with the most file matches across the entire PR is designated the primary reviewer and provides the top-level summary.
-3. **Tie-breaking.** When two agents match the same number of files, prefer the agent with the higher priority level (Critical > High > Standard).
-4. **Cross-triggers.** Some patterns explicitly trigger a second agent (noted in the tables above). For example:
-   - `**/terraform/**` → `cloud-native-site-reliability-engineer` **+** `cloud-native-distributed-systems-architect`
-   - `**/privacy/**` → `privacy-compliance-grc-lead` **+** `cloud-native-security-sme`
+| Pattern | Trigger |
+|---------|---------|
+| `**/user/**` | User data handling |
+| `**/auth/**` | Authentication/authorization |
+| `**/credential*` | Credential/secret handling |
+| `internal/config/**` | Config containing user/policy data |
+| `**/*.json`, `**/*.yaml` with "pii", "cookie", "gdpr" patterns | PII or compliance markers |
 
 ---
 
-## 3. Content-Based Detection
+## Agent Priority / Dispatch Rules
 
-File-path patterns catch most cases, but some agent assignments require inspecting the **content** of changed files. Apply these heuristics after pattern matching.
+| Rule | Action |
+|------|--------|
+| Security SME matches any `auth/`, `security/`, `*secret*`, `*token*`, `*credential*` pattern | **CRITICAL** — always active when patterns match |
+| Multiple agents match same file | All activate; each reviews their domain |
+| File matches no agent | Assign to `general-purpose` with `[no-agent-match]` annotation |
+| Security SME + SRE both match a file | Dispatch both, but **merge** when both return 5/5 |
 
-### Import & Dependency Signals
+---
 
-| Signal | Example | Triggers Agent |
-|---|---|---|
-| Security / crypto imports | `import "crypto/..."`, `import "golang.org/x/crypto"` | `cloud-native-security-sme` |
-| JWT / auth libraries | `jwt.Parse`, `bcrypt.CompareHashAndPassword` | `cloud-native-security-sme` |
-| Kubernetes client usage | `import "k8s.io/client-go/..."` | `cloud-native-site-reliability-engineer` |
-| Git library imports | `import "github.com/go-git/go-git/v5"` | `cloud-native-systems-engineer` |
-| Compliance / GDPR annotations | GDPR consent flags, privacy-related constants | `privacy-compliance-grc-lead` |
-| Template engine imports | `import "html/template"`, `import "text/template"` | `cloud-native-front-end-engineer` |
+## Agent Dispatch Priority
 
-### Operation Signals
+1. **cloud-native-security-sme** — CRITICAL (never deprioritized)
+2. **cloud-native-systems-engineer** — HIGH (Go/core always reviewed)
+3. **cloud-native-site-reliability-engineer** — HIGH (operability always reviewed)
+4. **cloud-native-distributed-systems-architect** — HIGH (architecture always reviewed)
+5. **cloud-native-front-end-engineer** — STANDARD (theme/frontend when present)
+6. **technical-writer** — SUPPLEMENTARY (docs when present)
+7. **product-manager** — SUPPLEMENTARY (UX decisions when present)
+8. **program-manager** — SUPPLEMENTARY (coordination when cross-repo)
+9. **solutions-engineer** — SUPPLEMENTARY (DX when present)
+10. **privacy-compliance-grc-lead** — CRITICAL (when user data or secrets present)
 
-| Signal | Example | Triggers Agent |
-|---|---|---|
-| Database queries / migrations | `CREATE TABLE`, `ALTER TABLE`, `sql.Open`, ORM model changes | `cloud-native-systems-engineer` + `cloud-native-distributed-systems-architect` |
-| Secret or credential construction | Hardcoded tokens, API-key literals, `os.Getenv("*SECRET*")` | `cloud-native-security-sme` |
-| New component registration | Adding a new entry in a component registry, new `main.go` under `cmd/` | `cloud-native-distributed-systems-architect` |
-| Helm value / chart changes | `values.yaml` modifications, new chart templates | `cloud-native-site-reliability-engineer` |
-| Webhook signature verification | HMAC computation, signature comparison | `cloud-native-security-sme` |
-| File system operations | `os.OpenFile`, `os.MkdirAll`, overlay-fs layer manipulation | `cloud-native-systems-engineer` |
+---
 
-### Notes
+## Agent Prompt Template
 
-- Content-based detection is **additive** — it adds agents to the reviewer set; it never removes an agent that was already matched by path.
-- When content detection triggers an agent that was not matched by path, annotate the review with the specific signal that caused the addition so reviewers understand why the agent was included.
-- For large PRs (50+ changed files), prioritise content scanning on files that did **not** already match a path pattern to keep review latency manageable.
+Standard dispatch prompt for each agent:
+
+You are acting as the **{agent_name}** specialist for BlogFlow.
+
+## Findings to Address
+**{finding.id}** — {severity}
+- File: {agent} → {finding.file}:{finding.line}
+- Finding: {finding.finding}
+- Recommendation: {finding.recommendation}
+- Consensus: {finding.consensus}
+
+## Instructions
+1. Read each file that needs changes.
+2. Make precise, surgical fixes for this finding only.
+3. Do NOT introduce new patterns or refactor beyond what's required.
+4. Verify your change doesn't break surrounding code.
+5. Confirm which findings were addressed and how.
+
+
