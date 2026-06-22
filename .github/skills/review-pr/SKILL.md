@@ -3,7 +3,7 @@ name: review-pr
 description: >-
   Orchestrates world-class pull request reviews using specialist agent personas and engineering checklists.
   Use this when asked to review a PR, review code changes, or assess PR quality.
-  Supports single-model review for simple changes and multi-model council (Opus 4.6, Sonnet 4.6, GPT 5.4, Gemini Pro)
+  Supports single-model review for simple changes and council mode (4 specialized agents, same model)
   for complex changes. Posts findings as GitHub PR comments for remote PRs.
 ---
 
@@ -119,49 +119,60 @@ Use the default model. Run the review through the primary agent persona's lens:
 
 ### Complex Change — Multi-Model Council
 
-Dispatch **4 parallel reviews** using the `task` tool with the `general-purpose` agent type and different `model` parameters. All 4 calls **must** be made in parallel (in the same tool-call block), not sequentially.
+Dispatch **4 sequential reviews**, all running on the **same model** as the session. Each review uses a different **specialized agent persona** (from agent-map.md). The specialization — not model diversity — drives blind-spot coverage.
 
-| Model | Parameter Value | Review Focus |
+All 4 calls **must** be made sequentially (one at a time), not in parallel. Sequential execution produces deterministic, order-independent results that the orchestrator can merge reliably. Parallel dispatch introduces timing sensitivity and divergent outputs that are harder to reconcile.
+
+| Slot | Agent Persona | Review Focus |
 |---|---|---|
-| Claude Opus 4.7 | `claude-opus-4.7` | Deep reasoning — architecture implications, subtle bugs, design flaws |
-| Claude Sonnet 4.6 | `claude-sonnet-4.6` | Balanced — code quality, patterns, maintainability |
-| GPT 5.5 | `gpt-5.5` | Alternative perspective — different pattern recognition |
-| Claude Opus 4.7 (Security) | `claude-opus-4.7` | Security focus — HMAC validation, path traversal, secrets handling, content integrity |
+| **Systems** | `cloud-native-systems-engineer` | Go code quality, HTTP handlers, config loading, content pipeline |
+| **Security** | `cloud-native-security-sme` | HMAC validation, path traversal, secrets handling, content integrity |
+| **Architect** | `cloud-native-distributed-systems-architect` | System architecture, overlay FS design, content pipeline topology |
+| **SRE** | `cloud-native-site-reliability-engineer` | Container health, webhook reliability, cache SLOs, CI/CD |
 
-**Note on the Security slot:** The fourth reviewer uses the same Opus 4.7 model but is dispatched with a security-focused agent type to bring specialized security domain expertise for BlogFlow's content integrity, secret handling, and path traversal protection.
+All slots run on the **same model** (the session's model). The **personas drive blind-spot coverage** — different agent personas see different code paths, apply different checklists, and evaluate against different criteria.
 
 ### 3.1 Council Composition Verification (MANDATORY)
 
-After dispatching the 4 reviewers and **before** reporting any "unanimous N/N" result, the orchestrator MUST verify that the actual `model` parameter passed to each `task` tool call exactly matches the protocol table above. **Model-param drift produces falsely-confident unanimity reports — this verification is non-negotiable.**
+After dispatching the 4 reviewers and **before** reporting any "unanimous N/N" result, the orchestrator MUST verify that each slot used the correct **agent persona** and **the same model** as the session. Using the wrong persona defeats blind-spot coverage; using a different model wastes a valuable slot.
 
-Verification procedure for every round:
+#### Protocol Table
 
-1. **Read back each dispatch.** For each of the 4 reviewers, look at the actual `model` argument you passed (not what you intended to pass — what is literally in the tool call).
-2. **Compare against the protocol table** verbatim. The four required `(slot, agent_type, model)` tuples are:
+Each counted round must have exactly these four `(slot, persona, model)` tuples:
 
-   | Slot | `agent_type` | `model` |
-   |---|---|---|
-   | Architect | `general-purpose` | `claude-opus-4.7` |
-   | Balanced  | `general-purpose` | `claude-sonnet-4.6` |
-   | Quality   | `general-purpose` | `gpt-5.5` |
-   | Security  | `cloud-native-security-sme` | `claude-opus-4.7` |
+| Slot | Agent Persona | Model (must match session) |
+|---|---|---|
+| Systems | `cloud-native-systems-engineer` | **= session_model** |
+| Security | `cloud-native-security-sme` | **= session_model** |
+| Architect | `cloud-native-distributed-systems-architect` | **= session_model** |
+| SRE | `cloud-native-site-reliability-engineer` | **= session_model** |
 
-   All four tuples MUST be present exactly once. A round is INVALID if any slot's actual `(agent_type, model)` pair does not match its row.
-3. **If any slot used an off-protocol pair**, the round is INVALID. You must:
-   - Re-dispatch the affected slot with the correct `(agent_type, model)` pair
-   - At most ONE corrective re-dispatch is allowed per slot. If it fails again, STOP and surface a hard error.
-   - Document the deviation in the round's report.
-4. **Composition verification gates ALL aggregate-rating claims.** Do not write or post any claim of council unanimity, consensus, or aggregate rating until composition for every counted round has been verified.
-5. **Capture the verified composition** in the per-round record: slot name, `agent_type` argument verbatim, `model` argument verbatim, dispatch HEAD SHA (`git rev-parse HEAD` at dispatch time), and dispatch timestamp.
+**No slots may deviate.** All four personas MUST be present exactly once. The model MUST match the session's model exactly in every slot. If even one uses the wrong persona OR the wrong model, the entire round is INVALID.
+
+#### Why This Matters
+
+The specialization — not model diversity — drives blind-spot coverage. Different agent personas see different code paths, apply different checklists, and evaluate against different criteria. Running all slots on the same model means findings diverge ONLY because of agent expertise, not because of model biases. This is the right signal for consensus scoring.
+
+If a slot was dispatched with the wrong persona or wrong model, the round is INVALID. The slot must be re-dispatched with the correct persona AND the session model. At most ONE corrective re-dispatch is allowed. If it fails again, STOP and surface a hard error.
+
+#### Dispatch Order
+
+Reviewers fire **sequentially** — Systems → Security → Architect → SRE. Each sees the same PR diff, agent persona instructions, applicable checklists, and design document (if any).
+
+If a reviewer fails, times out, or is skipped, the remaining slots may still produce valid results; note the degradation in the composition record.
+
+#### Capture Verified Composition
+
+Record per slot: slot name, persona name verbatim, model verbatim (must equal session model), dispatch HEAD SHA (`git rev-parse HEAD`), and dispatch timestamp. This is consumed by the Council Composition Audit table in the §6.2 progression report.
 
 ---
 
-Each model receives the same input package:
+Each reviewer receives the same input package:
 
 - The full PR diff
-- The relevant agent persona instructions (from the matched agent's system prompt)
+- The agent persona instructions (from the matched agent's system prompt in `.github/agents/`)
 - The applicable checklists (loaded in Phase 4)
-- The governing design document(s), if any (identified in Phase 1.4) — each model must cross-check the implementation against the spec
+- The governing design document(s), if any (identified in Phase 1.4) — each reviewer must cross-check the implementation against the spec
 - Instructions to return findings in this structured format:
 
 ```json
@@ -321,7 +332,7 @@ Sort all findings by severity in this order: **Critical → High → Medium → 
 
 If the review used multi-model council mode:
 
-- For each unique finding, count how many of the 4 models flagged it.
+- For each unique finding, count how many of the 4 reviewers flagged it.
 - Display consensus as a fraction (e.g., "4/4", "3/4", "2/4", "1/4").
 - Findings flagged by **3 or more models** → tag with **"✅ High consensus"**.
 - Findings flagged by **only 1 model** → tag with **"⚠️ Low consensus"**.
@@ -418,8 +429,8 @@ Before posting, check for existing review comments from previous runs of this sk
 ## Important Notes
 
 - **Always read supporting files first.** Before starting the pipeline, load `agent-map.md`, `checklist-map.md`, and `rating-rubric.md` from `.github/skills/review-pr/`. These files are required for Phases 2, 4, and 7 respectively. Do not proceed without them.
-- **Parallel execution in council mode.** In multi-model council mode, the 4 model reviews **must** run in parallel (all 4 `task` calls in a single tool-call block), not sequentially. This is critical for performance — sequential execution would take 4× longer.
-- **Handle model failures gracefully.** If a model fails or times out during council mode, proceed with the remaining models and note which model(s) were unavailable in the final report. A 3-model consensus is still valid.
+- **Sequential execution in council mode.** In council mode, the 4 reviewers **must** fire sequentially (one at a time). This is critical for determinism — each reviewer sees the same diff, same inputs, and the orchestrator merges findings reliably. Do NOT dispatch in parallel.
+- **Handle reviewer failures gracefully.** If a reviewer fails or times out, proceed with the remaining reviewers and note which slot(s) were unavailable. A 3-reviewer consensus is valid but noted as degraded.
 - **Repository-agnostic design.** This skill should work for any repository. BlogFlow-specific agents and checklists are the defaults, but the pipeline logic is general-purpose.
 - **Professional and constructive tone.** When posting findings to GitHub, write them to help the author improve. Be specific, cite the relevant code, and suggest concrete fixes. Never be dismissive, sarcastic, or discouraging.
 - **Design document conformance is mandatory for implementation PRs.** Phase 5 cross-checks the implementation against its governing design document. The design document is the source of truth — if the code diverges from the spec, that is a finding regardless of whether the code itself is well-written. This prevents "works but doesn't match spec" gaps that cascade into integration failures.

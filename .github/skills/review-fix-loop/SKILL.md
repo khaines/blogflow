@@ -145,7 +145,7 @@ Capture every finding from the review in structured format:
   "finding": "Description of the issue",
   "recommendation": "Suggested fix",
   "consensus": "4/4 | 3/4 | 2/4 | 1/4",
-  "models_flagging": ["opus", "sonnet", "gpt", "gemini"],
+  "reviewers_flagging": ["Systems", "Security", "Architect", "SRE"],
   "in_pr_diff": true | false
 }
 ```
@@ -429,14 +429,14 @@ Compile the full round-by-round progression:
 
 ### Council Composition Audit
 
-Per round, verbatim `(agent_type, model)` pairs for each slot:
+Per round, verified `(persona, model)` pairs for each slot:
 
-| Round | Slot | `agent_type` | `model` | Dispatch HEAD |
-|-------|------|--------------|---------|---------------|
-| R1 | Architect | `general-purpose` | `claude-opus-4.7` | `{sha}` |
-| R1 | Balanced  | `general-purpose` | `claude-sonnet-4.6` | `{sha}` |
-| R1 | Quality   | `general-purpose` | `gpt-5.5` | `{sha}` |
-| R1 | Security  | `cloud-native-security-sme` | `claude-opus-4.7` | `{sha}` |
+| Round | Slot | Agent Persona | Model (session) | Dispatch HEAD |
+|-------|------|---------------|-----------------|---------------|
+| R1 | Systems | `cloud-native-systems-engineer` | `{session_model}` | `{sha}` |
+| R1 | Security | `cloud-native-security-sme` | `{session_model}` | `{sha}` |
+| R1 | Architect | `cloud-native-distributed-systems-architect` | `{session_model}` | `{sha}` |
+| R1 | SRE | `cloud-native-site-reliability-engineer` | `{session_model}` | `{sha}` |
 ### Findings Addressed
 {For each fixed finding across all rounds:}
 - **{finding.id}** ({severity}) — {brief description} → Fixed in R{round}
@@ -485,8 +485,11 @@ Before declaring the loop terminated, audit the council composition record:
 
 1. **Enumerate every counted round** in the progression report.
 2. **For each round, locate the per-slot composition row** in the `### Council Composition Audit` table.
-3. **Verify each row** lists an exact `(agent_type, model)` pair from the protocol table (review-pr Phase 3).
-4. **Missing composition data** → treat the round as INVALID. Dispatch a full 4-model council at current HEAD as a new counted corrective round (label `R{n}-corrective`).
+3. **Verify each row**:
+   - The persona must match the protocol table from review-pr Phase 3 (§3.1).
+   - The model must equal the session model in every slot.
+   Any deviation on either field makes the round INVALID.
+4. **Missing composition data** → treat the round as INVALID. Dispatch a full 4-persön council at current HEAD as a new counted corrective round (label `R{n}-corrective`).
 5. **Uncorrected deviation** → dispatch a corrective round at current HEAD. Annotate as `R{n}-superseded`. The corrective replaces the deviant in convergence math.
 6. **Only after every counted round passes** may the loop proceed to §6.6.
 
@@ -542,7 +545,7 @@ Post a `### CI Status Verification` section in the progression report listing ve
 
 Every PR must have ALL of the following before it can be considered merge-ready:
 
-1. **Full 4-model council RFL** completed (not a "quick verification" or "spot check" — the complete multi-model review pipeline)
+1. **Full council RFL** — all 4 specialized reviewers completed (Systems → Security → Architect → SRE), each using the session model with its own persona
 2. **5/5⭐ rating from ALL council slots** with zero actionable findings (strict — no sub-5 acceptable, no carve-outs)
 3. **Council composition verified** — every round's `(agent_type, model)` pairs match the review-pr protocol table (§3.1)
 4. **§2.1 triage verification** completed for any round with 5+ dismissals or any dismissed findings in protected domains (security, content integrity, data integrity, cryptography)
@@ -562,7 +565,7 @@ Every PR must have ALL of the following before it can be considered merge-ready:
 
 ### When to re-run the full RFL
 
-A full 4-model council RFL must be re-run (not just a spot-check) when:
+A full council RFL (all 4 specialized reviewers) must be re-run (not just a spot-check) when:
 
 - The PR is rebased with conflict resolution (any file had merge markers)
 - New commits are pushed after the RFL report was posted
