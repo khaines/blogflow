@@ -14,10 +14,10 @@ import (
 	"github.com/khaines/blogflow/internal/gitops"
 )
 
-// testResolverIL resolves client IPs from RemoteAddr only.
-type testResolverIL struct{}
+// testResolverIP resolves client IPs from RemoteAddr only.
+type testResolverIP struct{}
 
-func (*testResolverIL) ClientIP(r *http.Request) string {
+func (*testResolverIP) ClientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil || host == "" {
 		host = r.RemoteAddr
@@ -25,7 +25,7 @@ func (*testResolverIL) ClientIP(r *http.Request) string {
 	return host
 }
 
-var testResolverIL_ = &testResolverIL{}
+var testResolverIPIns = &testResolverIP{}
 
 func TestWebhookHandler_IPAllowlistBlockedIP(t *testing.T) {
 	t.Parallel()
@@ -43,7 +43,7 @@ func TestWebhookHandler_IPAllowlistBlockedIP(t *testing.T) {
 		Secret:       secret,
 		BranchFilter: "main",
 		AllowedIPs:   []string{"192.168.1.1", "10.0.0.1"}, // Only these IPs allowed
-	}, reloader, webhookLogger(), testResolverIL_)
+	}, reloader, webhookLogger(), testResolverIPIns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestWebhookHandler_IPAllowlistBlockedIP(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
 	req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
 	req.Header.Set("X-Forwarded-For", "1.2.3.4") // Not in allowlist
-	req.RemoteAddr = "1.2.3.4:12345" // Resolver resolves RemoteAddr; set to unmatched IP
+	req.RemoteAddr = "1.2.3.4:12345"             // Resolver resolves RemoteAddr; set to unmatched IP
 
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
@@ -82,7 +82,7 @@ func TestWebhookHandler_IPAllowlistAllowedIP(t *testing.T) {
 		Secret:       secret,
 		BranchFilter: "main",
 		AllowedIPs:   []string{"192.168.1.1", "10.0.0.1"}, // Allow these IPs
-	}, reloader, webhookLogger(), testResolverIL_)
+	}, reloader, webhookLogger(), testResolverIPIns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestWebhookHandler_IPAllowlistAllowedIP(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
 	req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
 	req.Header.Set("X-Forwarded-For", "10.0.0.1") // In allowlist
-	req.RemoteAddr = "10.0.0.1:12345" // Resolver resolves RemoteAddr; set to matched IP
+	req.RemoteAddr = "10.0.0.1:12345"             // Resolver resolves RemoteAddr; set to matched IP
 
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
@@ -121,7 +121,7 @@ func TestWebhookHandler_IPAllowlistEmptyAllowsAll(t *testing.T) {
 		Secret:       secret,
 		BranchFilter: "main",
 		AllowedIPs:   []string{}, // Empty = no allowlist enforcement
-	}, reloader, webhookLogger(), testResolverIL_)
+	}, reloader, webhookLogger(), testResolverIPIns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestWebhookHandler_IPAllowlistMultipleIPs(t *testing.T) {
 	}, func() error {
 		called++
 		return nil
-	}, webhookLogger(), testResolverIL_)
+	}, webhookLogger(), testResolverIPIns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestWebhookHandler_IPAllowlistLogOutput(t *testing.T) {
 		Path:       "/hook",
 		Secret:     secret,
 		AllowedIPs: []string{"10.0.0.1"},
-	}, func() error { return nil }, logger, testResolverIL_)
+	}, func() error { return nil }, logger, testResolverIPIns)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 			Path:          "/hook",
 			Secret:        secret,
 			AllowedEvents: []string{"push"},
-		}, func() error { called++; return nil }, webhookLogger(), testResolverIL_)
+		}, func() error { called++; return nil }, webhookLogger(), testResolverIPIns)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -268,7 +268,7 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 			Path:          "/hook",
 			Secret:        secret,
 			AllowedEvents: []string{"push"},
-		}, func() error { called++; return nil }, webhookLogger(), testResolverIL_)
+		}, func() error { called++; return nil }, webhookLogger(), testResolverIPIns)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -296,7 +296,7 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 			Path:          "/hook",
 			Secret:        secret,
 			AllowedEvents: []string{"push"},
-		}, func() error { called++; return nil }, webhookLogger(), testResolverIL_)
+		}, func() error { called++; return nil }, webhookLogger(), testResolverIPIns)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -319,7 +319,7 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 			Path:          "/hook",
 			Secret:        secret,
 			AllowedEvents: []string{"push", "schedule", "release"},
-		}, func() error { return nil }, webhookLogger(), testResolverIL_)
+		}, func() error { return nil }, webhookLogger(), testResolverIPIns)
 		if err != nil {
 			t.Fatal(err)
 		}

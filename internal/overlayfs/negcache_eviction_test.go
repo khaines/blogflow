@@ -28,8 +28,8 @@ func TestNegativeCachePopulates(t *testing.T) {
 	}
 
 	content := fstest.MapFS{
-		"posts/hello.md":  {Data: []byte("hello")},
-		"static/app.js":   {Data: []byte("1+1")},
+		"posts/hello.md": {Data: []byte("hello")},
+		"static/app.js":  {Data: []byte("1+1")},
 	}
 
 	ofs := NewOverlayFS(theme, defaults, content).WithLayerNames([]string{"theme", "defaults", "content"})
