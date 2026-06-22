@@ -54,14 +54,14 @@ func TestAtomicLoadDuringReload(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for range 1000 {
-			count.Store(count.Load() + 1)
+			count.Add(1)
 			_ = count.Load()
 		}
 		done <- struct{}{}
 	}()
 	<-done
-	got := count.Load()
-	if got != 1000 {
-		t.Errorf("expected 1000, got %d", got)
+	want := count.Load()
+	if want != 1000 {
+		t.Errorf("expected 1000, got %d", want)
 	}
 }

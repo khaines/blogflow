@@ -77,7 +77,7 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
 		s.metricsServer = &http.Server{
 			Addr:              fmt.Sprintf(":%d", cfg.Server.MetricsPort),
-			Handler:           s.recoveryMiddleware(metricsMux),
+			Handler:           s.middleware(metricsMux),
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      cfg.Server.WriteTimeout,

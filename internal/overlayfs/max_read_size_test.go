@@ -3,7 +3,9 @@
 package overlayfs
 
 import (
+	"io/fs"
 	"testing"
+	"testing/fstest"
 )
 
 func TestMaxReadSize64MB(t *testing.T) {
@@ -16,6 +18,16 @@ func TestMaxReadSize64MB(t *testing.T) {
 
 func TestLargeFileRejection(t *testing.T) {
 	t.Parallel()
-	// Test that oversized template files from git pull/sync would be rejected
-	t.Log("template file size enforcement verified via maxReadSize constant")
+	// Verify the default layer respects maxReadSize by creating a large virtual file.
+	bigData := make([]byte, maxReadSize+1)
+	fsys := fstest.MapFS{
+		"bigfile.txt": &fstest.MapFile{Data: bigData},
+	}
+	of := NewOverlayFS(fsys).WithLayerNames([]string{"defaults"})
+	_, err := fs.ReadFile(of, "bigfile.txt")
+	if err == nil {
+		t.Errorf("expected error reading file exceeding maxReadSize, got nil")
+	} else {
+		t.Logf("correctly rejected oversized file: %v", err)
+	}
 }

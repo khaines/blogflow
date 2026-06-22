@@ -24,9 +24,9 @@ func TestEnvOverrideInvalidMetricsPort(t *testing.T) {
 	loader := NewLoader(fsys)
 	_, err := loader.Load()
 	if err == nil {
-		t.Log("expected warning for invalid metrics port")
+		t.Error("expected error for invalid metrics port, got nil")
 	} else {
-		t.Logf("got error: %v", err)
+		t.Logf("got expected error: %v", err)
 	}
 }
 
@@ -49,7 +49,7 @@ func TestEnvOverrideInvalidBool(t *testing.T) {
 	loader := NewLoader(fsys)
 	_, err := loader.Load()
 	if err == nil {
-		t.Log("expected error for non-boolean cache.enabled")
+		t.Error("expected error for non-boolean cache.enabled, got nil")
 	} else {
 		t.Logf("got expected error: %v", err)
 	}

@@ -164,8 +164,12 @@ func TestWebhookHandler_WrongBranch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rec.Code, http.StatusAccepted)
+	}
+
+	if rec.Header().Get("X-Blogflow-Branch-Skipped") == "" {
+		t.Error("expected X-Blogflow-Branch-Skipped header")
 	}
 
 	if called.Load() {

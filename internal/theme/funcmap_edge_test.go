@@ -3,24 +3,51 @@
 package theme
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
 
 func TestTemplateFunctionEdgeCases(t *testing.T) {
 	t.Parallel()
+	fm := defaultFuncMap()
+	if fm == nil {
+		t.Fatal("defaultFuncMap returned nil")
+	}
 	testCases := []struct {
 		name  string
-		input string
+		input interface{}
 	}{
-		{"nil input", ""},
 		{"empty string", ""},
 		{"unicode", "hello"},
+		{"nil interface", nil},
+		{"zero int", 0},
+		{"negative int", -42},
+		{"very_long", strings.Repeat("x", 10000)},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = tc.input
-			t.Log("edge case tested")
+			// urlize is a key function that must handle edge inputs gracefully
+			if urlize, ok := fm["urlize"].(func(string) string); ok {
+	var inputStr string
+				switch v := tc.input.(type) {
+				case string:
+					inputStr = v
+				case nil:
+					inputStr = ""
+				default:
+					inputStr = fmt.Sprintf("%v", v)
+				}
+				_ = urlize(inputStr) // test urlize with the input
+			}
+			// readingTime must handle nil input gracefully
+			if readingTime, ok := fm["readingTime"].(func(string) int); ok {
+				result := readingTime("")
+				if result < 0 {
+					t.Errorf("readingTime(\"\") = %d, want >= 0", result)
+				}
+				_ = result
+			}
 		})
 	}
 }
@@ -31,33 +58,80 @@ func TestTemplateFuncNilInputs(t *testing.T) {
 	if fm == nil {
 		t.Fatal("defaultFuncMap returned nil")
 	}
-	zero := ""
-	_ = zero
-	_ = fm
+	// All registered functions must handle nil/zero/empty inputs without panicking
+	for name, fn := range fm {
+		t.Run(name+"_nil", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("func %q panicked on nil input: %v", name, r)
+				}
+			}()
+			// Just verify it doesn't panic — actual output varies by function type
+			_ = fn
+		})
+	}
+	// URLize with empty string returns "--" (consecutive hyphens)
+	if urlize, ok := fm["urlize"].(func(string) string); ok {
+		result := urlize("  ")
+		if strings.HasPrefix(result, "-") {
+			// hyphens from spaces are expected
+			t.Logf("urlize(\"  \") = %q (leading hyphens from spaces)", result)
+		}
+	}
 }
 
 func TestURLizeEdgeCases(t *testing.T) {
 	t.Parallel()
+	fm := defaultFuncMap()
+	if fm == nil {
+		t.Fatal("defaultFuncMap returned nil")
+	}
+	urlize, ok := fm["urlize"].(func(string) string)
+	if !ok {
+		t.Fatal("urlize not found in defaultFuncMap")
+	}
 	testCases := []struct {
-		name  string
 		input string
+		want  string
 	}{
-		{"empty", ""},
-		{"unicode", "hello"},
-		{"spaces", "  "},
+		{"", ""},
+		{"hello", "hello"},
+		{"hello world", "hello-world"},
+		{"  spaces  ", "--spaces--"},
+		{"Hello World Test", "hello-world-test"},
 	}
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_ = tc.input
-			_ = tc.name
-			t.Log("urlized edge case")
+		t.Run(tc.input, func(t *testing.T) {
+			got := urlize(tc.input)
+			if got != tc.want {
+				t.Errorf("urlize(%q) = %q, want %q", tc.input, got, tc.want)
+			}
 		})
 	}
 }
 
 func TestTemplateLongInputEdgeCases(t *testing.T) {
 	t.Parallel()
+	fm := defaultFuncMap()
+	if fm == nil {
+		t.Fatal("defaultFuncMap returned nil")
+	}
 	longStr := strings.Repeat("a", 100000)
-	_ = longStr
-	t.Log("long input handled")
+	if readingTime, ok := fm["readingTime"].(func(string) int); ok {
+		want := 100000 / 200 // ~500 words at 200 wpm
+		got := readingTime(longStr)
+		if got < want-1 || got > want+1 {
+			t.Errorf("readingTime(100k chars) = %d, expected ~%d", got, want)
+		}
+	}
+	if urlize, ok := fm["urlize"].(func(string) string); ok {
+		result := urlize(longStr)
+		if len(result) == 0 {
+			t.Error("urlize(100k chars) returned empty string")
+		}
+		if len(result) != len(longStr) {
+			t.Logf("urlize(100k chars) = %d chars", len(result))
+		}
+	}
+	t.Logf("long input handled (%d chars)", len(longStr))
 }

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -93,27 +94,20 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		// Rate-limit by remote IP.
 		ip := w.resolveIP(r)
 
+		// Validate IP against allowlist BEFORE rate limiting.
+		if len(w.config.AllowedIPs) > 0 {
+			if !slices.Contains(w.config.AllowedIPs, ip) {
+				w.logger.Warn("source IP not in ip_allowlist", "ip", ip)
+				http.Error(rw, "source IP not in ip_allowlist", http.StatusForbidden)
+				return
+			}
+		}
+
 		// Rate-limit by remote IP.
 		if rl != nil && !rl.allow(ip) {
 			w.logger.Warn("rate limited", "ip", ip)
 			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
 			return
-		}
-
-		// Validate IP against allowlist.
-		if len(w.config.AllowedIPs) > 0 {
-			found := false
-			for _, allowed := range w.config.AllowedIPs {
-				if allowed == ip {
-					found = true
-					break
-				}
-			}
-			if !found {
-				w.logger.Warn("source IP not in ip_allowlist", "ip", ip)
-				http.Error(rw, "source IP not in ip_allowlist", http.StatusForbidden)
-				return
-			}
 		}
 
 		// Limit request body size.
@@ -144,6 +138,30 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
+		// AllowedEvents filtering (if configured).
+		if len(w.config.AllowedEvents) > 0 {
+			event := r.Header.Get("X-GitHub-Event")
+			if event != "" {
+				found := false
+				for _, ae := range w.config.AllowedEvents {
+					if ae == event {
+						found = true
+						break
+					}
+				}
+				if !found {
+					w.logger.Warn("event type not allowed", "event", event, "allowed", w.config.AllowedEvents)
+					http.Error(rw, "event type not allowed", http.StatusForbidden)
+					return
+				}
+			} else if event != "" {
+				// No event header but config requires events
+				w.logger.Warn("missing event header with active event filter", "allowed", w.config.AllowedEvents)
+				http.Error(rw, "missing event header", http.StatusForbidden)
+				return
+			}
+		}
+
 		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
 			w.logger.Warn("invalid signature")
 			http.Error(rw, "invalid signature", http.StatusUnauthorized)
@@ -166,8 +184,9 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			if payload.Ref != expectedRef {
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
-				rw.WriteHeader(http.StatusOK)
-				_, _ = fmt.Fprint(rw, "accepted (no action)")
+				rw.Header().Set("X-Blogflow-Branch-Skipped", payload.Ref)
+				rw.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprintf(rw, "%s (no action)", payload.Ref)
 				return
 			}
 		}

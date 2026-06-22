@@ -27,9 +27,6 @@ func TestCSSPartialOverride(t *testing.T) {
 				themeFS["static/main.css"] = &fstest.MapFile{Data: []byte(tc.mainCSS)}
 			}
 
-			main := tc.wantMain
-			_ = main
-
 			data, err := themeFS.ReadFile("static/main.css")
 			if tc.wantMainErr {
 				if err == nil {
@@ -47,9 +44,4 @@ func TestCSSPartialOverride(t *testing.T) {
 	}
 }
 
-func TestCSSFileLoading(t *testing.T) {
-	t.Parallel()
-	testData := fstest.MapFS{}
-	_ = testData
-	t.Log("embedded CSS handling verified")
-}
+
