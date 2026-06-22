@@ -15,14 +15,14 @@ func TestCSSPartialOverride(t *testing.T) {
 
 	themeCustomCSS := `body { color: red; background: #fff; }`
 	themeFS := fstest.MapFS{
-		"static/main.css":    &fstest.MapFile{Data: []byte(themeCustomCSS)},
+		"static/main.css":     &fstest.MapFile{Data: []byte(themeCustomCSS)},
 		"static/override.css": &fstest.MapFile{Data: []byte("override: yes")},
 	}
 	// defaultsFS contains a sibling asset that does NOT get overridden.
 	defaultsFS := fstest.MapFS{
-		"static/main.css":       &fstest.MapFile{Data: []byte("/* default main */")},
-		"static/reset.css":      &fstest.MapFile{Data: []byte("* { margin: 0; }")},
-		"templates/base.html":   &fstest.MapFile{Data: []byte("<!DOCTYPE html>")},
+		"static/main.css":     &fstest.MapFile{Data: []byte("/* default main */")},
+		"static/reset.css":    &fstest.MapFile{Data: []byte("* { margin: 0; }")},
+		"templates/base.html": &fstest.MapFile{Data: []byte("<!DOCTYPE html>")},
 	}
 
 	// Build an overlayFS: theme (index 0) shadows defaults (index 1).

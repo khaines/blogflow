@@ -13,11 +13,11 @@ func TestNegativeCacheBoundedGrowth(t *testing.T) {
 	// Files in theme will be found at layer index 1, triggering negCache entry
 	// (i > 0) that records firstCandidateLayer = 1.
 	theme := fstest.MapFS{
-		"static/main.css":      {Data: []byte("body{}")},
-		"static/style.css":     {Data: []byte("a{}")},
-		"static/js/app.js":     {Data: []byte("1+1")},
-		"templates/base.html":  {Data: []byte("<html>")},
-		"templates/post.html":  {Data: []byte("<article>")},
+		"static/main.css":     {Data: []byte("body{}")},
+		"static/style.css":    {Data: []byte("a{}")},
+		"static/js/app.js":    {Data: []byte("1+1")},
+		"templates/base.html": {Data: []byte("<html>")},
+		"templates/post.html": {Data: []byte("<article>")},
 	}
 
 	ofs := NewOverlayFS(theme).WithLayerNames([]string{"theme"})
@@ -55,11 +55,11 @@ func TestNegativeCacheEvictionWithMultiLayer(t *testing.T) {
 	// layer[1] (defaults): will receive negCache entries for paths found here
 	// (since i=1 > 0), indicating that all prior layers (layer 0) don't have it.
 	themeFiles := fstest.MapFS{
-		"config.yaml":   {Data: []byte("layer: theme")},
+		"config.yaml":     {Data: []byte("layer: theme")},
 		"static/main.css": {Data: []byte("theme-css")},
 	}
 	defaultsFiles := fstest.MapFS{
-		"static/reset.css": {Data: []byte("*+{margin:0}")},
+		"static/reset.css":    {Data: []byte("*+{margin:0}")},
 		"templates/base.html": {Data: []byte("<html>")},
 	}
 

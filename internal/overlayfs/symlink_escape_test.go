@@ -15,11 +15,11 @@ func TestCheckSymlinkSafe_RejectsEscapeFromOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create overlay root: %v", err)
 	}
-	defer os.RemoveAll(overlayRoot)
+	t.Cleanup(func() { _ = os.RemoveAll(overlayRoot) })
 
 	// Create a symlink inside the overlay that points outside it.
 	fakeThemeDir := filepath.Join(overlayRoot, "theme")
-	if err := os.Mkdir(fakeThemeDir, 0o755); err != nil {
+	if err := os.Mkdir(fakeThemeDir, 0o750 /* test fixture */); err != nil {
 		t.Fatalf("create theme dir: %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestCheckSymlinkSafe_HandlesNonexistentPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create overlay root: %v", err)
 	}
-	defer os.RemoveAll(overlayRoot)
+	t.Cleanup(func() { _ = os.RemoveAll(overlayRoot) })
 
 	// A path that doesn't exist should not error (allow fallthrough to next layer).
 	err = checkSymlinkSafe(overlayRoot, "does-not-exist.txt")
@@ -80,7 +80,7 @@ func TestCheckSymlinkSafe_RejectsRootSymlinkEscape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create overlay root: %v", err)
 	}
-	defer os.RemoveAll(overlayRoot)
+	t.Cleanup(func() { _ = os.RemoveAll(overlayRoot) })
 
 	// Create a symlink at the root level pointing outside.
 	absTemp, err := filepath.EvalSymlinks(os.TempDir())
@@ -106,20 +106,20 @@ func TestCheckSymlinkSafe_RejectsNestedChainEscape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create overlay root: %v", err)
 	}
-	defer os.RemoveAll(overlayRoot)
+	t.Cleanup(func() { _ = os.RemoveAll(overlayRoot) })
 
 	// Create a chain: inside-overlay -> leaf-dir  -> os.TempDir()
 	chainDir := filepath.Join(overlayRoot, "chain")
-	if err := os.Mkdir(chainDir, 0o755); err != nil {
+	if err := os.Mkdir(chainDir, 0o750 /* test fixture */); err != nil {
 		t.Fatalf("create chain dir: %v", err)
 	}
 
 	linkTarget := filepath.Join(overlayRoot, "leaf")
 	leafFile := filepath.Join(linkTarget, "file.txt")
-	if err := os.MkdirAll(linkTarget, 0o755); err != nil {
+	if err := os.MkdirAll(linkTarget, 0o750 /* test fixture */); err != nil {
 		t.Fatalf("create leaf dir: %v", err)
 	}
-	if err := os.WriteFile(leafFile, []byte("safe"), 0o644); err != nil {
+	if err := os.WriteFile(leafFile, []byte("safe"), 0o600 /* test fixture */); err != nil {
 		t.Fatalf("write leaf file: %v", err)
 	}
 
@@ -157,10 +157,10 @@ func TestOverlayFS_SymlinkOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create overlay root: %v", err)
 	}
-	defer os.RemoveAll(overlayRoot)
+	t.Cleanup(func() { _ = os.RemoveAll(overlayRoot) })
 
 	targetFile := filepath.Join(overlayRoot, "target.txt")
-	if err := os.WriteFile(targetFile, []byte("safe content"), 0o644); err != nil {
+	if err := os.WriteFile(targetFile, []byte("safe content"), 0o600 /* test fixture */); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
 
@@ -168,10 +168,10 @@ func TestOverlayFS_SymlinkOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create upper dir: %v", err)
 	}
-	defer os.RemoveAll(upperDir)
+	t.Cleanup(func() { _ = os.RemoveAll(upperDir) })
 
 	// Write a normal file in the upper layer.
-	if err := os.WriteFile(filepath.Join(upperDir, "upper.txt"), []byte("upper"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(upperDir, "upper.txt"), []byte("upper"), 0o600 /* test fixture */); err != nil {
 		t.Fatalf("write upper file: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestOverlayFS_SymlinkOpen(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Fatalf("upperRoot %q is not a resolvable directory", upperRoot)
 	}
-
+	// Open a file from the lower layer — should succeed.
 	f, err := ofs.Open("target.txt")
 	if err != nil {
 		t.Fatalf("Open lower-layer file: %v", err)
