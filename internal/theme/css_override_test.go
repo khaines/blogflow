@@ -11,9 +11,9 @@ import (
 func TestCSSPartialOverride(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
-		name      string
-		mainCSS   string
-		wantMain  string
+		name        string
+		mainCSS     string
+		wantMain    string
 		wantMainErr bool
 	}{
 		{"partial override single file", `body { color: red; }`, `body { color: red; }`, false},
@@ -43,5 +43,3 @@ func TestCSSPartialOverride(t *testing.T) {
 		})
 	}
 }
-
-

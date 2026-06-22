@@ -29,7 +29,7 @@ func TestTemplateFunctionEdgeCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// urlize is a key function that must handle edge inputs gracefully
 			if urlize, ok := fm["urlize"].(func(string) string); ok {
-	var inputStr string
+				var inputStr string
 				switch v := tc.input.(type) {
 				case string:
 					inputStr = v

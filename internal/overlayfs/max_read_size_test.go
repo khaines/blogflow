@@ -19,7 +19,7 @@ func TestMaxReadSize64MB(t *testing.T) {
 func TestLargeFileRejection(t *testing.T) {
 	t.Parallel()
 	// Verify the default layer respects maxReadSize by creating a large virtual file.
-	bigData := make([]byte, maxReadSize+1)
+	bigData := make([]byte, maxReadSize+1) //nolint:gosec // test only — bounded by config constant
 	fsys := fstest.MapFS{
 		"bigfile.txt": &fstest.MapFile{Data: bigData},
 	}

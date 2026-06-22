@@ -134,9 +134,9 @@ func TestWebhookHandler_IPAllowlistMultipleIPs(t *testing.T) {
 	called := 0
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
-		Path:        "/hook",
-		Secret:      secret,
-		AllowedIPs:  []string{"172.16.0.1", "172.16.0.2", "172.16.0.3"},
+		Path:       "/hook",
+		Secret:     secret,
+		AllowedIPs: []string{"172.16.0.1", "172.16.0.2", "172.16.0.3"},
 	}, func() error {
 		called++
 		return nil

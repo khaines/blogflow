@@ -53,5 +53,3 @@ func TestCachePerformanceBudget(t *testing.T) {
 	}
 	t.Log("cache performance budget test passed (100 iterations, all non-5xx)")
 }
-
-
