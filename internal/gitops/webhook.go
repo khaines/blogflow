@@ -92,10 +92,28 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 
 		// Rate-limit by remote IP.
 		ip := w.resolveIP(r)
+
+		// Rate-limit by remote IP.
 		if rl != nil && !rl.allow(ip) {
 			w.logger.Warn("rate limited", "ip", ip)
 			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
 			return
+		}
+
+		// Validate IP against allowlist.
+		if len(w.config.AllowedIPs) > 0 {
+			found := false
+			for _, allowed := range w.config.AllowedIPs {
+				if allowed == ip {
+					found = true
+					break
+				}
+			}
+			if !found {
+				w.logger.Warn("source IP not in ip_allowlist", "ip", ip)
+				http.Error(rw, "source IP not in ip_allowlist", http.StatusForbidden)
+				return
+			}
 		}
 
 		// Limit request body size.

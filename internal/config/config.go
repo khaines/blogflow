@@ -94,6 +94,7 @@ type WebhookConfig struct {
 	Path          string   `yaml:"path"`
 	Secret        string   `yaml:"-"` // never from YAML — env var only
 	AllowedEvents []string `yaml:"allowed_events"`
+	AllowedIPs    []string `yaml:"allowed_ips"`
 	BranchFilter  string   `yaml:"branch_filter"`
 	RateLimit     int      `yaml:"rate_limit"`
 	MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default (1 MB)
