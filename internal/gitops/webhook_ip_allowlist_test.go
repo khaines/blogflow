@@ -215,7 +215,7 @@ func TestWebhookHandler_IPAllowlistLogOutput(t *testing.T) {
 func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 	t.Parallel()
 
-	secret := "valid-test-secret-long-enough-32bytes!!!"
+	secret := "valid-test-secret-long-enough-32bytes!!!" //nolint:gosec // test fixture
 
 	t.Run("allowed_event_accepted", func(t *testing.T) {
 		t.Parallel()

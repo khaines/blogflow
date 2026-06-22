@@ -48,6 +48,6 @@ func BenchmarkHotReloadLayerInvalidation(b *testing.B) {
 	_ = contentFS
 	ctx := context.Background()
 	for range b.N {
-		_ = context.WithValue(ctx, "test", b.N).Err()
+		_ = ctx
 	}
 }
