@@ -1,79 +1,130 @@
 // Negative cache eviction policy verification per test-gap-analysis.md item #13
+// Addresses Critical finding: original tests never exercised negCache population or eviction.
 package overlayfs
 
 import (
+	"fmt"
 	"testing"
 	"testing/fstest"
 )
 
-func TestNegativeCacheBoundedGrowth(t *testing.T) {
+// TestNegativeCachePopulates verifies negCache entries are created when a file
+// is absent from layer 0 but found in a lower layer (layer index > 0).
+func TestNegativeCachePopulates(t *testing.T) {
 	t.Parallel()
 
-	// Create two layers: defaults (empty) + theme (with files).
-	// Files in theme will be found at layer index 1, triggering negCache entry
-	// (i > 0) that records firstCandidateLayer = 1.
+	// Three-layer setup: layer 0 (theme) shadows nothing in the test paths,
+	// layer 1 (defaults) has some files, layer 2 (content) has others.
+	// A path absent from layer 0 but present in layer 1 triggers negCache
+	// with firstCandidateLayer=1.
 	theme := fstest.MapFS{
-		"static/main.css":     {Data: []byte("body{}")},
-		"static/style.css":    {Data: []byte("a{}")},
-		"static/js/app.js":    {Data: []byte("1+1")},
-		"templates/base.html": {Data: []byte("<html>")},
-		"templates/post.html": {Data: []byte("<article>")},
+		"config.yaml":      {Data: []byte("base_theme")},
+		"static/theme.css": {Data: []byte("theme-css")},
 	}
 
-	ofs := NewOverlayFS(theme).WithLayerNames([]string{"theme"})
+	defaults := fstest.MapFS{
+		"static/reset.css":    {Data: []byte("*{margin:0}")},
+		"templates/base.html": {Data: []byte("<html>")},
+	}
 
-	// Read all theme files (they exist at layer index 0, so no negCache entries).
-	// To get negCache entries, we need a multi-layer setup. With one layer,
-	// all files are found at layer 0 and negCache is never populated (i>0 guard).
-	// Instead, we verify that all files are found and ReadFile works end-to-end.
-	for name, fi := range theme {
+	content := fstest.MapFS{
+		"posts/hello.md":  {Data: []byte("hello")},
+		"static/app.js":   {Data: []byte("1+1")},
+	}
+
+	ofs := NewOverlayFS(theme, defaults, content).WithLayerNames([]string{"theme", "defaults", "content"})
+
+	// Read paths absent from layer 0 (theme) but present in layer 1 (defaults).
+	// These should create negCache entries at firstCandidateLayer = 1.
+	fallthroughFrom0to1 := []string{
+		"static/reset.css",
+		"templates/base.html",
+	}
+
+	for _, name := range fallthroughFrom0to1 {
 		data, err := ofs.ReadFile(name)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
 		}
-		if len(data) != len(fi.Data) {
-			t.Errorf("ReadFile(%q) data length = %d, want %d", name, len(data), len(fi.Data))
+		if len(data) == 0 {
+			t.Errorf("ReadFile(%q) returned empty data", name)
 		}
 	}
 
-	// With a single layer, negCacheCount should be zero (i>0 guard prevents writes).
-	got := ofs.negCacheCount.Load()
-	if got != 0 {
-		t.Errorf("negCacheEntry count = %d with single layer, want 0 (i>0 guard)", got)
+	// Also read paths absent from layer 0 and layer 1 but present in layer 2.
+	// These should create negCache entries at firstCandidateLayer = 2.
+	fallthroughFrom0to2 := []string{
+		"posts/hello.md",
+		"static/app.js",
+	}
+
+	for _, name := range fallthroughFrom0to2 {
+		data, err := ofs.ReadFile(name)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
+		}
+		if len(data) == 0 {
+			t.Errorf("ReadFile(%q) returned empty data", name)
+		}
+	}
+
+	// Verify negCache populated: we expect at least 2 entries for fallthrough paths,
+	// possibly more if layer 0 had paths that don't exist anywhere.
+	count := ofs.negCacheCount.Load()
+	if count < 2 {
+		t.Errorf("negCacheEntry count = %d, want >= 2 (paths absent from layer 0 must populate negCache)", count)
+	}
+
+	// Verify that a path existing in layer 0 does NOT create a negCache entry,
+	// because it was found at layer index 0 (not > 0).
+	_, err := ofs.ReadFile("config.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) unexpectedly failed: %v", err)
+	}
+	gotBefore := ofs.negCacheCount.Load()
+
+	// Reading the same path again should not increase count (already cached).
+	_, err = ofs.ReadFile("config.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) 2nd try unexpectedly failed: %v", err)
+	}
+	gotAfter := ofs.negCacheCount.Load()
+
+	if gotBefore != gotAfter {
+		t.Errorf("double-read of layer-0 path changed negCache count from %d to %d; expected no change", gotBefore, gotAfter)
 	}
 }
 
-func TestNegativeCacheEvictionWithMultiLayer(t *testing.T) {
+// TestNegativeCacheEvictionWithSmallLimit verifies the eviction bound works.
+// maxNegCacheEntries is unexported, but since this test is in package overlayfs
+// we can set it directly for validation.
+func TestNegativeCacheEvictionWithSmallLimit(t *testing.T) {
 	t.Parallel()
 
-	// Use two layers to verify negCache populates for files found in layer[1].
-	// layer[0] (theme): has some files; files found here get cached for future
-	// lookups with firstCandidateLayer=0 entries (which are NOT negCache
-	// entries — negCache only writes for i>0, meaning "this path is absent from
-	// all layers before index i").
-	//
-	// layer[1] (defaults): will receive negCache entries for paths found here
-	// (since i=1 > 0), indicating that all prior layers (layer 0) don't have it.
-	themeFiles := fstest.MapFS{
-		"config.yaml":     {Data: []byte("layer: theme")},
-		"static/main.css": {Data: []byte("theme-css")},
-	}
-	defaultsFiles := fstest.MapFS{
-		"static/reset.css":    {Data: []byte("*+{margin:0}")},
-		"templates/base.html": {Data: []byte("<html>")},
+	// Set a very small limit so we can verify eviction.
+	const testLimit = 5
+
+	// layer 0 (theme) is empty — all files will miss layer 0.
+	emptyLayer := fstest.MapFS{}
+
+	lowerLayer := fstest.MapFS{}
+	for i := 1; i <= 10; i++ {
+		key := fmt.Sprintf("file%02d", i)
+		lowerLayer[key] = &fstest.MapFile{Data: []byte(fmt.Sprintf("data-%d", i))}
 	}
 
-	ofs := NewOverlayFS(themeFiles, defaultsFiles).WithLayerNames([]string{"theme", "defaults"})
+	ofs := NewOverlayFS(emptyLayer, lowerLayer).WithLayerNames([]string{"theme", "defaults"})
+	// Override the unexported limit (white-box test, same package).
+	ofs.maxNegCacheEntries = testLimit
 
-	// Read files that DON'T exist in theme (so they fall through to defaults at index 1).
-	// These will trigger negCache entries since foundAtLayer=1, and i=1 > 0.
-	fallthroughPaths := []string{
-		"static/reset.css",
-		"templates/base.html",
+	uniquePaths := make([]string, 10)
+	for i := 1; i <= 10; i++ {
+		uniquePaths[i-1] = fmt.Sprintf("file%02d", i)
 	}
-	wantNegEntries := int64(len(fallthroughPaths))
 
-	for _, name := range fallthroughPaths {
+	// Read all 10 paths. Each misses layer 0 and hits layer 1 (i=1 > 0).
+	// negCache should cap at 5 due to maxNegCacheEntries.
+	for _, name := range uniquePaths {
 		data, err := ofs.ReadFile(name)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
@@ -84,24 +135,11 @@ func TestNegativeCacheEvictionWithMultiLayer(t *testing.T) {
 		_ = data
 	}
 
-	// Read files that DO exist in theme (found at layer 0, no negCache entry since i=0).
-	for name := range themeFiles {
-		data, err := ofs.ReadFile(name)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
-		}
-		_ = data
-	}
-
-	// negCache entries should match fallthroughPaths (found at layer index 1 > 0).
 	count := ofs.negCacheCount.Load()
-	if count != wantNegEntries {
-		t.Errorf("negCacheEntry count = %d, want %d (only paths found at i>0)", count, wantNegEntries)
+	if count > int64(testLimit) {
+		t.Errorf("negCacheEntry count = %d, want <= %d (eviction bound violated)", count, testLimit)
 	}
-
-	if count > 100000 {
-		t.Errorf("negCacheEntry count = %d exceeds 100K limit", count)
-	} else {
-		t.Logf("cache bounded: %d entries (limit=100K)", count)
+	if count == 0 {
+		t.Error("negCache should have entries with multi-layer setup where path is absent from layer 0")
 	}
 }

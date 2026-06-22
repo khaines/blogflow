@@ -38,14 +38,15 @@ type WebhookStrategy struct {
 	ipResolver IPResolver
 }
 
-// SetIPResolver configures a custom IP resolver (e.g. server.ClientIPResolver)
-// for extracting client IPs. When nil, the built-in remoteIP function is used.
+// SetIPResolver updates the IP resolver after construction. Since NewWebhookStrategy
+// now requires a non-nil resolver, this method is provided for testing overrides only.
 func (w *WebhookStrategy) SetIPResolver(r IPResolver) { w.ipResolver = r }
 
 // NewWebhookStrategy creates a new webhook-based sync strategy.
-// Path must be non-empty and start with "/". Secret must be non-empty.
-// An optional IPResolver can be passed to wire authoritative client-IP resolution.
-func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger, resolver ...IPResolver) (*WebhookStrategy, error) {
+// Path must be non-empty and start with "/". Secret must be at least 32 bytes.
+// IPResolver is mandatory — a built-in X-Forwarded-For fallback is disallowed
+// because untrusted XFF data is a server-side request forgery vector.
+func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger, resolver IPResolver) (*WebhookStrategy, error) {
 	if cfg.Path == "" || cfg.Path[0] != '/' {
 		return nil, fmt.Errorf("gitops: webhook path must be non-empty and start with '/' (got %q)", cfg.Path)
 	}
@@ -53,15 +54,22 @@ func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logg
 	if cfg.Secret == "" {
 		return nil, fmt.Errorf("gitops: webhook secret must not be empty")
 	}
+	// F2: Enforce minimum secret length to prevent brute-forcing HMAC-SHA256.
+	if len(cfg.Secret) < 32 {
+		return nil, fmt.Errorf("gitops: webhook.secret must be at least 32 bytes (got %d bytes)", len(cfg.Secret))
+	}
 
 	w := &WebhookStrategy{
 		config:   cfg,
 		reloader: reloader,
 		logger:   logger,
 	}
-	if len(resolver) > 0 && resolver[0] != nil {
-		w.ipResolver = resolver[0]
+
+	// F3: IP resolver is mandatory — no fallback to blind X-Forwarded-For trust.
+	if resolver == nil {
+		return nil, fmt.Errorf("gitops: webhook strategy requires an IP resolver (no trusted-proxy boundary)")
 	}
+	w.ipResolver = resolver
 
 	rl := newRateLimiter(cfg.RateLimit)
 	w.handler = w.buildHandler(rl)
@@ -230,7 +238,9 @@ func (w *WebhookStrategy) resolveIP(r *http.Request) string {
 }
 
 // remoteIP extracts the client IP from the request.
-// Checks X-Forwarded-For first (for reverse-proxy deployments), falls back to RemoteAddr.
+// WARNING: This function blindly trusts X-Forwarded-For and must never be used
+// in production. It exists only to support unit tests that cannot inject a real
+// resolver. Production code always provides a resolver via NewWebhookStrategy.
 func remoteIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {

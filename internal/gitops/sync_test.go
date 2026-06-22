@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"testing"
 
 	"github.com/khaines/blogflow/internal/config"
@@ -14,6 +15,15 @@ var noop gitops.ContentReloader = func() error { return nil }
 
 func logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// testIPRes is a simple test IP resolver that returns a fixed IP.
+type testIPRes struct {
+	ipFn func(*http.Request) string
+}
+
+func (r *testIPRes) ClientIP(req *http.Request) string {
+	return r.ipFn(req)
 }
 
 func TestNewStrategy_Watch(t *testing.T) {
@@ -32,12 +42,15 @@ func TestNewStrategy_Watch(t *testing.T) {
 func TestNewStrategy_Webhook(t *testing.T) {
 	t.Parallel()
 
+	res := &testIPRes{
+		ipFn: func(*http.Request) string { return "10.0.0.1" },
+	}
 	cfg := &config.SyncConfig{
 		Strategy: "webhook",
-		Webhook:  config.WebhookConfig{Path: "/_hook", Secret: "test-secret"},
+		Webhook:  config.WebhookConfig{Path: "/_hook", Secret: "test-secret-minimum-32-bytes-required!!!"},
 	}
 
-	s, err := gitops.NewStrategy(cfg, noop, logger())
+	s, err := gitops.NewStrategy(cfg, noop, logger(), res)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,6 +149,10 @@ func TestNewStrategy_WebhookInvalidPath(t *testing.T) {
 func TestStrategy_Name(t *testing.T) {
 	t.Parallel()
 
+	res := &testIPRes{
+		ipFn: func(*http.Request) string { return "10.0.0.1" },
+	}
+
 	cases := []struct {
 		strategy string
 		want     string
@@ -152,13 +169,19 @@ func TestStrategy_Name(t *testing.T) {
 
 			cfg := &config.SyncConfig{Strategy: tc.strategy}
 			if tc.strategy == "webhook" {
-				cfg.Webhook = config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}
+				cfg.Webhook = config.WebhookConfig{Path: "/_hook", Secret: "test-secret-minimum-32-bytes-required!!!"}
 			}
 			if tc.strategy == "poll" {
 				cfg.PollInterval = "5m"
 			}
 
-			s, err := gitops.NewStrategy(cfg, noop, logger())
+			var s gitops.Strategy
+			var err error
+			if tc.strategy == "webhook" {
+				s, err = gitops.NewStrategy(cfg, noop, logger(), res)
+			} else {
+				s, err = gitops.NewStrategy(cfg, noop, logger())
+			}
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.strategy, err)
 			}
@@ -173,14 +196,19 @@ func TestStrategy_Name(t *testing.T) {
 func TestStrategy_StartStop(t *testing.T) {
 	t.Parallel()
 
+	res := &testIPRes{
+		ipFn: func(*http.Request) string { return "10.0.0.1" },
+	}
+
 	strategies := []struct {
-		name string
-		cfg  *config.SyncConfig
+		name  string
+		cfg   *config.SyncConfig
+		needs bool
 	}{
-		{"watch", &config.SyncConfig{Strategy: "watch"}},
-		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
-		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
-		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}},
+		{"watch", &config.SyncConfig{Strategy: "watch"}, false},
+		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret-minimum-32-bytes-required!!!"}}, true},
+		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}, false},
+		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}, false},
 	}
 
 	for _, tc := range strategies {
@@ -188,7 +216,13 @@ func TestStrategy_StartStop(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 
-			s, err := gitops.NewStrategy(tc.cfg, noop, logger())
+			var s gitops.Strategy
+			var err error
+			if tc.needs {
+				s, err = gitops.NewStrategy(tc.cfg, noop, logger(), res)
+			} else {
+				s, err = gitops.NewStrategy(tc.cfg, noop, logger())
+			}
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.name, err)
 			}
@@ -217,14 +251,19 @@ func TestStrategy_StartStop(t *testing.T) {
 func TestStrategy_DoubleStop(t *testing.T) {
 	t.Parallel()
 
+	res := &testIPRes{
+		ipFn: func(*http.Request) string { return "10.0.0.1" },
+	}
+
 	strategies := []struct {
-		name string
-		cfg  *config.SyncConfig
+		name  string
+		cfg   *config.SyncConfig
+		needs bool
 	}{
-		{"watch", &config.SyncConfig{Strategy: "watch"}},
-		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret"}}},
-		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}},
-		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}},
+		{"watch", &config.SyncConfig{Strategy: "watch"}, false},
+		{"webhook", &config.SyncConfig{Strategy: "webhook", Webhook: config.WebhookConfig{Path: "/_hook", Secret: "test-secret-minimum-32-bytes-required!!!"}}, true},
+		{"sidecar", &config.SyncConfig{Strategy: "sidecar"}, false},
+		{"poll", &config.SyncConfig{Strategy: "poll", PollInterval: "5m"}, false},
 	}
 
 	for _, tc := range strategies {
@@ -232,7 +271,13 @@ func TestStrategy_DoubleStop(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 
-			s, err := gitops.NewStrategy(tc.cfg, noop, logger())
+			var s gitops.Strategy
+			var err error
+			if tc.needs {
+				s, err = gitops.NewStrategy(tc.cfg, noop, logger(), res)
+			} else {
+				s, err = gitops.NewStrategy(tc.cfg, noop, logger())
+			}
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.name, err)
 			}

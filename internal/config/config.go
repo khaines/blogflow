@@ -4,7 +4,9 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
+	"net"
 	"time"
 )
 
@@ -103,6 +105,18 @@ type WebhookConfig struct {
 	MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default (1 MB)
 }
 
+// LogValue implements log/slog.LogValuer to mask the Secret field when a
+// WebhookConfig is logged directly (e.g. as an slog field). This prevents
+// raw secret values from appearing in structured logs.
+func (w WebhookConfig) LogValue() slog.Value {
+	type noMethods WebhookConfig // break slog.LogValuer recursion
+	r := noMethods(w)
+	if r.Secret != "" {
+		r.Secret = "[REDACTED]"
+	}
+	return slog.AnyValue(r)
+}
+
 // FeedConfig holds RSS/Atom feed settings.
 type FeedConfig struct {
 	Enabled bool   `yaml:"enabled"`
@@ -173,4 +187,22 @@ func (c Config) LogValue() slog.Value {
 		r.Sync.Webhook.Secret = "[REDACTED]"
 	}
 	return slog.AnyValue(r)
+}
+
+// validateCIDROrIP checks that s is a valid IPv4 address, IPv6 address, or CIDR.
+func validateCIDROrIP(s string) error {
+	if s == "" {
+		return nil
+	}
+	if _, _, err := net.ParseCIDR(s); err == nil {
+		return nil
+	}
+	if net.ParseIP(s) != nil {
+		return nil
+	}
+	return &FieldError{
+		Field:   "<internal>",
+		Value:   s,
+		Message: fmt.Sprintf("invalid IP or CIDR: %q", s),
+	}
 }

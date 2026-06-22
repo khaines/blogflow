@@ -4,6 +4,7 @@ package gitops_test
 import (
 	"bytes"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,19 @@ import (
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/gitops"
 )
+
+// testResolverSE resolves client IPs from RemoteAddr only.
+type testResolverSE struct{}
+
+func (*testResolverSE) ClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		host = r.RemoteAddr
+	}
+	return host
+}
+
+var testResolverSE_ = &testResolverSE{}
 
 func TestWebhookSecretLoggingRedaction(t *testing.T) {
 	t.Parallel()
@@ -25,7 +39,7 @@ func TestWebhookSecretLoggingRedaction(t *testing.T) {
 	ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:   "/hook",
 		Secret: secret,
-	}, reloader, logger)
+	}, reloader, logger, testResolverSE_)
 	if err != nil {
 		t.Fatal(err)
 	}

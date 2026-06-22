@@ -68,6 +68,16 @@ func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
 		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
 	}
 
+	// Assert Prometheus format content in the body.
+	body := resp.Body.String()
+	if body == "" {
+		t.Fatal("/metrics body is empty")
+	}
+	// Prometheus exposition format requires # HELP or # TYPE lines.
+	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
+		t.Errorf("/metrics body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", body[:min(200, len(body))])
+	}
+
 	csp := resp.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")

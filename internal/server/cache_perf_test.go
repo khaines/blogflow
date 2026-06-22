@@ -52,8 +52,8 @@ func TestCachePerformanceBudget(t *testing.T) {
 		start := time.Now()
 		srv.httpServer.Handler.ServeHTTP(resp, req)
 
-		if resp.Code >= 500 {
-			t.Errorf("iteration %d: status code %d, expected < 500", i, resp.Code)
+		if resp.Code < 200 || resp.Code >= 500 {
+			t.Fatalf("iteration %d: unexpected status %d", i, resp.Code)
 		}
 
 		latency := time.Since(start)

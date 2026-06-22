@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,19 @@ import (
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/gitops"
 )
+
+// testIPResolverWL resolves client IPs from RemoteAddr only.
+type testIPResolverWL struct{}
+
+func (*testIPResolverWL) ClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		host = r.RemoteAddr
+	}
+	return host
+}
+
+var testResWL = &testIPResolverWL{}
 
 func signPayload(secret, payload []byte) string {
 	mac := hmac.New(sha256.New, secret)
@@ -36,7 +50,7 @@ func makePayload(ref string) []byte {
 func TestWebhookHandler_ValidSignature(t *testing.T) {
 	t.Parallel()
 
-	secret := "test-secret"
+	secret := "test-secret-for-minimum-32-bytes-ok!"
 
 	var called atomic.Bool
 	reloader := gitops.ContentReloader(func() error {
@@ -48,7 +62,7 @@ func TestWebhookHandler_ValidSignature(t *testing.T) {
 		Path:         "/hook",
 		Secret:       secret,
 		BranchFilter: "main",
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +86,8 @@ func TestWebhookHandler_ValidSignature(t *testing.T) {
 func TestWebhookHandler_InvalidSignature(t *testing.T) {
 	t.Parallel()
 
+	secret := "correct-secret-for-minimum-32-bytes-ok!"
+
 	var called atomic.Bool
 	reloader := gitops.ContentReloader(func() error {
 		called.Store(true)
@@ -80,9 +96,9 @@ func TestWebhookHandler_InvalidSignature(t *testing.T) {
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:         "/hook",
-		Secret:       "correct-secret",
+		Secret:       secret,
 		BranchFilter: "main",
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +128,13 @@ func TestWebhookHandler_MissingSignature(t *testing.T) {
 		return nil
 	})
 
+	secret := "secret-for-minimum-32-bytes-ok-aaaaaa!"
+
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:         "/hook",
-		Secret:       "secret",
+		Secret:       secret,
 		BranchFilter: "main",
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +164,13 @@ func TestWebhookHandler_WrongBranch(t *testing.T) {
 		return nil
 	})
 
-	secret := "secret"
+	secret := "secret-for-minimum-32-bytes-ok-bbbbb!"
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:         "/hook",
-		Secret:       secret,
+		Secret:       "secret-for-minimum-32-bytes-ok-bbbbb!",
 		BranchFilter: "main",
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +178,7 @@ func TestWebhookHandler_WrongBranch(t *testing.T) {
 	payload := makePayload("refs/heads/develop")
 	req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
 	req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+	req.RemoteAddr = "1.2.3.4:1234"
 
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
@@ -186,13 +205,13 @@ func TestWebhookHandler_CorrectBranch(t *testing.T) {
 		return nil
 	})
 
-	secret := "secret"
+	secret := "secret-for-webhook-production-test-res-32bytes!!"
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:         "/hook",
 		Secret:       secret,
 		BranchFilter: "production",
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +237,8 @@ func TestWebhookHandler_BodyTooLarge(t *testing.T) {
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:   "/hook",
-		Secret: "secret",
-	}, func() error { return nil }, webhookLogger())
+		Secret: "x-secret-for-minimum-32-bytes-ok-aaaaaaa",
+	}, func() error { return nil }, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +261,9 @@ func TestWebhookHandler_BodyTooLarge_CustomLimit(t *testing.T) {
 
 	w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path:        "/hook",
-		Secret:      "secret",
+		Secret:      "x-secret-for-minimum-32-bytes-ok-bbbbbbbb!",
 		MaxBodySize: 256, // 256 bytes
-	}, func() error { return nil }, webhookLogger())
+	}, func() error { return nil }, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +286,7 @@ func TestWebhookHandler_EmptySecret(t *testing.T) {
 
 	_, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 		Path: "/hook",
-	}, func() error { return nil }, webhookLogger())
+	}, func() error { return nil }, webhookLogger(), testResWL)
 	if err == nil {
 		t.Fatal("expected error for empty secret")
 	}
@@ -276,7 +295,7 @@ func TestWebhookHandler_EmptySecret(t *testing.T) {
 func TestWebhookHandler_RateLimited(t *testing.T) {
 	t.Parallel()
 
-	secret := "test-secret"
+	secret := "test-secret-for-minimum-32-bytes-ok!"
 
 	var calls atomic.Int64
 	reloader := gitops.ContentReloader(func() error {
@@ -288,7 +307,7 @@ func TestWebhookHandler_RateLimited(t *testing.T) {
 		Path:      "/hook",
 		Secret:    secret,
 		RateLimit: 2,
-	}, reloader, webhookLogger())
+	}, reloader, webhookLogger(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,8 +357,8 @@ func TestWebhookHandler_InvalidPath(t *testing.T) {
 
 			_, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 				Path:   tc.path,
-				Secret: "secret",
-			}, func() error { return nil }, webhookLogger())
+				Secret: "x-secret-for-minimum-32-bytes-ok-cccccccc!",
+			}, func() error { return nil }, webhookLogger(), testResWL)
 			if err == nil {
 				t.Fatalf("expected error for path %q", tc.path)
 			}
@@ -359,7 +378,7 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 		RateLimit:    1,
 	}
 
-	ws, err := gitops.NewWebhookStrategy(cfg, reloader, slog.Default())
+	ws, err := gitops.NewWebhookStrategy(cfg, reloader, slog.Default(), testResWL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,6 +391,7 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
 	req1.Header.Set("X-Hub-Signature-256", sig)
 	req1.Header.Set("X-Forwarded-For", "10.0.0.1")
+	req1.RemoteAddr = "10.0.0.1:12345"
 	rec1 := httptest.NewRecorder()
 	handler.ServeHTTP(rec1, req1)
 	if rec1.Code != http.StatusOK {
@@ -382,6 +402,7 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
 	req2.Header.Set("X-Hub-Signature-256", sig)
 	req2.Header.Set("X-Forwarded-For", "10.0.0.1")
+	req2.RemoteAddr = "10.0.0.1:12346"
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusTooManyRequests {
@@ -392,6 +413,7 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 	req3 := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
 	req3.Header.Set("X-Hub-Signature-256", sig)
 	req3.Header.Set("X-Forwarded-For", "10.0.0.2")
+	req3.RemoteAddr = "10.0.0.2:12347"
 	rec3 := httptest.NewRecorder()
 	handler.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusOK {

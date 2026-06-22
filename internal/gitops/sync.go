@@ -27,7 +27,9 @@ type Strategy interface {
 }
 
 // NewStrategy creates the appropriate sync strategy based on config.
-// An optional IPResolver can be passed (for webhook strategy only).
+// An IPResolver is required when the strategy is "webhook" (mandatory for
+// preventing blind X-Forwarded-For trust); it may be omitted for other
+// strategies (watch, sidecar, poll) that do not resolve client IPs.
 func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.Logger, resolver ...IPResolver) (Strategy, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("gitops: sync config must not be nil")
@@ -45,7 +47,10 @@ func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.
 	case "watch":
 		return NewWatchStrategy(reloader, logger), nil
 	case "webhook":
-		return NewWebhookStrategy(cfg.Webhook, reloader, logger, resolver...)
+		if len(resolver) == 0 || resolver[0] == nil {
+			return nil, fmt.Errorf("gitops: webhook strategy requires an IP resolver (no trusted-proxy boundary)")
+		}
+		return NewWebhookStrategy(cfg.Webhook, reloader, logger, resolver[0])
 	case "sidecar":
 		return NewSidecarStrategy(reloader, logger), nil
 	case "poll":
