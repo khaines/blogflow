@@ -31,16 +31,20 @@
 | Overlay FS must validate all symlinks don't escape to read/write beyond configured layer boundaries; currently tests cover valid overlay resolution but not symlink escapes through `stat.Symlink` paths (especially when malicious user uploads a link in theme's `/static/images/` pointing outside root). |
 
 ### 3\. Webhook IP allowlist enforcement gap
-| Field | Value |
-|-------|---------|
-| When ip_allowlist flag is present the webhook handler should reject all non-listed IPs with HTTP status code; currently rate limiting tests exist but no test validates that invalid source IPs are rejected when filtering enabled, making possible brute-force signature attacks from anywhere. 4\. Webhook secret must be ≥32 bytes enforced at startup (HMAC-SHA256 key length requirement). |
+### 3\. Webhook IP allowlist enforcement gap ✅ [✓] Closed
+|~Field~|~Value~|
+|~~When ip_allowlist flag is present the webhook handler should reject all non-listed IPs with HTTP status code; currently rate limiting tests exist but no test validates that invalid source IPs are rejected when filtering enabled, making possible brute-force signature attacks from anywhere. 4\. Webhook secret must be ≥32 bytes enforced at startup (HMAC-SHA256 key length requirement).~~|
 
-### 4\. Config file size >1 MB rejection not proven
-| Field | Value |
-|-------|--------|
-| Test coverage exists for oversized config but no direct assertion rejects config files exceeding ~1MB with a clear resource-exhaustion prevention (YAML parsing loop can consume memory if payload unbounded). Must verify this guard always activates on large uploads/reloads. 5\. Concurrent HTTP requests reading templates during reload may catch partial configs in-flight; race condition tests should simulate multiple goroutines calling ServeHTTP while Loader.Reload() swaps config atomically to ensure no corrupted reads occur mid-operation (atomic.Pointer swap works theoretically but stress not verified under load). |
+**Resolved**: `internal/config/config.go:97` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:101-105` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in configuration-system.md §2.4 (ARC2 fix).
+### 4\. Config file size >1 MB rejection not proven ✅ [✓] Closed
+|~Field~|~Value~|
+|~~Test coverage exists for oversized config but no direct assertion rejects config files exceeding ~1MB with a clear resource-exhaustion prevention (YAML parsing loop can consume memory if payload unbounded).~~|
 
-### 6\.\`BLOGFLOW_GIT_TOKEN env var never checked for proper injection and logging leak prevention. Need test where clone succeeds with token present AND logs scanned showing the raw secret value doesn't slip into structured log entries anywhere else in codebase (webhook handlers, gitops polling output streams). |
+**Resolved**: `internal/config/loader.go:25` defines `const maxConfigFileSize = 1 << 20` (1 MB). `internal/config/loader.go:132-133` rejects files exceeding this limit with "config file exceeds 1 MB limit". Direct test at `internal/config/config_test.go:263-281` (`TestLoad_FileSizeLimit`) creates a 2 MB file and asserts the 1 MB error message.
+
+### 6.`BLOGFLOW_GIT_TOKEN` env var — injection and logging leak prevention ✅ [✓] Closed
+
+**Resolved**: `internal/gitops/auth.go:38` stores `Token string` in `AuthConfig`. `internal/gitops/auth.go:64` redacts the token in `LogValue()` via `slog.String("token", "[REDACTED]")`. Integration test at `internal/gitops/auth_test.go:216-222` (`TestLoadAuthFromEnv_LogValueRedaction`) asserts the raw token value is absent from logged output and `[REDACTED]` is present.
 
 ---
 

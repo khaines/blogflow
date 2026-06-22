@@ -261,6 +261,13 @@ func (s *Server) MetricsServer() *http.Server {
 	return s.metricsServer
 }
 
+// IPResolver returns the server's ClientIPResolver, which resolves the
+// authoritative client IP behind trusted reverse proxies. The resolver
+// is safe for concurrent use.
+func (s *Server) IPResolver() *ClientIPResolver {
+	return s.ipResolver
+}
+
 // middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.
 func (s *Server) middleware(next http.Handler) http.Handler {
 	// Order: request-ID (outermost) → otelhttp → logging → recovery → security headers → metrics → handler

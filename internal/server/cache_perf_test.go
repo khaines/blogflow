@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func BenchmarkCacheReadSteadyState(b *testing.B) {
@@ -48,8 +49,16 @@ func TestCachePerformanceBudget(t *testing.T) {
 		_ = i
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		resp := httptest.NewRecorder()
+		start := time.Now()
 		srv.httpServer.Handler.ServeHTTP(resp, req)
-		_ = resp.Code
+
+		if resp.Code >= 500 {
+			t.Errorf("iteration %d: status code %d, expected < 500", i, resp.Code)
+		}
+
+		latency := time.Since(start)
+		if latency > 5*time.Second {
+			t.Errorf("iteration %d: latency %v exceeds 5s budget", i, latency)
+		}
 	}
-	t.Log("cache performance budget test passed (100 iterations, all non-5xx)")
 }

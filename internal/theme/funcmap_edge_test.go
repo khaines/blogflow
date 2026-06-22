@@ -41,7 +41,7 @@ func TestTemplateFunctionEdgeCases(t *testing.T) {
 				_ = urlize(inputStr) // test urlize with the input
 			}
 			// readingTime must handle nil input gracefully
-			if readingTime, ok := fm["readingTime"].(func(string) int); ok {
+			if readingTime, ok := fm["readingTime"].(func(any) int); ok {
 				result := readingTime("")
 				if result < 0 {
 					t.Errorf("readingTime(\"\") = %d, want >= 0", result)
@@ -117,11 +117,13 @@ func TestTemplateLongInputEdgeCases(t *testing.T) {
 		t.Fatal("defaultFuncMap returned nil")
 	}
 	longStr := strings.Repeat("a", 100000)
-	if readingTime, ok := fm["readingTime"].(func(string) int); ok {
-		want := 100000 / 200 // ~500 words at 200 wpm
+	if readingTime, ok := fm["readingTime"].(func(any) int); ok {
+		// readingTime counts words via strings.Fields, not raw chars.
+		// "a" repeated 100000 times = 1 word → 1 min at 200 wpm
+		want := 1
 		got := readingTime(longStr)
-		if got < want-1 || got > want+1 {
-			t.Errorf("readingTime(100k chars) = %d, expected ~%d", got, want)
+		if got != want {
+			t.Errorf("readingTime(100k-char-all-same) = %d, expected %d", got, want)
 		}
 	}
 	if urlize, ok := fm["urlize"].(func(string) string); ok {

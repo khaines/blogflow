@@ -44,7 +44,8 @@ func (w *WebhookStrategy) SetIPResolver(r IPResolver) { w.ipResolver = r }
 
 // NewWebhookStrategy creates a new webhook-based sync strategy.
 // Path must be non-empty and start with "/". Secret must be non-empty.
-func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger) (*WebhookStrategy, error) {
+// An optional IPResolver can be passed to wire authoritative client-IP resolution.
+func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger, resolver ...IPResolver) (*WebhookStrategy, error) {
 	if cfg.Path == "" || cfg.Path[0] != '/' {
 		return nil, fmt.Errorf("gitops: webhook path must be non-empty and start with '/' (got %q)", cfg.Path)
 	}
@@ -57,6 +58,9 @@ func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logg
 		config:   cfg,
 		reloader: reloader,
 		logger:   logger,
+	}
+	if len(resolver) > 0 && resolver[0] != nil {
+		w.ipResolver = resolver[0]
 	}
 
 	rl := newRateLimiter(cfg.RateLimit)
@@ -91,7 +95,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
-		// Rate-limit by remote IP.
+		// Resolve client IP for allowlist and rate-limit lookups.
 		ip := w.resolveIP(r)
 
 		// Validate IP against allowlist BEFORE rate limiting.
@@ -103,7 +107,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			}
 		}
 
-		// Rate-limit by remote IP.
+		// Rate-limit by remote IP (after allowlist validation).
 		if rl != nil && !rl.allow(ip) {
 			w.logger.Warn("rate limited", "ip", ip)
 			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)

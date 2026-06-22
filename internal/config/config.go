@@ -89,7 +89,10 @@ type SyncConfig struct {
 }
 
 // WebhookConfig holds webhook receiver settings.
-// IP allowlisting is handled at the infrastructure layer (reverse proxy, K8s NetworkPolicy).
+// IP allowlisting is handled at the application layer via AllowedIPs ([]string); when
+// non-empty, only IPs in the list are permitted (others receive HTTP 403). Empty or
+// nil means no filtering — this mirrors the old note about infrastructure-layer allowlists
+// still being recommended for defense-in-depth (reverse proxy, K8s NetworkPolicy).
 type WebhookConfig struct {
 	Path          string   `yaml:"path"`
 	Secret        string   `yaml:"-"` // never from YAML — env var only

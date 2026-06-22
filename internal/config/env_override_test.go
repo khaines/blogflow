@@ -12,7 +12,7 @@ func TestEnvOverrideInvalidPort(t *testing.T) {
 	loader := NewLoader(fsys)
 	_, err := loader.Load()
 	if err == nil {
-		t.Log("expected error for non-integer port")
+		t.Errorf("expected error for non-integer port")
 	} else {
 		t.Logf("got expected error: %v", err)
 	}

@@ -263,7 +263,7 @@ type WebhookConfig struct {
     Secret        string   `yaml:"-"` // NEVER from YAML — env var only
     AllowedEvents []string `yaml:"allowed_events" validate:"required_if=Strategy webhook,dive,oneof=push ping"`
     BranchFilter  string   `yaml:"branch_filter"  validate:"required_if=Strategy webhook,max=250"`
-    IPAllowlist   bool     `yaml:"ip_allowlist"`
+    AllowedIPs    []string `yaml:"allowed_ips"` // empty = no filtering; non-empty = only listed IPs pass
     RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
 }
 
@@ -326,7 +326,7 @@ sync:
     secret: "${BLOGFLOW_WEBHOOK_SECRET}"  # rejected — must use env var
     allowed_events: ["push"]
     branch_filter: "main"
-    ip_allowlist: true
+    allowed_ips: []
     rate_limit: 10
 
 feed:
@@ -380,7 +380,7 @@ sync:
     path: "/api/webhook"
     allowed_events: ["push"]
     branch_filter: "main"
-    ip_allowlist: true
+    allowed_ips: []
     rate_limit: 10
 
 feed:

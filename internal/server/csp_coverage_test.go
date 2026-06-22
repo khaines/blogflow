@@ -32,7 +32,7 @@ func TestCSPOn404(t *testing.T) {
 	}
 }
 
-func TestCSPViaMiddlewareOnMainMux(t *testing.T) {
+func TestCSPOnSeparateMetricsPort(t *testing.T) {
 	t.Parallel()
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 9090
@@ -42,7 +42,49 @@ func TestCSPViaMiddlewareOnMainMux(t *testing.T) {
 	s.httpServer.Handler.ServeHTTP(resp, req)
 	csp := resp.Header().Get("Content-Security-Policy")
 	if csp == "" {
-		t.Fatal("CSP header missing on /metrics response")
+		t.Fatal("CSP header missing on main server response when MetricsPort is set")
+	}
+}
+
+// TestCSPViaMiddlewareOnMetricsServer verifies that the dedicated metrics
+// port also carries security headers (CSP, X-Frame-Options, etc.) via the
+// same middleware chain as the main server.
+func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
+	t.Parallel()
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 9090
+	s := New(cfg, nil)
+
+	ms := s.MetricsServer()
+	if ms == nil {
+		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	resp := httptest.NewRecorder()
+	ms.Handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	csp := resp.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")
+	}
+
+	// Also verify other security headers arrive identically on metrics port.
+	wantHeaders := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "SAMEORIGIN",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=(), interest-cohort=()",
+	}
+	for key, want := range wantHeaders {
+		got := resp.Header().Get(key)
+		if got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
 	}
 }
 

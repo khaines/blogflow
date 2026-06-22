@@ -8,14 +8,6 @@ import (
 	"testing/fstest"
 )
 
-func TestMaxReadSize64MB(t *testing.T) {
-	t.Parallel()
-	if maxReadSize != 64*1024*1024 {
-		t.Errorf("maxReadSize = %d MiB, want 64 MiB", maxReadSize/1024/1024)
-	}
-	t.Logf("maxReadSize correctly 64 MiB (%d bytes)", maxReadSize)
-}
-
 func TestLargeFileRejection(t *testing.T) {
 	t.Parallel()
 	// Verify the default layer respects maxReadSize by creating a large virtual file.

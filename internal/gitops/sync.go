@@ -27,7 +27,8 @@ type Strategy interface {
 }
 
 // NewStrategy creates the appropriate sync strategy based on config.
-func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.Logger) (Strategy, error) {
+// An optional IPResolver can be passed (for webhook strategy only).
+func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.Logger, resolver ...IPResolver) (Strategy, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("gitops: sync config must not be nil")
 	}
@@ -44,7 +45,7 @@ func NewStrategy(cfg *config.SyncConfig, reloader ContentReloader, logger *slog.
 	case "watch":
 		return NewWatchStrategy(reloader, logger), nil
 	case "webhook":
-		return NewWebhookStrategy(cfg.Webhook, reloader, logger)
+		return NewWebhookStrategy(cfg.Webhook, reloader, logger, resolver...)
 	case "sidecar":
 		return NewSidecarStrategy(reloader, logger), nil
 	case "poll":
