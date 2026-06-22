@@ -32,12 +32,12 @@ func TestCSPOn404(t *testing.T) {
 	}
 }
 
-func TestCSPOnMetrics(t *testing.T) {
+func TestCSPViaMiddlewareOnMainMux(t *testing.T) {
 	t.Parallel()
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 9090
 	s := New(cfg, nil)
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
 	csp := resp.Header().Get("Content-Security-Policy")

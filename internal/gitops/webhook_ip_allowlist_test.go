@@ -211,3 +211,111 @@ func TestWebhookHandler_IPAllowlistLogOutput(t *testing.T) {
 		t.Fatalf("expected blocked IP in log, got: %s", logs)
 	}
 }
+
+func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
+	t.Parallel()
+
+	secret := "valid-test-secret-long-enough-32bytes!!!"
+
+	t.Run("allowed_event_accepted", func(t *testing.T) {
+		t.Parallel()
+		called := 0
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:          "/hook",
+			Secret:        secret,
+			AllowedEvents: []string{"push"},
+		}, func() error { called++; return nil }, webhookLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("allowed event: got %d, want %d", rec.Code, http.StatusOK)
+		}
+		if called != 1 {
+			t.Fatalf("expected 1 reload call, got %d", called)
+		}
+	})
+
+	t.Run("disallowed_event_rejected", func(t *testing.T) {
+		t.Parallel()
+		called := 0
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:          "/hook",
+			Secret:        secret,
+			AllowedEvents: []string{"push"},
+		}, func() error { called++; return nil }, webhookLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("disallowed event: got %d, want %d", rec.Code, http.StatusForbidden)
+		}
+		if called != 0 {
+			t.Fatal("reloader should not be called for disallowed event")
+		}
+		if !strings.Contains(rec.Body.String(), "event type not allowed") {
+			t.Errorf("body should contain event type not allowed, got: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("missing_event_header_rejected", func(t *testing.T) {
+		t.Parallel()
+		called := 0
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:          "/hook",
+			Secret:        secret,
+			AllowedEvents: []string{"push"},
+		}, func() error { called++; return nil }, webhookLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("missing event: got %d, want %d", rec.Code, http.StatusForbidden)
+		}
+		if called != 0 {
+			t.Fatal("reloader should not be called for missing event header")
+		}
+	})
+
+	t.Run("multiple_allowed_events", func(t *testing.T) {
+		t.Parallel()
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:          "/hook",
+			Secret:        secret,
+			AllowedEvents: []string{"push", "schedule", "release"},
+		}, func() error { return nil }, webhookLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range []string{"push", "schedule", "release"} {
+			t.Run(event, func(t *testing.T) {
+				payload := makePayload("refs/heads/main")
+				req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+				req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+				req.Header.Set("X-GitHub-Event", event)
+				rec := httptest.NewRecorder()
+				w.Handler().ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("event %s: got %d, want %d", event, rec.Code, http.StatusOK)
+				}
+			})
+		}
+	})
+}

@@ -141,23 +141,16 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		// AllowedEvents filtering (if configured).
 		if len(w.config.AllowedEvents) > 0 {
 			event := r.Header.Get("X-GitHub-Event")
-			if event != "" {
-				found := false
-				for _, ae := range w.config.AllowedEvents {
-					if ae == event {
-						found = true
-						break
-					}
-				}
-				if !found {
-					w.logger.Warn("event type not allowed", "event", event, "allowed", w.config.AllowedEvents)
-					http.Error(rw, "event type not allowed", http.StatusForbidden)
-					return
-				}
-			} else if event != "" {
-				// No event header but config requires events
-				w.logger.Warn("missing event header with active event filter", "allowed", w.config.AllowedEvents)
+			if event == "" {
+				w.logger.Warn("missing event header with active event filter",
+					"allowed", w.config.AllowedEvents)
 				http.Error(rw, "missing event header", http.StatusForbidden)
+				return
+			}
+			if !slices.Contains(w.config.AllowedEvents, event) {
+				w.logger.Warn("event type not allowed",
+					"event", event, "allowed", w.config.AllowedEvents)
+				http.Error(rw, "event type not allowed", http.StatusForbidden)
 				return
 			}
 		}
