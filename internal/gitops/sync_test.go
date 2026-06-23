@@ -259,9 +259,9 @@ func TestNewWebhookStrategy_SecretBoundary(t *testing.T) {
 	reloader := func() error { return nil }
 
 	cases := []struct {
-		name     string
-		secret   string
-		wantErr  bool
+		name    string
+		secret  string
+		wantErr bool
 	}{
 		{"31_bytes", strings.Repeat("a", 31), true},
 		{"32_bytes", strings.Repeat("a", 32), false},
