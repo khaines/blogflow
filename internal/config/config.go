@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -191,6 +192,7 @@ func (c Config) LogValue() slog.Value {
 
 // validateCIDROrIP checks that s is a valid IPv4 address, IPv6 address, or CIDR.
 func validateCIDROrIP(s string) error {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil
 	}

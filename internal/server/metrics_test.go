@@ -29,8 +29,9 @@ func TestMetricsEndpointReturns200(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "go_goroutines") {
-		t.Fatal("expected prometheus metrics in response body")
+	// Verify BlogFlow metrics, not just Go runtime metrics.
+	if !strings.Contains(body, "blogflow_http_requests_total") {
+		t.Fatal("expected blogflow prometheus metrics (e.g. blogflow_http_requests_total) in response body")
 	}
 }
 
