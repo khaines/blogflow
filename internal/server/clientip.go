@@ -19,6 +19,7 @@ type ClientIPResolver struct {
 func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			return nil, err

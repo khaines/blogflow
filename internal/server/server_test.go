@@ -780,6 +780,13 @@ func TestMetricsOnSeparatePort(t *testing.T) {
 		errCh <- s.metricsServer.Serve(ln)
 	}()
 
+	// Make a request through the main server first so blogflow_http_requests_total
+	// counter has at least one labeled observation (otherwise the metric has no
+	// data lines and won't appear in the Prometheus exposition output).
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+
 	// Request /metrics on the metrics listener
 	resp, err := http.Get(fmt.Sprintf("http://%s/metrics", ln.Addr().String()))
 	if err != nil {
@@ -789,6 +796,14 @@ func TestMetricsOnSeparatePort(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/metrics status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("/metrics body read error: %v", err)
+	}
+	if !strings.Contains(string(body), "blogflow_http_requests_total") {
+		t.Error("/metrics body missing expected BlogFlow metric blogflow_http_requests_total")
 	}
 
 	// Shut down metrics server

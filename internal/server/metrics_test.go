@@ -13,6 +13,11 @@ import (
 func TestMetricsEndpointReturns200(t *testing.T) {
 	t.Parallel()
 
+	// Pre-populate a blogflow counter observation so blogflow_http_requests_total
+	// has a data line in the Prometheus exposition format (counters with zero
+	// observations produce no output lines).
+	httpRequestsTotal.WithLabelValues("GET", "/_test/obs", "200").Inc()
+
 	handler := MetricsHandler()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()

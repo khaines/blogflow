@@ -194,7 +194,11 @@ func (c Config) LogValue() slog.Value {
 func validateCIDROrIP(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil
+		return &FieldError{
+			Field:   "value",
+			Value:   s,
+			Message: "must not be empty",
+		}
 	}
 	if _, _, err := net.ParseCIDR(s); err == nil {
 		return nil

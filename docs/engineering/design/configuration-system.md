@@ -269,6 +269,7 @@ type WebhookConfig struct {
     BranchFilter  string   `yaml:"branch_filter"  validate:"required_if=Strategy webhook,max=250"`
     AllowedIPs    []string `yaml:"allowed_ips"` // empty = no filtering; non-empty = only listed IPs pass
     RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
+    MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default
 }
 
 // **Implementation note**: `required_if=Strategy webhook` cannot be resolved via struct tags alone because `Strategy` lives in the parent `SyncConfig`, not `WebhookConfig`. Implementation must use a custom cross-struct validator registered with `validate.RegisterStructValidation` (or equivalent), applying webhook-field requirements only when `SyncConfig.Strategy == "webhook"`. The struct tags shown above document the *intent*; the enforcement mechanism is a cross-struct validator.
@@ -332,6 +333,7 @@ sync:
     branch_filter: "main"
     allowed_ips: []
     rate_limit: 10
+    max_body_size: 0  # 0 = default (1 MB)
 
 feed:
   enabled: true
@@ -386,6 +388,7 @@ sync:
     branch_filter: "main"
     allowed_ips: []
     rate_limit: 10
+    max_body_size: 0  # 0 = default (1 MB)
 
 feed:
   enabled: true
