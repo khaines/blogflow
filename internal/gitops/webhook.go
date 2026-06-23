@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -108,7 +109,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 
 		// Validate IP against allowlist BEFORE rate limiting.
 		if len(w.config.AllowedIPs) > 0 {
-			if !slices.Contains(w.config.AllowedIPs, ip) {
+			if !ipInCIDRs(ip, w.config.AllowedIPs) {
 				w.logger.Warn("source IP not in ip_allowlist", "ip", ip)
 				http.Error(rw, "source IP not in ip_allowlist", http.StatusForbidden)
 				return
@@ -207,6 +208,32 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(rw, "ok")
 	}
+}
+
+// ipInCIDRs checks if string IP matches any entry in the allowed list.
+// Entries in allowedIPs can be bare IPs (exact match) or CIDRs (range match).
+func ipInCIDRs(ip string, allowedIPs []string) bool {
+	// First check for exact match (bare IP).
+	for _, entry := range allowedIPs {
+		if entry == ip {
+			return true
+		}
+	}
+	// Then check CIDR ranges.
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, entry := range allowedIPs {
+		_, cidr, err := net.ParseCIDR(entry)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifySignature validates an HMAC-SHA256 signature with constant-time comparison.

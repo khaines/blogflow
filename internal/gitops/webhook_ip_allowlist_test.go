@@ -338,3 +338,90 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 		}
 	})
 }
+
+
+// TestWebhookHandler_IPAllowlistCIDR verifies that AllowedIPs entries
+// supporting CIDR notation actually work — a CIDR entry should allow any
+// client IP within that range (the production fix that was missing from the
+// prior RFL rounds).
+func TestWebhookHandler_IPAllowlistCIDR(t *testing.T) {
+	const (
+		cidr   = "10.0.0.0/8"
+		secret = "abcdefghijklmnopqrstuvwxyz123456"
+	)
+
+	secretBytes := []byte(secret)
+
+	t.Run("CIDR_entry_allows_inside_range", func(t *testing.T) {
+		reloaderCalled := atomic.Bool{}
+		reloader := func() error { reloaderCalled.Store(true); return nil }
+
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "10.0.0.1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{cidr},
+		}, reloader, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for IP inside CIDR, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		if !reloaderCalled.Load() {
+			t.Fatal("reloader should have been called")
+		}
+	})
+
+	t.Run("CIDR_entry_blocks_outside_range", func(t *testing.T) {
+		reloaderCalled := atomic.Bool{}
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "192.168.1.1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{cidr},
+		}, func() error { reloaderCalled.Store(true); return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for IP outside CIDR, got %d", rec.Code)
+		}
+		if reloaderCalled.Load() {
+			t.Fatal("reloader should NOT have been called for blocked IP")
+		}
+	})
+
+	t.Run("mixed_bare_IP_and_CIDR", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "10.0.0.2" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"192.168.1.1", cidr},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for IP matched by CIDR (mixed allowlist), got %d", rec.Code)
+		}
+	})
+}

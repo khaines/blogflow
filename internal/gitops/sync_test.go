@@ -274,21 +274,20 @@ func TestNewWebhookStrategy_SecretBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			var err error
-			if tc.wantErr {
-				_, err = gitops.NewWebhookStrategy(config.WebhookConfig{
-					Path:   "/hook",
-					Secret: tc.secret,
-				}, reloader, logger(), nil)
-			} else {
-				_, err = gitops.NewWebhookStrategy(config.WebhookConfig{
-					Path:   "/hook",
-					Secret: tc.secret,
-				}, reloader, logger(), testResolver)
-			}
+			// Pass testResolver to ALL cases so we test the secret-length check,
+			// not the nil-resolver check (which fires first in the constructor).
+			_, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+				Path:   "/hook",
+				Secret: tc.secret,
+			}, reloader, logger(), testResolver)
 			if (err != nil) != tc.wantErr {
-				t.Errorf("NewWebhookStrategy(secret=%q) error = %v, wantErr = %v",
-					tc.secret, err, tc.wantErr)
+				t.Errorf("NewWebhookStrategy(secret=%q(%d bytes)) error = %v, wantErr = %v",
+					tc.secret, len(tc.secret), err, tc.wantErr)
+			}
+			if tc.name == "31_bytes" && err != nil {
+				if !strings.Contains(err.Error(), "32") {
+					t.Errorf("expected '32' in error message for 31-byte secret, got: %v", err)
+				}
 			}
 		})
 	}

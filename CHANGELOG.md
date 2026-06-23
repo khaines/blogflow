@@ -2,6 +2,25 @@
 
 ## main / unreleased
 
+### Security
+
+* [ENHANCEMENT] Webhook IP allowlist now supports CIDR notation in `allowed_ips` (previously only bare IPs were matched, making CIDR entries silently non-functional).
+* [ENHANCEMENT] Webhook: mandatory `IPResolver` argument on `NewWebhookStrategy` — the built-in X-Forwarded-For fallback is no longer used, preventing blind trust in untrusted XFF data.
+
+### Configuration
+
+* [CHANGE] WebhookConfig: `ip_allowlist bool` renamed to `allowed_ips []string` with CIDR-aware matching at enforcement time. Existing config with `ip_allowlist: true` is silently treated as `allowed_ips: []` (no filtering). Operators should update to use `allowed_ips` in their configuration.
+* [ENHANCEMENT] ServerConfig gains `MetricsPort`, `TLSTerminated`, `HSTSMaxAge`, and `TrustedProxyCIDRs` fields for observability and TLS termination support.
+* [ENHANCEMENT] WebhookConfig gains `MaxBodySize` to configure the POST body size limit (default 1 MB).
+
+### Bug Fixes
+
+* [BUGFIX] Webhook IP allowlist handler now properly matches CIDR entries using `net.IPNet.Contains()` instead of exact-string matching (which silently dropped all CIDR ranges).
+
+### Testing
+
+* [TEST] TestGap: Add comprehensive test coverage for test-gap items #217–#235 including CSP headers, symlink escape, IP allowlist (bare IP + CIDR), webhook secret length, environment override validation, and overlayFS overlay features.
+
 ## 0.4.1 / 2026-05-18
 
 ### BlogFlow
