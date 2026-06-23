@@ -241,10 +241,14 @@ type ThemeConfig struct {
 }
 
 type ServerConfig struct {
-    Port         int           `yaml:"port"          validate:"required,min=1,max=65535"`
-    ReadTimeout  time.Duration `yaml:"read_timeout"  validate:"required,min=1s,max=60s"`
-    WriteTimeout time.Duration `yaml:"write_timeout" validate:"required,min=1s,max=300s"`
-    IdleTimeout  time.Duration `yaml:"idle_timeout"  validate:"required,min=1s,max=600s"`
+    Port              int           `yaml:"port"               validate:"required,min=1,max=65535"`
+    MetricsPort       int           `yaml:"metrics_port"       validate:"omitempty,min=0,max=65535"`   // 0 = disabled (metrics on main port); 1-65535 = separate listener
+    ReadTimeout       time.Duration `yaml:"read_timeout"       validate:"required,min=1s,max=60s"`
+    WriteTimeout      time.Duration `yaml:"write_timeout"      validate:"required,min=1s,max=300s"`
+    IdleTimeout       time.Duration `yaml:"idle_timeout"       validate:"required,min=1s,max=600s"`
+    TLSTerminated     bool          `yaml:"tls_terminated"     validate:"omitempty"`                   // true when behind a TLS-terminating LB/proxy
+    HSTSMaxAge        int           `yaml:"hsts_max_age"       validate:"omitempty,min=0,max=63072000"` // 0 disables HSTS; max 63072000 = 2 years
+    TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs" validate:"omitempty,dive,ip_or_cidr"`  // source-of-trust for X-Forwarded-For
 }
 
 type CacheConfig struct {

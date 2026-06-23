@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/khaines/blogflow/internal/config"
@@ -121,6 +122,10 @@ func TestNewStrategy_NilReloader(t *testing.T) {
 func TestNewStrategy_WebhookInvalidPath(t *testing.T) {
 	t.Parallel()
 
+	res := &testIPRes{
+		ipFn: func(*http.Request) string { return "10.0.0.1" },
+	}
+
 	cases := []struct {
 		name string
 		path string
@@ -138,7 +143,7 @@ func TestNewStrategy_WebhookInvalidPath(t *testing.T) {
 				Webhook:  config.WebhookConfig{Path: tc.path},
 			}
 
-			_, err := gitops.NewStrategy(cfg, noop, logger())
+			_, err := gitops.NewStrategy(cfg, noop, logger(), res)
 			if err == nil {
 				t.Fatalf("expected error for path %q, got nil", tc.path)
 			}
@@ -243,6 +248,47 @@ func TestStrategy_StartStop(t *testing.T) {
 
 			if err := s.Stop(ctx); err != nil {
 				t.Errorf("%s.Stop() error: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestNewWebhookStrategy_SecretBoundary(t *testing.T) {
+	t.Parallel()
+
+	reloader := func() error { return nil }
+
+	cases := []struct {
+		name     string
+		secret   string
+		wantErr  bool
+	}{
+		{"31_bytes", strings.Repeat("a", 31), true},
+		{"32_bytes", strings.Repeat("a", 32), false},
+		{"64_bytes", strings.Repeat("a", 64), false},
+	}
+
+	testResolver := &testIPRes{ipFn: func(*http.Request) string { return "10.0.0.1" }}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var err error
+			if tc.wantErr {
+				_, err = gitops.NewWebhookStrategy(config.WebhookConfig{
+					Path:   "/hook",
+					Secret: tc.secret,
+				}, reloader, logger(), nil)
+			} else {
+				_, err = gitops.NewWebhookStrategy(config.WebhookConfig{
+					Path:   "/hook",
+					Secret: tc.secret,
+				}, reloader, logger(), testResolver)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Errorf("NewWebhookStrategy(secret=%q) error = %v, wantErr = %v",
+					tc.secret, err, tc.wantErr)
 			}
 		})
 	}

@@ -58,14 +58,16 @@ func TestWebhookSecretLoggingRedaction(t *testing.T) {
 	}
 
 	logs := buf.String()
-	if logs == "" {
-		t.Log("no log output captured")
+	if logs == "" || !strings.Contains(logs, "content reloaded") {
+		// No log output or unexpected — just verify secret isn't present
+		if strings.Contains(logs, secret) {
+			t.Errorf("raw secret leaked in logs")
+		}
 		return
 	}
 
+	// Production log should NOT contain the raw secret
 	if strings.Contains(logs, secret) {
-		t.Errorf("raw secret leaked in logs")
-	} else {
-		t.Logf("webhook secret properly redacted")
+		t.Errorf("raw secret leaked in logs: %q", logs)
 	}
 }
