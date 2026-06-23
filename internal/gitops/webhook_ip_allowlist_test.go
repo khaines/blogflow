@@ -339,7 +339,6 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 	})
 }
 
-
 // TestWebhookHandler_IPAllowlistCIDR verifies that AllowedIPs entries
 // supporting CIDR notation actually work — a CIDR entry should allow any
 // client IP within that range (the production fix that was missing from the
