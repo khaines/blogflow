@@ -26,17 +26,16 @@
 
 **Resolved**: `internal/gitops/symlink_escape_test.go` covers symlink escape detection in overlay FS under path-traversal conditions, confirming tests exist that prevent symlinks from escaping layer boundaries.
 
-### 3\. Webhook IP allowlist enforcement gap
 ### 3\. Webhook IP allowlist enforcement gap ✅ [✓] Closed
-|~Field~|~Value~|
-|~~When ip_allowlist flag is present the webhook handler should reject all non-listed IPs with HTTP status code; currently rate limiting tests exist but no test validates that invalid source IPs are rejected when filtering enabled, making possible brute-force signature attacks from anywhere. 4\. Webhook secret must be ≥32 bytes enforced at startup (HMAC-SHA256 key length requirement).~~|
 
 **Resolved**: `internal/config/config.go:97` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:101-105` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in configuration-system.md §2.4 (ARC2 fix).
 ### 4\. Config file size >1 MB rejection not proven ✅ [✓] Closed
-|~Field~|~Value~|
-|~~Test coverage exists for oversized config but no direct assertion rejects config files exceeding ~1MB with a clear resource-exhaustion prevention (YAML parsing loop can consume memory if payload unbounded).~~|
 
 **Resolved**: `internal/config/loader.go:25` defines `const maxConfigFileSize = 1 << 20` (1 MB). `internal/config/loader.go:132-133` rejects files exceeding this limit with "config file exceeds 1 MB limit". Direct test at `internal/config/config_test.go:263-281` (`TestLoad_FileSizeLimit`) creates a 2 MB file and asserts the 1 MB error message.
+
+### 5\. Webhook secret must be ≥32 bytes enforced at startup ✅ [✓] Closed
+
+**Resolved**: `internal/gitops/webhook.go` enforces minimum secret length (32 bytes) in `NewWebhookStrategy`. `internal/gitops/webhook_secret_length_test.go` (`TestNewWebhookStrategy_SecretBoundary`) tests 31, 32, and 64 byte boundary cases. `internal/gitops/webhook_secret_logging_test.go` verifies secret length requirement.
 
 ### 6.`BLOGFLOW_GIT_TOKEN` env var — injection and logging leak prevention ✅ [✓] Closed
 

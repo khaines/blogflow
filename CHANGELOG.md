@@ -9,7 +9,7 @@
 
 ### Configuration
 
-* [CHANGE] WebhookConfig: `ip_allowlist bool` renamed to `allowed_ips []string` with CIDR-aware matching at enforcement time. Existing config with `ip_allowlist: true` is silently treated as `allowed_ips: []` (no filtering). Operators should update to use `allowed_ips` in their configuration.
+* [BREAKING CHANGE] WebhookConfig: `ip_allowlist bool` renamed to `allowed_ips []string` with CIDR-aware matching at enforcement time. Existing config with `ip_allowlist: true` will cause a YAML parse error (`KnownFields(true)` rejects unknown fields) — operators must update to use `allowed_ips` in their configuration before upgrading.
 * [ENHANCEMENT] ServerConfig gains `MetricsPort`, `TLSTerminated`, `HSTSMaxAge`, and `TrustedProxyCIDRs` fields for observability and TLS termination support.
 * [ENHANCEMENT] WebhookConfig gains `MaxBodySize` to configure the POST body size limit (default 1 MB).
 
