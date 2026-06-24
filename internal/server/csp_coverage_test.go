@@ -105,7 +105,10 @@ func TestCSPDirectiveCompleteness(t *testing.T) {
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
 	csp := resp.Header().Get("Content-Security-Policy")
-	directives := []string{"default-src", "script-src", "style-src", "img-src", "font-src", "connect-src", "frame-ancestors", "base-uri", "form-action"}
+	directives := []string{
+		"default-src", "script-src", "style-src", "img-src", "font-src",
+		"connect-src", "frame-ancestors", "base-uri", "form-action", "object-src",
+	}
 	for _, d := range directives {
 		if !strings.Contains(csp, d) {
 			t.Errorf("CSP missing directive: %s", d)
