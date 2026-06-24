@@ -318,12 +318,12 @@ func TestWebhookHandler_AllowedEventsFiltering(t *testing.T) {
 		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
 			Path:          "/hook",
 			Secret:        secret,
-			AllowedEvents: []string{"push", "schedule", "release"},
+			AllowedEvents: []string{"push", "ping", "release"},
 		}, func() error { return nil }, webhookLogger(), testResolverIPIns)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, event := range []string{"push", "schedule", "release"} {
+		for _, event := range []string{"push", "ping", "release"} {
 			t.Run(event, func(t *testing.T) {
 				payload := makePayload("refs/heads/main")
 				req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))

@@ -215,6 +215,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 func ipInCIDRs(ip string, allowedIPs []string) bool {
 	// First check for exact match (bare IP).
 	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
 		if entry == ip {
 			return true
 		}
@@ -225,6 +226,7 @@ func ipInCIDRs(ip string, allowedIPs []string) bool {
 		return false
 	}
 	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
 		_, cidr, err := net.ParseCIDR(entry)
 		if err != nil {
 			continue

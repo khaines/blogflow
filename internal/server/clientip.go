@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -22,7 +23,16 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 		cidr = strings.TrimSpace(cidr)
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			return nil, err
+			// Not a CIDR — accept bare IP, wrap as /32 or /128
+			ip := net.ParseIP(cidr)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP or CIDR: %q", cidr)
+			}
+			if ip.To4() != nil {
+				ipNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+			} else {
+				ipNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+			}
 		}
 		nets = append(nets, ipNet)
 	}
