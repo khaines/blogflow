@@ -253,7 +253,7 @@ type ServerConfig struct {
 
 type CacheConfig struct {
     Enabled    bool          `yaml:"enabled"`
-    TTL        time.Duration `yaml:"ttl"          validate:"min=0s,max=24h"`
+    TTL        time.Duration `yaml:"ttl"          validate:"min=1s,max=24h"`
     MaxEntries int           `yaml:"max_entries"  validate:"min=0,max=100000"`
 }
 

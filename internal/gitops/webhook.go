@@ -110,8 +110,8 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		// Validate IP against allowlist BEFORE rate limiting.
 		if len(w.config.AllowedIPs) > 0 {
 			if !ipInCIDRs(ip, w.config.AllowedIPs) {
-				w.logger.Warn("source IP not in ip_allowlist", "ip", ip)
-				http.Error(rw, "source IP not in ip_allowlist", http.StatusForbidden)
+				w.logger.Warn("source IP not in allowed_ips", "ip", ip)
+				http.Error(rw, "source IP not in allowed_ips", http.StatusForbidden)
 				return
 			}
 		}

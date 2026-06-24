@@ -223,8 +223,8 @@ func TestWebhookHandler_IPAllowlistLogOutput(t *testing.T) {
 	}
 
 	logs := logOutput.String()
-	if !strings.Contains(logs, "source IP not in ip_allowlist") {
-		t.Fatalf("expected 'source IP not in ip_allowlist' in log, got: %s", logs)
+	if !strings.Contains(logs, "source IP not in allowed_ips") {
+		t.Fatalf("expected 'source IP not in allowed_ips' in log, got: %s", logs)
 	}
 	if !strings.Contains(logs, "192.168.0.1") {
 		t.Fatalf("expected blocked IP in log, got: %s", logs)
