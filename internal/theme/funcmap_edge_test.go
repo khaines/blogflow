@@ -76,21 +76,21 @@ func TestTemplateFuncNilInputs(t *testing.T) {
 				}
 			}()
 			// Actually invoke the function with zero/empty inputs
-			switch fn.(type) {
+			switch fn := fn.(type) {
 			case func(time.Time, string) string:
-				_ = fn.(func(time.Time, string) string)(time.Time{}, "")
+				_ = fn(time.Time{}, "")
 			case func() time.Time:
-				_ = fn.(func() time.Time)()
+				_ = fn()
 			case func(string) string:
-				_ = fn.(func(string) string)("")
+				_ = fn("")
 			case func(string, int) string:
-				_ = fn.(func(string, int) string)("", 0)
+				_ = fn("", 0)
 			case func(int, int) int:
-				_ = fn.(func(int, int) int)(0, 0)
+				_ = fn(0, 0)
 			case func(any) int:
-				_ = fn.(func(any) int)(nil)
+				_ = fn(nil)
 			case func(int, int) ([]int, error):
-				_, _ = fn.(func(int, int) ([]int, error))(0, 0)
+				_, _ = fn(0, 0)
 			default:
 				t.Errorf("unknown funcmap function type for %q", name)
 			}
