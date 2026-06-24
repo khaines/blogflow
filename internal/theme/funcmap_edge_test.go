@@ -39,7 +39,10 @@ func TestTemplateFunctionEdgeCases(t *testing.T) {
 				default:
 					inputStr = fmt.Sprintf("%v", v)
 				}
-				_ = urlize(inputStr) // test urlize with the input
+				result := urlize(inputStr)
+				if inputStr != "" && result == "" {
+					t.Errorf("urlize produced empty output for non-empty input")
+				}
 			}
 			// readingTime must handle the test case input gracefully
 			if readingTime, ok := fm["readingTime"].(func(any) int); ok {
