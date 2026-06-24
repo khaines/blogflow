@@ -15,6 +15,7 @@ func BenchmarkCacheReadSteadyState(b *testing.B) {
 	srv := New(cfg, nil)
 	srv.RegisterRoutes(testRouteOptions())
 
+	b.ResetTimer()
 	for i := range b.N {
 		_ = i
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -1,4 +1,4 @@
-// Negative cache eviction policy verification per test-gap-analysis.md item #13
+// Negative cache admission bound policy verification per test-gap-analysis.md item #13
 // Addresses Critical finding: original tests never exercised negCache population or eviction.
 package overlayfs
 
@@ -95,13 +95,13 @@ func TestNegativeCachePopulates(t *testing.T) {
 	}
 }
 
-// TestNegativeCacheEvictionWithSmallLimit verifies the eviction bound works.
+// TestNegativeCacheAdmissionWithSmallLimit verifies the admission bound (capping) works.
 // maxNegCacheEntries is unexported, but since this test is in package overlayfs
 // we can set it directly for validation.
-func TestNegativeCacheEvictionWithSmallLimit(t *testing.T) {
+func TestNegativeCacheAdmissionWithSmallLimit(t *testing.T) {
 	t.Parallel()
 
-	// Set a very small limit so we can verify eviction.
+	// Set a very small limit so we can verify admission control.
 	const testLimit = 5
 
 	// layer 0 (theme) is empty — all files will miss layer 0.
@@ -137,7 +137,7 @@ func TestNegativeCacheEvictionWithSmallLimit(t *testing.T) {
 
 	count := ofs.negCacheCount.Load()
 	if count > int64(testLimit) {
-		t.Errorf("negCacheEntry count = %d, want <= %d (eviction bound violated)", count, testLimit)
+		t.Errorf("negCacheEntry count = %d, want <= %d (admission bound violated)", count, testLimit)
 	}
 	if count == 0 {
 		t.Error("negCache should have entries with multi-layer setup where path is absent from layer 0")
