@@ -13,6 +13,11 @@ import (
 func TestMetricsEndpointReturns200(t *testing.T) {
 	t.Parallel()
 
+	// Pre-populate a blogflow counter observation so blogflow_http_requests_total
+	// has a data line in the Prometheus exposition format (counters with zero
+	// observations produce no output lines).
+	httpRequestsTotal.WithLabelValues("GET", "/_test/obs", "200").Inc()
+
 	handler := MetricsHandler()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -29,8 +34,9 @@ func TestMetricsEndpointReturns200(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "go_goroutines") {
-		t.Fatal("expected prometheus metrics in response body")
+	// Verify BlogFlow metrics, not just Go runtime metrics.
+	if !strings.Contains(body, "blogflow_http_requests_total") {
+		t.Fatal("expected blogflow prometheus metrics (e.g. blogflow_http_requests_total) in response body")
 	}
 }
 

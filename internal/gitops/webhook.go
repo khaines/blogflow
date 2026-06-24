@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,13 +39,15 @@ type WebhookStrategy struct {
 	ipResolver IPResolver
 }
 
-// SetIPResolver configures a custom IP resolver (e.g. server.ClientIPResolver)
-// for extracting client IPs. When nil, the built-in remoteIP function is used.
+// SetIPResolver updates the IP resolver after construction. Since NewWebhookStrategy
+// now requires a non-nil resolver, this method is provided for testing overrides only.
 func (w *WebhookStrategy) SetIPResolver(r IPResolver) { w.ipResolver = r }
 
 // NewWebhookStrategy creates a new webhook-based sync strategy.
-// Path must be non-empty and start with "/". Secret must be non-empty.
-func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger) (*WebhookStrategy, error) {
+// Path must be non-empty and start with "/". Secret must be at least 32 bytes.
+// IPResolver is mandatory — a built-in X-Forwarded-For fallback is disallowed
+// because untrusted XFF data is a server-side request forgery vector.
+func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logger *slog.Logger, resolver IPResolver) (*WebhookStrategy, error) {
 	if cfg.Path == "" || cfg.Path[0] != '/' {
 		return nil, fmt.Errorf("gitops: webhook path must be non-empty and start with '/' (got %q)", cfg.Path)
 	}
@@ -51,12 +55,22 @@ func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logg
 	if cfg.Secret == "" {
 		return nil, fmt.Errorf("gitops: webhook secret must not be empty")
 	}
+	// F2: Enforce minimum secret length to prevent brute-forcing HMAC-SHA256.
+	if len(cfg.Secret) < 32 {
+		return nil, fmt.Errorf("gitops: webhook.secret must be at least 32 bytes (got %d bytes)", len(cfg.Secret))
+	}
 
 	w := &WebhookStrategy{
 		config:   cfg,
 		reloader: reloader,
 		logger:   logger,
 	}
+
+	// F3: IP resolver is mandatory — no fallback to blind X-Forwarded-For trust.
+	if resolver == nil {
+		return nil, fmt.Errorf("gitops: webhook strategy requires an IP resolver (no trusted-proxy boundary)")
+	}
+	w.ipResolver = resolver
 
 	rl := newRateLimiter(cfg.RateLimit)
 	w.handler = w.buildHandler(rl)
@@ -90,8 +104,19 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
-		// Rate-limit by remote IP.
+		// Resolve client IP for allowlist and rate-limit lookups.
 		ip := w.resolveIP(r)
+
+		// Validate IP against allowlist BEFORE rate limiting.
+		if len(w.config.AllowedIPs) > 0 {
+			if !ipInCIDRs(ip, w.config.AllowedIPs) {
+				w.logger.Warn("source IP not in allowed_ips", "ip", ip)
+				http.Error(rw, "source IP not in allowed_ips", http.StatusForbidden)
+				return
+			}
+		}
+
+		// Rate-limit by remote IP (after allowlist validation).
 		if rl != nil && !rl.allow(ip) {
 			w.logger.Warn("rate limited", "ip", ip)
 			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
@@ -126,6 +151,23 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
+		// AllowedEvents filtering (if configured).
+		if len(w.config.AllowedEvents) > 0 {
+			event := r.Header.Get("X-GitHub-Event")
+			if event == "" {
+				w.logger.Warn("missing event header with active event filter",
+					"allowed", w.config.AllowedEvents)
+				http.Error(rw, "missing event header", http.StatusForbidden)
+				return
+			}
+			if !slices.Contains(w.config.AllowedEvents, event) {
+				w.logger.Warn("event type not allowed",
+					"event", event, "allowed", w.config.AllowedEvents)
+				http.Error(rw, "event type not allowed", http.StatusForbidden)
+				return
+			}
+		}
+
 		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
 			w.logger.Warn("invalid signature")
 			http.Error(rw, "invalid signature", http.StatusUnauthorized)
@@ -148,8 +190,9 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			if payload.Ref != expectedRef {
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
-				rw.WriteHeader(http.StatusOK)
-				_, _ = fmt.Fprint(rw, "accepted (no action)")
+				rw.Header().Set("X-Blogflow-Branch-Skipped", payload.Ref)
+				rw.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprintf(rw, "%s (no action)", payload.Ref)
 				return
 			}
 		}
@@ -165,6 +208,34 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(rw, "ok")
 	}
+}
+
+// ipInCIDRs checks if string IP matches any entry in the allowed list.
+// Entries in allowedIPs can be bare IPs (exact match) or CIDRs (range match).
+func ipInCIDRs(ip string, allowedIPs []string) bool {
+	// First check for exact match (bare IP).
+	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
+		if entry == ip {
+			return true
+		}
+	}
+	// Then check CIDR ranges.
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
+		_, cidr, err := net.ParseCIDR(entry)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifySignature validates an HMAC-SHA256 signature with constant-time comparison.
@@ -196,7 +267,9 @@ func (w *WebhookStrategy) resolveIP(r *http.Request) string {
 }
 
 // remoteIP extracts the client IP from the request.
-// Checks X-Forwarded-For first (for reverse-proxy deployments), falls back to RemoteAddr.
+// WARNING: This function blindly trusts X-Forwarded-For and must never be used
+// in production. It exists only to support unit tests that cannot inject a real
+// resolver. Production code always provides a resolver via NewWebhookStrategy.
 func remoteIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {

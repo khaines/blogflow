@@ -4,7 +4,10 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -89,14 +92,30 @@ type SyncConfig struct {
 }
 
 // WebhookConfig holds webhook receiver settings.
-// IP allowlisting is handled at the infrastructure layer (reverse proxy, K8s NetworkPolicy).
+// IP allowlisting is handled at the application layer via AllowedIPs ([]string); when
+// non-empty, only IPs in the list are permitted (others receive HTTP 403). Empty or
+// nil means no filtering — this mirrors the old note about infrastructure-layer allowlists
+// still being recommended for defense-in-depth (reverse proxy, K8s NetworkPolicy).
 type WebhookConfig struct {
 	Path          string   `yaml:"path"`
 	Secret        string   `yaml:"-"` // never from YAML — env var only
 	AllowedEvents []string `yaml:"allowed_events"`
+	AllowedIPs    []string `yaml:"allowed_ips"`
 	BranchFilter  string   `yaml:"branch_filter"`
 	RateLimit     int      `yaml:"rate_limit"`
 	MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default (1 MB)
+}
+
+// LogValue implements log/slog.LogValuer to mask the Secret field when a
+// WebhookConfig is logged directly (e.g. as an slog field). This prevents
+// raw secret values from appearing in structured logs.
+func (w WebhookConfig) LogValue() slog.Value {
+	type noMethods WebhookConfig // break slog.LogValuer recursion
+	r := noMethods(w)
+	if r.Secret != "" {
+		r.Secret = "[REDACTED]"
+	}
+	return slog.AnyValue(r)
 }
 
 // FeedConfig holds RSS/Atom feed settings.
@@ -169,4 +188,27 @@ func (c Config) LogValue() slog.Value {
 		r.Sync.Webhook.Secret = "[REDACTED]"
 	}
 	return slog.AnyValue(r)
+}
+
+// validateCIDROrIP checks that s is a valid IPv4 address, IPv6 address, or CIDR.
+func validateCIDROrIP(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return &FieldError{
+			Field:   "value",
+			Value:   s,
+			Message: "must not be empty",
+		}
+	}
+	if _, _, err := net.ParseCIDR(s); err == nil {
+		return nil
+	}
+	if net.ParseIP(s) != nil {
+		return nil
+	}
+	return &FieldError{
+		Field:   "<internal>",
+		Value:   s,
+		Message: fmt.Sprintf("invalid IP or CIDR: %q", s),
+	}
 }

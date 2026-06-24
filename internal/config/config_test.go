@@ -1105,3 +1105,47 @@ func TestValidate_Homepage(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateCIDROrIP exercises the validateCIDROrIP validation function
+// for bare IPs, CIDRs, whitespace, and rejection cases.
+func TestValidateCIDROrIP(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		input   string
+		wantErr bool
+		errSub  string
+	}{
+		{"bare_ipv4", "10.0.0.1", false, ""},
+		{"bare_ipv6", "::1", false, ""},
+		{"bare_ipv6_full", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", false, ""},
+		{"cidr_ipv4", "192.168.1.0/24", false, ""},
+		{"cidr_ipv6", "::/0", false, ""},
+		{"cidr_classA", "10.0.0.0/8", false, ""},
+		{"whitespace_trimmed", "  10.0.0.1  ", false, ""},
+		{"whitespace_cidr", "  192.168.1.0/24 ", false, ""},
+		{"empty_string", "", true, "must not be empty"},
+		{"whitespace_only", "   ", true, "must not be empty"},
+		{"garbage", "not-an-ip-or-cidr", true, "invalid IP or CIDR"},
+		{"partial_ip", "10.0.0", true, "invalid IP or CIDR"},
+		{"invalid_cidr", "999.999.999.999/16", true, "invalid IP or CIDR"},
+		{"ipv4_in_cidr_range", "10.0.0.1", false, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateCIDROrIP(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateCIDROrIP(%q) error = %v, wantErr = %v", tc.input, err, tc.wantErr)
+				return
+			}
+			if tc.wantErr && tc.errSub != "" {
+				if !strings.Contains(err.Error(), tc.errSub) {
+					t.Errorf("validateCIDROrIP(%q) error = %q, want substring %q", tc.input, err.Error(), tc.errSub)
+				}
+			}
+		})
+	}
+}

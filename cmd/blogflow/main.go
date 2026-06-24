@@ -204,7 +204,7 @@ func main() {
 	reloader := newContentReloader(scanner, contentOverlay, deps, renderCache, cfgLoader, themeEngine, logger)
 
 	// 9. Initialize sync strategy
-	syncStrategy, err := gitops.NewStrategy(&cfg.Sync, reloader, logger)
+	syncStrategy, err := gitops.NewStrategy(&cfg.Sync, reloader, logger, srv.IPResolver())
 	if err != nil {
 		logger.Error("failed to create sync strategy", "error", err)
 		os.Exit(1)

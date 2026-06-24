@@ -41,7 +41,9 @@ sync:
       - push
     # secret: Set via BLOGFLOW_WEBHOOK_SECRET env var (never in YAML files)
     branch_filter: "main"
-    ip_allowlist: true
+    # allowed_ips: list of IP addresses/CIDRs permitted to call the webhook endpoint
+    # empty = no filtering (all IPs allowed)
+    allowed_ips: []
     rate_limit: 10
 
 feed:

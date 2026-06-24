@@ -77,7 +77,7 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
 		s.metricsServer = &http.Server{
 			Addr:              fmt.Sprintf(":%d", cfg.Server.MetricsPort),
-			Handler:           s.recoveryMiddleware(metricsMux),
+			Handler:           s.middleware(metricsMux),
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      cfg.Server.WriteTimeout,
@@ -259,6 +259,13 @@ func (s *Server) StartMetrics() error {
 // if metrics are served on the main port.
 func (s *Server) MetricsServer() *http.Server {
 	return s.metricsServer
+}
+
+// IPResolver returns the server's ClientIPResolver, which resolves the
+// authoritative client IP behind trusted reverse proxies. The resolver
+// is safe for concurrent use.
+func (s *Server) IPResolver() *ClientIPResolver {
+	return s.ipResolver
 }
 
 // middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.

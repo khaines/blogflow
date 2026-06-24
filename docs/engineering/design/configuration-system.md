@@ -241,15 +241,19 @@ type ThemeConfig struct {
 }
 
 type ServerConfig struct {
-    Port         int           `yaml:"port"          validate:"required,min=1,max=65535"`
-    ReadTimeout  time.Duration `yaml:"read_timeout"  validate:"required,min=1s,max=60s"`
-    WriteTimeout time.Duration `yaml:"write_timeout" validate:"required,min=1s,max=300s"`
-    IdleTimeout  time.Duration `yaml:"idle_timeout"  validate:"required,min=1s,max=600s"`
+    Port              int           `yaml:"port"               validate:"required,min=1,max=65535"`
+    MetricsPort       int           `yaml:"metrics_port"       validate:"omitempty,min=0,max=65535"`   // 0 = disabled (metrics on main port); 1-65535 = separate listener
+    ReadTimeout       time.Duration `yaml:"read_timeout"       validate:"required,min=1s,max=60s"`
+    WriteTimeout      time.Duration `yaml:"write_timeout"      validate:"required,min=1s,max=300s"`
+    IdleTimeout       time.Duration `yaml:"idle_timeout"       validate:"required,min=1s,max=600s"`
+    TLSTerminated     bool          `yaml:"tls_terminated"     validate:"omitempty"`                   // true when behind a TLS-terminating LB/proxy
+    HSTSMaxAge        int           `yaml:"hsts_max_age"       validate:"omitempty,min=0,max=63072000"` // 0 disables HSTS; max 63072000 = 2 years
+    TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs" validate:"omitempty,dive,ip_or_cidr"`  // source-of-trust for X-Forwarded-For
 }
 
 type CacheConfig struct {
     Enabled    bool          `yaml:"enabled"`
-    TTL        time.Duration `yaml:"ttl"          validate:"min=0s,max=24h"`
+    TTL        time.Duration `yaml:"ttl"          validate:"min=1s,max=24h"`
     MaxEntries int           `yaml:"max_entries"  validate:"min=0,max=100000"`
 }
 
@@ -263,8 +267,9 @@ type WebhookConfig struct {
     Secret        string   `yaml:"-"` // NEVER from YAML — env var only
     AllowedEvents []string `yaml:"allowed_events" validate:"required_if=Strategy webhook,dive,oneof=push ping"`
     BranchFilter  string   `yaml:"branch_filter"  validate:"required_if=Strategy webhook,max=250"`
-    IPAllowlist   bool     `yaml:"ip_allowlist"`
+    AllowedIPs    []string `yaml:"allowed_ips"` // empty = no filtering; non-empty = only listed IPs pass
     RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
+    MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default
 }
 
 // **Implementation note**: `required_if=Strategy webhook` cannot be resolved via struct tags alone because `Strategy` lives in the parent `SyncConfig`, not `WebhookConfig`. Implementation must use a custom cross-struct validator registered with `validate.RegisterStructValidation` (or equivalent), applying webhook-field requirements only when `SyncConfig.Strategy == "webhook"`. The struct tags shown above document the *intent*; the enforcement mechanism is a cross-struct validator.
@@ -326,8 +331,9 @@ sync:
     secret: "${BLOGFLOW_WEBHOOK_SECRET}"  # rejected — must use env var
     allowed_events: ["push"]
     branch_filter: "main"
-    ip_allowlist: true
+    allowed_ips: []
     rate_limit: 10
+    max_body_size: 0  # 0 = default (1 MB)
 
 feed:
   enabled: true
@@ -380,8 +386,9 @@ sync:
     path: "/api/webhook"
     allowed_events: ["push"]
     branch_filter: "main"
-    ip_allowlist: true
+    allowed_ips: []
     rate_limit: 10
+    max_body_size: 0  # 0 = default (1 MB)
 
 feed:
   enabled: true

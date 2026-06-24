@@ -736,6 +736,17 @@ func Validate(cfg *Config) error {
 				Message: "must be between 0 (default 1 MB) and 10485760 (10 MB)",
 			})
 		}
+		// AllowedIPs: each entry must be a valid IP or CIDR
+		for j, ip := range cfg.Sync.Webhook.AllowedIPs {
+			if err := validateCIDROrIP(ip); err != nil {
+				fe := err.(*FieldError)
+				errs = append(errs, FieldError{
+					Field:   fmt.Sprintf("sync.webhook.allowed_ips[%d]", j),
+					Value:   ip,
+					Message: fe.Message,
+				})
+			}
+		}
 	}
 
 	// Server.HSTSMaxAge: 0–63072000 (2 years); only emitted when TLSTerminated
@@ -745,6 +756,18 @@ func Validate(cfg *Config) error {
 			Value:   cfg.Server.HSTSMaxAge,
 			Message: "must be between 0 and 63072000 (2 years)",
 		})
+	}
+
+	// Server.TrustedProxyCIDRs: each entry must be a valid IP or CIDR
+	for i, cidr := range cfg.Server.TrustedProxyCIDRs {
+		if err := validateCIDROrIP(cidr); err != nil {
+			fe := err.(*FieldError)
+			errs = append(errs, FieldError{
+				Field:   fmt.Sprintf("server.trusted_proxy_cidrs[%d]", i),
+				Value:   cidr,
+				Message: fe.Message,
+			})
+		}
 	}
 
 	// Feed validation only when feed is enabled
