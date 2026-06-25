@@ -42,7 +42,8 @@ func TestWebhookConfig_LogValueRedaction(t *testing.T) {
 	}
 }
 
-// TestWebhookConfig_LogValue_empty verifies LogValue works with an empty secret (no panic, no crash).
+// TestWebhookConfig_LogValueEmpty verifies LogValue works with an empty
+// secret — no panic, and Path is still preserved in the output.
 func TestWebhookConfig_LogValueEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -51,12 +52,14 @@ func TestWebhookConfig_LogValueEmpty(t *testing.T) {
 		Secret: "",
 	}
 
-	// Call LogValue directly — should return a valid slog.Value without panicking.
+	// LogValue should return a valid slog.Value (not panic).
 	v := wc.LogValue()
-
-	// The value should not contain any secret-like data.
-	anyStr := v.String()
-	if strings.Contains(anyStr, "very-long-webhook-secret") {
-		t.Errorf("unexpected secret in empty config: %s", anyStr)
+	if v.String() == "" {
+		t.Fatal("LogValue() returned empty value for non-empty WebhookConfig")
+	}
+	// Verify the Path field is still in the serialized output — this is the
+	// non-vacuous assertion: an empty secret should not lose the Path field.
+	if !strings.Contains(v.String(), "/hook") {
+		t.Errorf("Path field missing from LogValue output; got: %s", v.String())
 	}
 }
