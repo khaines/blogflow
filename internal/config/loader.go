@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/url"
@@ -123,14 +124,20 @@ func (l *Loader) Load() (*Config, error) {
 	start := time.Now()
 	cfg := Default()
 
-	data, err := fs.ReadFile(l.configFS, "site.yaml")
+	var data []byte
+	f, err := l.configFS.Open("site.yaml")
 	if err != nil && !isNotExist(err) {
 		return nil, fmt.Errorf("reading site.yaml: %w", err)
 	}
 
 	if err == nil {
+		defer func() { _ = f.Close() }()
+		data, err = io.ReadAll(io.LimitReader(f, maxConfigFileSize+1))
+		if err != nil {
+			return nil, fmt.Errorf("reading site.yaml: %w", err)
+		}
 		if len(data) > maxConfigFileSize {
-			return nil, fmt.Errorf("config file exceeds 1 MB limit (size: %d bytes)", len(data))
+			return nil, fmt.Errorf("config file exceeded 1 MB limit (actual: %d bytes)", len(data))
 		}
 
 		if secretErr := scanForSecrets(data); secretErr != nil {

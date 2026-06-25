@@ -7,6 +7,7 @@
 * [ENHANCEMENT] Webhook IP allowlist now supports CIDR notation in `allowed_ips` (previously only bare IPs were matched, making CIDR entries silently non-functional).
 * [ENHANCEMENT] Webhook: mandatory `IPResolver` argument on `NewWebhookStrategy` — the built-in X-Forwarded-For fallback is no longer used, preventing blind trust in untrusted XFF data.
 * [BREAKING CHANGE] Webhook: branch-mismatch response changed from `200 OK / "accepted (no action)"` to `202 Accepted` with `X-Blogflow-Branch-Skipped` header. External consumers checking for 200 status code on branch-skip responses must be updated.
+* [ENHANCEMENT] Config file size limit enforced during load — oversized files (> 1 MB) are rejected before parsing.
 
 ### Configuration
 
