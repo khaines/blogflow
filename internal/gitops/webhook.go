@@ -278,7 +278,8 @@ func (w *WebhookStrategy) resolveIP(r *http.Request) string {
 // WARNING: This function blindly trusts X-Forwarded-For and must never be used
 // in production. It exists only to support unit tests that cannot inject a real
 // resolver. Production code always provides a resolver via NewWebhookStrategy.
-// DEPRECATED: no longer called by resolveIP; kept for backward compatibility.
+//
+//nolint:unused // DEPRECATED: no longer called by resolveIP — kept for backward-compat
 func remoteIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {
