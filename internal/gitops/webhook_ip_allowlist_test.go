@@ -424,3 +424,71 @@ func TestWebhookHandler_IPAllowlistCIDR(t *testing.T) {
 		}
 	})
 }
+
+func TestWebhookStrategy_IPv6Allowlist(t *testing.T) {
+	secret := "very-long-webhook-secret-minimum-32-bytes-ok"
+	secretBytes := []byte(secret)
+
+	t.Run("non_canonical_IP6_matches_bare_IP", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "fd00:0:0:0:0:0:0:1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"fd00::1"},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("fd00:0:0:0:0:0:0:1 should match fd00::1 allowlist; got %d", rec.Code)
+		}
+	})
+
+	t.Run("different_prefix_IP6_blocked", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "0:0:0:0:0:0:0:1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"fd00::1"},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("::1 should NOT match fd00::1 allowlist; got %d", rec.Code)
+		}
+	})
+
+	t.Run("IPv6_CIDR_allowlist", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "fd00:a:b::1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"fd00::/8"},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload(secretBytes, payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("fd00:a:b::1 should match fd00::/8; got %d", rec.Code)
+		}
+	})
+}
