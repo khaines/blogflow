@@ -137,7 +137,7 @@ func (l *Loader) Load() (*Config, error) {
 			return nil, fmt.Errorf("reading site.yaml: %w", err)
 		}
 		if len(data) > maxConfigFileSize {
-			return nil, fmt.Errorf("config file exceeded 1 MB limit")
+			return nil, fmt.Errorf("config file exceeded 1 MB limit (actual: %d bytes)", len(data))
 		}
 
 		if secretErr := scanForSecrets(data); secretErr != nil {
