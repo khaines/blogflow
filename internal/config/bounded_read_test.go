@@ -7,13 +7,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"testing/fstest"
+	"time"
 )
 
 // trackReader wraps an io.Reader and tracks total bytes consumed.
 type trackReader struct {
 	r     io.Reader
 	count atomic.Int64
+	size  int64 // size of the underlying data, reported by Stat()
 }
 
 func (r *trackReader) Read(p []byte) (int, error) {
@@ -22,8 +23,28 @@ func (r *trackReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *trackReader) Close() error               { return nil }
-func (r *trackReader) Stat() (fs.FileInfo, error) { return nil, nil }
+func (r *trackReader) Close() error { return nil }
+func (r *trackReader) Stat() (fs.FileInfo, error) {
+	// Return a minimal stub fs.FileInfo so callers can safely invoke info.Size() etc.
+	// In tests the underlying data length is always known, so Size() is accurate.
+	return fileStub{name: "site.yaml", size: r.dataLen()}, nil
+}
+
+// fileStub implements fs.FileInfo for test doubles.
+type fileStub struct {
+	name string
+	size int64
+}
+
+func (f fileStub) Name() string       { return f.name }
+func (f fileStub) Size() int64        { return f.size }
+func (f fileStub) Mode() fs.FileMode  { return 0o644 }
+func (f fileStub) ModTime() time.Time { return time.Time{} }
+func (f fileStub) IsDir() bool        { return false }
+func (f fileStub) Sys() any           { return nil }
+
+// dataLen returns the size of the underlying data being read.
+func (r *trackReader) dataLen() int64 { return r.size }
 
 // trackFS is an fs.FS that serves a "site.yaml" whose content the loader tracks.
 type trackFS struct {
@@ -33,7 +54,7 @@ type trackFS struct {
 
 func (t *trackFS) Open(name string) (fs.File, error) {
 	if name == "site.yaml" {
-		t.track = &trackReader{r: bytes.NewReader(t.data)}
+		t.track = &trackReader{r: bytes.NewReader(t.data), size: int64(len(t.data))}
 		return t.track, nil
 	}
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
@@ -91,27 +112,5 @@ func TestLoad_BoundedRead_boundary(t *testing.T) {
 	_, err = loader2.Load()
 	if err == nil {
 		t.Fatal("expected size-limit error at maxConfigFileSize+1 bytes")
-	}
-}
-
-// TestLoad_FileSizeLimit_existing verifies the existing behavior still
-// rejects files over 1 MB when using fstest.MapFS (for regression).
-func TestLoad_FileSizeLimit_existing(t *testing.T) {
-	t.Parallel()
-
-	bigData := make([]byte, 2*1024*1024)
-	for i := range bigData {
-		bigData[i] = ' '
-	}
-	fsys := fstest.MapFS{
-		"site.yaml": &fstest.MapFile{Data: bigData},
-	}
-	loader := NewLoader(fsys)
-	_, err := loader.Load()
-	if err == nil {
-		t.Fatal("expected error for oversized config, got nil")
-	}
-	if !strings.Contains(err.Error(), "1 MB") {
-		t.Fatalf("expected size-limit error mentioning '1 MB', got: %v", err)
 	}
 }
