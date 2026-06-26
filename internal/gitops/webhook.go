@@ -267,11 +267,12 @@ func (w *WebhookStrategy) resolveIP(r *http.Request) string {
 		return w.ipResolver.ClientIP(r)
 	}
 	// Fail closed: use RemoteAddr only (no XFF trust) when resolver is nil.
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		return addr[:idx]
+	// Use net.SplitHostPort for correct IPv6 bracket handling.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
 	}
-	return addr
+	return r.RemoteAddr
 }
 
 // remoteIP extracts the client IP from the request.
