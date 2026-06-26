@@ -492,3 +492,56 @@ func TestWebhookStrategy_IPv6Allowlist(t *testing.T) {
 		}
 	})
 }
+
+func TestWebhookHandler_NilResolverFailClosed(t *testing.T) {
+	secret := "very-long-webhook-secret-minimum-32-bytes-ok"
+	payload := makePayload("refs/heads/main")
+
+	t.Run("IPv4_allowlist_passes_via_remoteaddr_when_resolver_nil", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "10.0.0.1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"10.0.0.1"},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		w.SetIPResolver(nil) // triggers fail-closed path
+
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.RemoteAddr = "10.0.0.1:443"
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		// 200 means IP check passed (allowlist matched), signature matched, reload succeeded
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for IP passed and valid sig with nil resolver; got %d", rec.Code)
+		}
+	})
+
+	t.Run("IPv6_allowlist_passes_via_remoteaddr_when_resolver_nil", func(t *testing.T) {
+		resolver := &testIPRes{ipFn: func(*http.Request) string { return "fd00::1" }}
+		w, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+			Path:       "/hook",
+			Secret:     secret,
+			AllowedIPs: []string{"fd00::1"},
+		}, func() error { return nil }, webhookLogger(), resolver)
+		if err != nil {
+			t.Fatalf("NewWebhookStrategy: %v", err)
+		}
+		w.SetIPResolver(nil) // triggers fail-closed path
+
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.RemoteAddr = "[fd00::1]:443" // IPv6 with brackets
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		// splitHostPort("[fd00::1]:443") → host="fd00::1" — should match allowlist
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for IPv6 fd00::1 in allowlist with nil resolver; got %d", rec.Code)
+		}
+	})
+}
