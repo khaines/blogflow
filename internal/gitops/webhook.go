@@ -143,7 +143,8 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
-		// Validate HMAC-SHA256 signature.
+		// Validate HMAC-SHA256 signature BEFORE any event/branch filtering
+		// to prevent unauthenticated callers from probing allowed event types.
 		sigHeader := r.Header.Get("X-Hub-Signature-256")
 		if sigHeader == "" {
 			w.logger.Warn("missing signature header")
@@ -151,7 +152,13 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			return
 		}
 
-		// AllowedEvents filtering (if configured).
+		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
+			w.logger.Warn("invalid signature")
+			http.Error(rw, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+
+		// AllowedEvents filtering (after signature verification).
 		if len(w.config.AllowedEvents) > 0 {
 			event := r.Header.Get("X-GitHub-Event")
 			if event == "" {
@@ -168,13 +175,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			}
 		}
 
-		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
-			w.logger.Warn("invalid signature")
-			http.Error(rw, "invalid signature", http.StatusUnauthorized)
-			return
-		}
-
-		// Filter by branch.
+		// Filter by branch (after signature verification).
 		if w.config.BranchFilter != "" {
 			var payload struct {
 				Ref string `json:"ref"`
@@ -212,26 +213,26 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 
 // ipInCIDRs checks if string IP matches any entry in the allowed list.
 // Entries in allowedIPs can be bare IPs (exact match) or CIDRs (range match).
+// Bare-IP entries are compared via net.ParseIP + net.IP.Equal to handle
+// non-canonical representations (e.g., ::1 vs 0:0:0:0:0:0:0:1).
 func ipInCIDRs(ip string, allowedIPs []string) bool {
-	// First check for exact match (bare IP).
-	for _, entry := range allowedIPs {
-		entry = strings.TrimSpace(entry)
-		if entry == ip {
-			return true
-		}
-	}
-	// Then check CIDR ranges.
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
+	target := net.ParseIP(ip)
+	if target == nil {
 		return false
 	}
 	for _, entry := range allowedIPs {
 		entry = strings.TrimSpace(entry)
+		// Check CIDR first (covers bare-IP case via /32 or /128 too).
 		_, cidr, err := net.ParseCIDR(entry)
-		if err != nil {
+		if err == nil {
+			if cidr.Contains(target) {
+				return true
+			}
 			continue
 		}
-		if cidr.Contains(parsed) {
+		// Not a CIDR — try bare-IP match.
+		entryParsed := net.ParseIP(entry)
+		if entryParsed != nil && entryParsed.Equal(target) {
 			return true
 		}
 	}
@@ -259,17 +260,27 @@ func verifySignature(secret, payload []byte, sigHeader string) bool {
 
 // resolveIP returns the client IP using the configured resolver, or the
 // built-in remoteIP heuristic when no resolver is set.
+// When resolver is nil, we fall back to RemoteAddr only (never XFF) to
+// prevent blind trust in untrusted X-Forwarded-For data.
 func (w *WebhookStrategy) resolveIP(r *http.Request) string {
 	if w.ipResolver != nil {
 		return w.ipResolver.ClientIP(r)
 	}
-	return remoteIP(r)
+	// Fail closed: use RemoteAddr only (no XFF trust) when resolver is nil.
+	// Use net.SplitHostPort for correct IPv6 bracket handling.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // remoteIP extracts the client IP from the request.
 // WARNING: This function blindly trusts X-Forwarded-For and must never be used
 // in production. It exists only to support unit tests that cannot inject a real
 // resolver. Production code always provides a resolver via NewWebhookStrategy.
+//
+//nolint:unused // DEPRECATED: no longer called by resolveIP — kept for backward-compat
 func remoteIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {
