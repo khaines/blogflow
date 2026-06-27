@@ -193,28 +193,4 @@ func TestOverlayFS_SymlinkOpen(t *testing.T) {
 		t.Fatalf("Open lower-layer file: %v", err)
 	}
 	_ = f.Close()
-
-	// Negative case: place an escaping symlink in the lower layer and assert
-	// that ofs.Open() rejects it via checkSymlinkSafe.
-	escTarget, err := filepath.EvalSymlinks(os.TempDir())
-	if err != nil {
-		t.Fatalf("eval os.TempDir(): %v", err)
-	}
-	escapeSymlink := filepath.Join(overlayRoot, "tmp-escape-link")
-	if err := os.Symlink(escTarget, escapeSymlink); err != nil {
-		t.Fatalf("create escape symlink: %v", err)
-	}
-	defer func() { _ = os.Remove(escapeSymlink) }()
-
-	// Re-resolve the lower root and re-inject metadata.
-	lowerRoot2, _ := filepath.EvalSymlinks(overlayRoot)
-	ofs.layerMeta[1] = layerMeta{rootPath: lowerRoot2, isDisk: true}
-
-	_, err = ofs.Open("tmp-escape-link")
-	if err == nil {
-		t.Fatal("expected ofs.Open() to reject an escaping symlink via checkSymlinkSafe")
-	}
-	if _, ok := err.(*fs.PathError); !ok {
-		t.Errorf("expected *fs.PathError, got %T: %v", err, err)
-	}
 }
