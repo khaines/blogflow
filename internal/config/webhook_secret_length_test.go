@@ -3,7 +3,6 @@ package config
 import (
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 )
 
@@ -11,22 +10,12 @@ func TestWebhookSecretLengthBoundary(t *testing.T) {
 	t.Parallel()
 
 	// Start with a fully valid default config for the base.
-	fsys := fstest.MapFS{}
-	loader := NewLoader(fsys)
-
-	// Build on top of Default() to ensure all other fields are valid.
 	validConfig := Default()
 
 	// Test 31-byte secret: should fail (requirement is >= 32 bytes).
 	config31 := validConfig
 	config31.Sync.Strategy = "webhook"
 	config31.Sync.Webhook.Secret = strings.Repeat("x", 31) // exactly 31 bytes
-
-	// First load to get a working config through the loader (no YAML changes needed)
-	_, err := loader.Load()
-	if err != nil {
-		t.Fatalf("unexpected error loading valid config: %v", err)
-	}
 
 	err31 := Validate(config31)
 	if err31 == nil {
