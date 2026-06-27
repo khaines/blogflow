@@ -37,12 +37,47 @@ func TestCSPOnSeparateMetricsPort(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 9090
 	s := New(cfg, nil)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	// The test was originally hollow: it only checked the main server's
+	// CSP when MetricsPort was set, which proved nothing about the metrics
+	// server's headers. Fix: verify CSP directly on the metrics server.
+	ms := s.MetricsServer()
+	if ms == nil {
+		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(resp, req)
+	ms.Handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	body := resp.Body.String()
+	if body == "" {
+		t.Fatal("/metrics body is empty")
+	}
+	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
+		t.Errorf("missing Prometheus markers: %q", body[:min(200, len(body))])
+	}
+
 	csp := resp.Header().Get("Content-Security-Policy")
 	if csp == "" {
-		t.Fatal("CSP header missing on main server response when MetricsPort is set")
+		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")
+	}
+
+	wantHeaders := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "SAMEORIGIN",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=(), interest-cohort=()",
+	}
+	for key, want := range wantHeaders {
+		got := resp.Header().Get(key)
+		if got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
 	}
 }
 
