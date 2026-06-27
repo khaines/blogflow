@@ -79,7 +79,9 @@ No direct test validates that sync triggers (webhook/git-sync/hot-watch) invalid
 
 ### 15\. Max template file size limit enforcement. Templates exceeding ~64 MB threshold not tested for immediate rejection before memory allocation occurs, potentially leading to OOM under attack; verify early failure mode exists now and always runs during compile time even with embedded defaults baked in as fallback source of truth when user uploads oversized file via git pull or content sync strategy deployment pipeline stages allow such files to land on disk temporarily).
 
-### 16\. Webhook secret logging redaction test. The config loader already marks secret fields for log masking but no integration tests confirm that structured logs from webhook handlers also strip tokens before writing, especially when custom middleware outputs request/response details containing signature values as headers or body data streams (need end-to-end check across all possible code paths where secrets cross boundaries).
+### 16\. Webhook secret logging redaction test ✅ [✓] Closed
+
+**Resolved**: `internal/config/webhook_log_redaction_test.go` (`TestWebhookConfig_LogValueRedaction`) directly exercises `WebhookConfig.LogValue()` — logs a `WebhookConfig` as an slog attribute and asserts `[REDACTED]` is present and the raw secret is absent. Mutation-verifiable: breaking `LogValue()` causes this test to fail. The hollow integration test in `webhook_secret_logging_test.go` was replaced by this direct LogValue exercise. The dead `loader.Load()` call in `webhook_secret_length_test.go` was also removed.
 
 ### 17\. Environment variable override validation completeness 🔴 Open (no coverage)
 

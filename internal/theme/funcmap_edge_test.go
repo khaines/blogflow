@@ -28,7 +28,9 @@ func TestTemplateFunctionEdgeCases(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// urlize is a key function that must handle edge inputs gracefully
+			// urlize must handle edge inputs gracefully without panicking or
+			// producing unexpected empties.  Pass the value THROUGH the typed
+			// function as the production path would.
 			if urlize, ok := fm["urlize"].(func(string) string); ok {
 				var inputStr string
 				switch v := tc.input.(type) {
@@ -61,6 +63,46 @@ func TestTemplateFunctionEdgeCases(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// Add genuine typed nil/empty tests that pass directly through the
+	// function signatures (production code path).
+	if add, ok := fm["add"].(func(int, int) int); ok {
+		got := add(0, 0)
+		if got != 0 {
+			t.Errorf("add(0,0) = %d, want 0", got)
+		}
+	}
+	if add32, ok := fm["add"].(func(int, int) int); ok {
+		got := add32(-42, 42)
+		if got != 0 {
+			t.Errorf("add(-42,42) = %d, want 0", got)
+		}
+	}
+	if seq, ok := fm["seq"].(func(int, int) ([]int, error)); ok {
+		got, err := seq(0, 0)
+		if err != nil {
+			t.Errorf("seq(0,0) returned error: %v", err)
+		}
+		if len(got) != 1 || got[0] != 0 {
+			t.Errorf("seq(0,0) = %v, want [0]", got)
+		}
+	}
+	if sub, ok := fm["sub"].(func(int, int) int); ok {
+		got := sub(0, 0)
+		if got != 0 {
+			t.Errorf("sub(0,0) = %d, want 0", got)
+		}
+	}
+	if truncate, ok := fm["truncate"].(func(string, int) string); ok {
+		got := truncate("", 10)
+		if got != "" {
+			t.Errorf(`truncate("",10) = %q, want empty`, got)
+		}
+		got = truncate("hello", 0)
+		if got != "" {
+			t.Errorf(`truncate("hello",0) = %q, want empty`, got)
+		}
 	}
 }
 
@@ -99,12 +141,12 @@ func TestTemplateFuncNilInputs(t *testing.T) {
 			}
 		})
 	}
-	// URLize with empty string returns "--" (consecutive hyphens)
+	// URLize with two spaces returns "--".
 	if urlize, ok := fm["urlize"].(func(string) string); ok {
 		result := urlize("  ")
-		if strings.HasPrefix(result, "-") {
-			// hyphens from spaces are expected
-			t.Logf("urlize(\"  \") = %q (leading hyphens from spaces)", result)
+		want := "--"
+		if result != want {
+			t.Errorf(`urlize("  ") = %q, want %q`, result, want)
 		}
 	}
 }
