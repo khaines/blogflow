@@ -37,12 +37,33 @@ func TestCSPOnSeparateMetricsPort(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 9090
 	s := New(cfg, nil)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	// Verify the CSP is present on the dedicated metrics server, not the main server.
+	ms := s.MetricsServer()
+	if ms == nil {
+		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(resp, req)
+	ms.Handler.ServeHTTP(resp, req)
+
 	csp := resp.Header().Get("Content-Security-Policy")
 	if csp == "" {
-		t.Fatal("CSP header missing on main server response when MetricsPort is set")
+		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")
+	}
+
+	if resp.Code != http.StatusOK {
+		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	// Prometheus format must be present.
+	body := resp.Body.String()
+	if body == "" {
+		t.Fatal("/metrics body is empty")
+	}
+	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
+		t.Errorf("/metrics body missing Prometheus markers: %q", body[:min(200, len(body))])
 	}
 }
 
