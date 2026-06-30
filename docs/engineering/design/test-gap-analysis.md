@@ -69,9 +69,9 @@ No direct test validates that sync triggers (webhook/git-sync/hot-watch) invalid
 
 ## 🟢 Low Priority Nice-to-Have — Future Work for Defensive Coverage
 
-### 13\. Negative cache eviction policy verification ✅ [✓] Closed
+### 13\. Negative cache admission-cap policy verification ✅ [✓] Closed
 
-**Resolved**: `negcache_eviction_test.go` covers eviction of oldest negative-cache entries when max capacity is reached, verifying the unbounded-growth prevention.
+**Resolved**: `negcache_admission_test.go` covers admission-cap policy (at capacity, new misses skip caching) verifying bounded memory. No eviction of oldest entries — unbounded-growth prevented by load-or-store gate.
 
 ### 14\. stat.Symlink path traversal detection tested ✅ [✓] Closed
 
