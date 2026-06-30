@@ -115,3 +115,68 @@ func TestCSPDirectiveCompleteness(t *testing.T) {
 		}
 	}
 }
+
+func TestCSPOnFeedXML(t *testing.T) {
+	t.Parallel()
+	s := newCSPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
+	resp := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(resp, req)
+	if resp.Code < 200 || resp.Code >= 300 {
+		t.Errorf("feed.xml status = %d, want 2xx", resp.Code)
+	}
+	csp := resp.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("CSP header missing on /feed.xml non-HTML response")
+	}
+	// Check key directives present
+	for _, d := range []string{"default-src", "script-src", "style-src", "img-src"} {
+		if !strings.Contains(csp, d) {
+			t.Errorf("feed.xml CSP missing directive: %s", d)
+		}
+	}
+}
+
+func TestCSPOnSitemapXML(t *testing.T) {
+	t.Parallel()
+	s := newCSPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
+	resp := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(resp, req)
+	if resp.Code < 200 || resp.Code >= 300 {
+		t.Errorf("sitemap.xml status = %d, want 2xx", resp.Code)
+	}
+	csp := resp.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("CSP header missing on /sitemap.xml non-HTML response")
+	}
+	for _, d := range []string{"default-src", "script-src", "style-src", "img-src"} {
+		if !strings.Contains(csp, d) {
+			t.Errorf("sitemap.xml CSP missing directive: %s", d)
+		}
+	}
+}
+
+func TestCSPOnHealthzEndpoint(t *testing.T) {
+	t.Parallel()
+	s := newCSPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	resp := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(resp, req)
+	csp := resp.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("CSP header missing on /healthz response")
+	}
+}
+
+func TestCSPOnReadyzEndpoint(t *testing.T) {
+	t.Parallel()
+	s := newCSPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	resp := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(resp, req)
+	csp := resp.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("CSP header missing on /readyz response")
+	}
+}
