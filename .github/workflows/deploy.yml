@@ -88,3 +88,74 @@ jobs:
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --container-name blogflow \
             --image "ghcr.io/${{ github.repository }}:${{ steps.image.outputs.tag }}"
+
+      # Cleanup — deactivate the previously deployed revision(s).
+      # The container app runs in 'Multiple' active-revisions mode, so both the
+      # rolling image update and the full Bicep deploy create a NEW revision but
+      # leave prior revisions Active (provisioned + billable). Left unchecked,
+      # these accumulate on every push to main. This step waits for the newest
+      # revision to report Healthy, then deactivates every older revision that is
+      # no longer serving traffic — leaving only the current deployment running.
+      - name: Deactivate superseded revisions
+        env:
+          APP_NAME: ${{ secrets.AZURE_ENVIRONMENT_NAME }}-app
+          RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+        run: |
+          set -euo pipefail
+
+          # The revision produced by the deploy step above.
+          latest="$(az containerapp show \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.latestRevisionName" -o tsv)"
+          echo "Newest revision: $latest"
+
+          # Wait (bounded) for the new revision to become Healthy. We only reap
+          # old revisions once the new one is confirmed good, so a failed rollout
+          # keeps the prior revision(s) active as a fallback.
+          deadline=$(( SECONDS + 300 ))
+          while :; do
+            read -r health running provisioning <<< "$(az containerapp revision show \
+              --name "$APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --revision "$latest" \
+              --query "[properties.healthState, properties.runningState, properties.provisioningState]" \
+              -o tsv)"
+            echo "  health=$health running=$running provisioning=$provisioning"
+            if [ "$health" = "Healthy" ]; then
+              break
+            fi
+            if [ "$provisioning" = "Failed" ] || [ "$running" = "Failed" ]; then
+              echo "::error::New revision $latest failed to start (running=$running provisioning=$provisioning); leaving prior revisions active as a fallback."
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for $latest to become Healthy; leaving prior revisions active as a fallback."
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "New revision $latest is Healthy."
+
+          # A revision cannot be deactivated while it is receiving traffic, so we
+          # only target Active, non-latest revisions with zero traffic weight
+          # (traffic auto-shifts to the latest revision via latestRevision=true).
+          query="[?properties.active && name!='$latest' && properties.trafficWeight==\`0\`].name"
+          mapfile -t stale < <(az containerapp revision list \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "$query" -o tsv)
+
+          if [ "${#stale[@]}" -eq 0 ]; then
+            echo "No superseded revisions to deactivate."
+            exit 0
+          fi
+
+          for rev in "${stale[@]}"; do
+            echo "Deactivating superseded revision: $rev"
+            az containerapp revision deactivate \
+              --name "$APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --revision "$rev"
+          done
+          echo "Deactivated ${#stale[@]} superseded revision(s)."
