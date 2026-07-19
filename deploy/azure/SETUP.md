@@ -127,6 +127,21 @@ The deployment creates:
 The workflow also runs automatically when the **Publish** workflow completes
 on main (i.e., after a new container image is pushed to GHCR).
 
+> **ℹ️ Note: Revision cleanup.** The container app runs in `Multiple`
+> active-revisions mode, so each deploy creates a new revision. After a
+> successful deploy, the workflow's `Deactivate superseded revisions` step waits
+> for the newest revision to report `Healthy`, then deactivates every older
+> zero-traffic revision so only the current deployment stays provisioned. A
+> failed/unhealthy rollout leaves the prior revisions Active as a fallback (and
+> fails the deploy job). To inspect revisions manually:
+>
+> ```bash
+> az containerapp revision list \
+>   --name <app-name> --resource-group <rg-name> \
+>   --query "[].{name:name, active:properties.active, traffic:properties.trafficWeight, health:properties.healthState}" \
+>   -o table
+> ```
+
 ## 8. Verify Metrics Are NOT Going to Log Analytics (Post-Deploy)
 
 After the first deploy, confirm metrics are **not** going to Log Analytics:
