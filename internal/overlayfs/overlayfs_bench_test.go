@@ -149,6 +149,63 @@ func BenchmarkNegCacheHit_Parallel(b *testing.B) {
 	})
 }
 
+func BenchmarkNegCacheHitCrossShard_Parallel(b *testing.B) {
+	const keysPerShard = 16
+
+	names := benchCrossShardNames(keysPerShard)
+	upper := fstest.MapFS{}
+	lower := make(fstest.MapFS, len(names))
+	for _, name := range names {
+		lower[name] = &fstest.MapFile{Data: []byte("data")}
+	}
+	ofs := NewOverlayFS(upper, lower).WithLayerNames([]string{"theme", "defaults"})
+
+	for _, name := range names {
+		if _, err := ofs.ReadFile(name); err != nil {
+			b.Fatalf("warm ReadFile(%q): %v", name, err)
+		}
+	}
+
+	b.Run("ReadFile", func(b *testing.B) {
+		b.SetParallelism(8)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				name := names[i%len(names)]
+				i++
+				data, err := ofs.ReadFile(name)
+				if err != nil {
+					b.Error(err)
+					return
+				}
+				if len(data) == 0 {
+					b.Error("ReadFile returned empty data")
+					return
+				}
+			}
+		})
+	})
+
+	b.Run("Stat", func(b *testing.B) {
+		b.SetParallelism(8)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				name := names[i%len(names)]
+				i++
+				if _, err := ofs.Stat(name); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	})
+}
+
 func BenchmarkReadDir_Union(b *testing.B) {
 	ofs := benchReadDirOverlay(25)
 	b.ReportAllocs()
@@ -176,4 +233,24 @@ func BenchmarkOpen_Parallel(b *testing.B) {
 			_ = f.Close()
 		}
 	})
+}
+
+func benchCrossShardNames(keysPerShard int) []string {
+	namesByShard := make([][]string, negCacheShardCount)
+	for i := 0; i < 100_000; i++ {
+		name := fmt.Sprintf("cross-shard/file%05d.txt", i)
+		shard := negCacheShardIndex(name)
+		if len(namesByShard[shard]) < keysPerShard {
+			namesByShard[shard] = append(namesByShard[shard], name)
+		}
+	}
+
+	names := make([]string, 0, negCacheShardCount*keysPerShard)
+	for shard := range namesByShard {
+		if len(namesByShard[shard]) != keysPerShard {
+			panic("could not generate enough cross-shard benchmark names")
+		}
+		names = append(names, namesByShard[shard]...)
+	}
+	return names
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 // TestNegativeCachePopulates verifies negCache entries are created when a file
@@ -263,8 +264,6 @@ func TestNegativeCacheConcurrentReadFileInvalidateLayer(t *testing.T) {
 }
 
 func TestNegativeCacheInvalidationGenerationPreventsStaleStore(t *testing.T) {
-	t.Parallel()
-
 	const name = "posts/race.md"
 	upper := fstest.MapFS{}
 	lower := &blockingOpenFS{
@@ -306,6 +305,112 @@ func TestNegativeCacheInvalidationGenerationPreventsStaleStore(t *testing.T) {
 	if string(data) != "upper" {
 		t.Fatalf("ReadFile(%q) after invalidation = %q, want upper", name, data)
 	}
+}
+
+func TestNegativeCacheReplaceLayerGenerationSnapshotPreventsStaleStore(t *testing.T) {
+	const name = "posts/replace-race.md"
+	snapshot := make(chan struct{})
+	proceed := make(chan struct{})
+	var once sync.Once
+	setNegCacheAfterLayerSnapshotHook(t, func() {
+		once.Do(func() {
+			close(snapshot)
+			<-proceed
+		})
+	})
+
+	ofs := NewOverlayFS(
+		fstest.MapFS{},
+		fstest.MapFS{name: {Data: []byte("lower")}},
+	).WithLayerNames([]string{"theme", "defaults"})
+
+	errCh := make(chan error, 1)
+	go func() {
+		data, err := ofs.ReadFile(name)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(data) != "lower" {
+			errCh <- fmt.Errorf("in-flight ReadFile(%q) = %q, want lower", name, data)
+			return
+		}
+		errCh <- nil
+	}()
+
+	<-snapshot
+	if err := ofs.ReplaceLayer(0, fstest.MapFS{name: {Data: []byte("upper")}}); err != nil {
+		t.Fatalf("ReplaceLayer(0) failed: %v", err)
+	}
+	close(proceed)
+
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+
+	assertNegCacheContains(t, ofs, name, false)
+	data, err := ofs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) after ReplaceLayer failed: %v", name, err)
+	}
+	if string(data) != "upper" {
+		t.Fatalf("ReadFile(%q) after ReplaceLayer = %q, want upper", name, data)
+	}
+}
+
+func TestNegativeCacheInvalidateLayerLocksAllShardsBeforePruning(t *testing.T) {
+	const name = "posts/partial-invalidation.md"
+	upper := fstest.MapFS{}
+	lower := fstest.MapFS{name: {Data: []byte("lower")}}
+	ofs := NewOverlayFS(upper, lower).WithLayerNames([]string{"theme", "defaults"})
+
+	if data, err := ofs.ReadFile(name); err != nil {
+		t.Fatalf("warm ReadFile(%q) failed: %v", name, err)
+	} else if string(data) != "lower" {
+		t.Fatalf("warm ReadFile(%q) = %q, want lower", name, data)
+	}
+	assertNegCacheContains(t, ofs, name, true)
+
+	upper[name] = &fstest.MapFile{Data: []byte("upper")}
+	invalidating := make(chan struct{})
+	releaseInvalidation := make(chan struct{})
+	var once sync.Once
+	setNegCacheInvalidationLockedHook(t, func() {
+		once.Do(func() {
+			close(invalidating)
+			<-releaseInvalidation
+		})
+	})
+
+	invalidationDone := make(chan struct{})
+	go func() {
+		ofs.InvalidateLayer(0)
+		close(invalidationDone)
+	}()
+
+	<-invalidating
+	readDone := make(chan readResult, 1)
+	go func() {
+		data, err := ofs.ReadFile(name)
+		readDone <- readResult{data: string(data), err: err}
+	}()
+
+	select {
+	case result := <-readDone:
+		t.Fatalf("ReadFile completed while invalidation held all shard locks: data=%q err=%v", result.data, result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseInvalidation)
+	<-invalidationDone
+	result := <-readDone
+	if result.err != nil {
+		t.Fatalf("ReadFile(%q) during invalidation failed: %v", name, result.err)
+	}
+	if result.data != "upper" {
+		t.Fatalf("ReadFile(%q) during invalidation = %q, want upper", name, result.data)
+	}
+	assertNegCacheContains(t, ofs, name, false)
 }
 
 func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool) {
@@ -372,4 +477,29 @@ func (b *blockingOpenFS) Open(name string) (fs.File, error) {
 		<-b.release
 	}
 	return b.base.Open(name)
+}
+
+type readResult struct {
+	data string
+	err  error
+}
+
+func setNegCacheAfterLayerSnapshotHook(t *testing.T, hook func()) {
+	t.Helper()
+
+	testHook := negCacheTestHook(hook)
+	negCacheAfterLayerSnapshotHook.Store(&testHook)
+	t.Cleanup(func() {
+		negCacheAfterLayerSnapshotHook.Store(nil)
+	})
+}
+
+func setNegCacheInvalidationLockedHook(t *testing.T, hook func()) {
+	t.Helper()
+
+	testHook := negCacheTestHook(hook)
+	negCacheInvalidationLockedHook.Store(&testHook)
+	t.Cleanup(func() {
+		negCacheInvalidationLockedHook.Store(nil)
+	})
 }
