@@ -357,6 +357,21 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.Webhook.RateLimit = n
 		return nil
 	},
+	"BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS": func(c *Config, v string) error {
+		if v == "" {
+			c.Sync.Webhook.AllowedIPs = nil
+			return nil
+		}
+		parts := strings.Split(v, ",")
+		ips := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if ip := strings.TrimSpace(p); ip != "" {
+				ips = append(ips, ip)
+			}
+		}
+		c.Sync.Webhook.AllowedIPs = ips
+		return nil
+	},
 	"BLOGFLOW_SYNC_POLL_INTERVAL": func(c *Config, v string) error {
 		c.Sync.PollInterval = v
 		return nil

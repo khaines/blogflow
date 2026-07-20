@@ -2,6 +2,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"testing/fstest"
 )
@@ -40,6 +41,29 @@ func TestEnvOverrideValidServerPort(t *testing.T) {
 	}
 	if cfg.Server.Port != 9090 {
 		t.Errorf("server.port = %d, want 9090", cfg.Server.Port)
+	}
+}
+
+func TestEnvOverrideWebhookAllowedIPsParsesAndOverridesYAML(t *testing.T) {
+	yamlContent := `
+sync:
+  webhook:
+    allowed_ips:
+      - "192.0.2.10"
+`
+	t.Setenv("BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS", "203.0.113.10, 2001:db8::/32 , , 198.51.100.0/24")
+	fsys := fstest.MapFS{
+		"site.yaml": &fstest.MapFile{Data: []byte(yamlContent)},
+	}
+	loader := NewLoader(fsys)
+	cfg, err := loader.Load()
+	if err != nil {
+		t.Fatalf("unexpected error for valid allowed IP env override: %v", err)
+	}
+
+	want := []string{"203.0.113.10", "2001:db8::/32", "198.51.100.0/24"}
+	if !reflect.DeepEqual(cfg.Sync.Webhook.AllowedIPs, want) {
+		t.Errorf("sync.webhook.allowed_ips = %#v, want %#v", cfg.Sync.Webhook.AllowedIPs, want)
 	}
 }
 

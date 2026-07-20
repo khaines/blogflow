@@ -16,7 +16,7 @@ The Configuration System (`internal/config`) is BlogFlow's centralized settings 
 ### 1.2 Functionality It Provides
 
 - **YAML-based configuration** — loads `site.yaml` from the config layer with fallback to the embedded `defaults.yaml`
-- **Environment variable overrides** — `BLOGFLOW_` prefixed env vars override any YAML value at runtime
+- **Environment variable overrides** — `BLOGFLOW_` prefixed env vars override a defined subset of YAML values at runtime; `internal/config/loader.go`'s `envMap` is the source of truth for supported keys.
 - **Embedded zero-config defaults** — a compiled-in `defaults.yaml` ensures the binary is fully functional with no external files
 - **Startup validation** — fails fast on invalid configuration with actionable error messages
 - **Secret isolation** — enforces that sensitive values (webhook secrets, git tokens) are injected only via env vars, never in YAML files

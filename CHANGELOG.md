@@ -18,6 +18,7 @@
 
 ### Configuration
 
+* [ENHANCEMENT] config: BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS env var now overrides sync.webhook.allowed_ips (comma-separated). #249
 * [CHANGE] Webhook: the IP allowlist is now configured via `allowed_ips` (`[]string`, CIDR-aware). The earlier `ip_allowlist: true` boolean that shipped in the embedded default config (`defaults/config/defaults.yaml`) was removed; with strict config parsing (`KnownFields(true)`), a `site.yaml` that still sets `ip_allowlist` will fail to load and must be migrated to `allowed_ips`. #237
 
 ### Testing
