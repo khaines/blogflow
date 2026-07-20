@@ -237,6 +237,135 @@ func BenchmarkOpen_Parallel(b *testing.B) {
 	})
 }
 
+// benchSingleLayerReloadOverlay builds a BlogFlow-shaped overlay for reload
+// benchmarks. The content layer starts empty while the defaults layer contains
+// the hot path, so warming that path records a neg-cache entry for the upper
+// layers that a later content-layer replacement must invalidate.
+func benchSingleLayerReloadOverlay(filesPerLayer, warmEntries int) (*OverlayFS, fs.FS, fs.FS, []string) {
+	layers := make([]fs.FS, 4)
+	names := []string{"theme", "content", "config", "defaults"}
+
+	for li := range layers {
+		m := make(fstest.MapFS, filesPerLayer)
+		for fi := range filesPerLayer {
+			key := fmt.Sprintf("layer%d/file%d.txt", li, fi)
+			m[key] = &fstest.MapFile{Data: []byte("data")}
+		}
+		layers[li] = m
+	}
+
+	defaults := layers[3].(fstest.MapFS)
+	warmNames := make([]string, 0, warmEntries+1)
+	for i := range warmEntries {
+		name := fmt.Sprintf("reload/lower-only-%05d.md", i)
+		defaults[name] = &fstest.MapFile{Data: []byte("---\ntitle: lower\n---\n")}
+		warmNames = append(warmNames, name)
+	}
+	defaults["reload/hot.md"] = &fstest.MapFile{Data: []byte("old-default")}
+	warmNames = append(warmNames, "reload/hot.md")
+
+	oldContent := benchReloadContentLayer(filesPerLayer, "")
+	newContent := benchReloadContentLayer(filesPerLayer, "new-content")
+	layers[1] = oldContent
+
+	return NewOverlayFS(layers...).WithLayerNames(names), oldContent, newContent, warmNames
+}
+
+func benchReloadContentLayer(filesPerLayer int, hotData string) fs.FS {
+	m := make(fstest.MapFS, filesPerLayer+1)
+	for fi := range filesPerLayer {
+		key := fmt.Sprintf("content/file%d.txt", fi)
+		m[key] = &fstest.MapFile{Data: []byte("content")}
+	}
+	if hotData != "" {
+		m["reload/hot.md"] = &fstest.MapFile{Data: []byte(hotData)}
+	}
+	return m
+}
+
+func benchWarmReloadNegCache(b *testing.B, ofs *OverlayFS, names []string) {
+	b.Helper()
+	for _, name := range names {
+		if _, err := ofs.ReadFile(name); err != nil {
+			b.Fatalf("warm ReadFile(%q): %v", name, err)
+		}
+	}
+}
+
+// BenchmarkReplaceLayer_SingleLayer measures the hot-reload path used when a
+// sync strategy swaps one overlay layer: replace the content layer, invalidate
+// only affected neg-cache entries, then resolve a changed file from that layer.
+func BenchmarkReplaceLayer_SingleLayer(b *testing.B) {
+	const (
+		filesPerLayer = 1_000
+		warmEntries   = 8_192
+		contentLayer  = 1
+	)
+
+	ofs, oldContent, newContent, warmNames := benchSingleLayerReloadOverlay(filesPerLayer, warmEntries)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		if err := ofs.ReplaceLayer(contentLayer, oldContent); err != nil {
+			b.Fatal(err)
+		}
+		benchWarmReloadNegCache(b, ofs, warmNames)
+		b.StartTimer()
+
+		if err := ofs.ReplaceLayer(contentLayer, newContent); err != nil {
+			b.Fatal(err)
+		}
+		data, err := ofs.ReadFile("reload/hot.md")
+		if err != nil {
+			b.Fatal(err)
+		}
+		if string(data) != "new-content" {
+			b.Fatalf("ReadFile returned %q, want new-content", data)
+		}
+	}
+}
+
+// BenchmarkInvalidateLayer_SingleLayer measures targeted neg-cache invalidation
+// for one changed layer after re-warming the cache each iteration, guarding
+// against regressions that make single-layer reloads approach full-cache cost.
+func BenchmarkInvalidateLayer_SingleLayer(b *testing.B) {
+	const (
+		filesPerLayer = 1_000
+		warmEntries   = 8_192
+		contentLayer  = 1
+	)
+
+	ofs, _, _, warmNames := benchSingleLayerReloadOverlay(filesPerLayer, warmEntries)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		benchWarmReloadNegCache(b, ofs, warmNames)
+		ofs.InvalidateLayer(contentLayer)
+	}
+}
+
+// BenchmarkInvalidateAll_WarmNegCache is the full-cache baseline for reloads
+// that cannot prove only one layer changed. It uses the same re-warmed cache
+// cycle as the targeted invalidation benchmark for regression comparisons.
+func BenchmarkInvalidateAll_WarmNegCache(b *testing.B) {
+	const (
+		filesPerLayer = 1_000
+		warmEntries   = 8_192
+	)
+
+	ofs, _, _, warmNames := benchSingleLayerReloadOverlay(filesPerLayer, warmEntries)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		benchWarmReloadNegCache(b, ofs, warmNames)
+		ofs.InvalidateAll()
+	}
+}
+
 func benchCrossShardNames(keysPerShard int) []string {
 	namesByShard := make([][]string, negCacheShardCount)
 	for i := 0; i < 100_000; i++ {
