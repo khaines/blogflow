@@ -4,10 +4,11 @@
 // Deploys BlogFlow to Azure Container Apps with:
 //   - Serverless Container Apps Environment (Consumption plan)
 //   - Log Analytics workspace for container diagnostics
-//   - Azure Monitor workspace for Prometheus metrics (Phase 2)
+//   - Azure Monitor workspace for Prometheus metrics
+//   - DCE/DCR pipeline for OTLP metrics ingestion
 //   - ACA managed OpenTelemetry agent:
 //       • Traces → Application Insights
-//       • Metrics → NOT exported yet (see Phase 2 in SETUP.md)
+//       • Metrics → DCE/DCR → Azure Monitor workspace
 //   - Container App with system-assigned managed identity
 //
 // All account-specific values (subscription, resource group, connection
@@ -85,6 +86,18 @@ module monitorWorkspace 'modules/monitor-workspace.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Module: Data Collection Endpoint + Rule (OTLP metrics ingestion)
+// ---------------------------------------------------------------------------
+module dataCollection 'modules/data-collection.bicep' = {
+  name: 'data-collection'
+  params: {
+    location: location
+    environmentName: environmentName
+    monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Module: Container Apps Environment + Log Analytics + OTel routing
 // ---------------------------------------------------------------------------
 module environment 'modules/container-app-env.bicep' = {
@@ -94,6 +107,8 @@ module environment 'modules/container-app-env.bicep' = {
     environmentName: environmentName
     appInsightsConnectionString: appInsightsConnectionString
     logRetentionDays: logRetentionDays
+    otlpMetricsEndpoint: dataCollection.outputs.otlpMetricsEndpoint
+    dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
   }
 }
 
@@ -134,3 +149,12 @@ output monitorWorkspaceId string = monitorWorkspace.outputs.workspaceId
 
 @description('Prometheus query endpoint (for Grafana / PromQL dashboards)')
 output prometheusQueryEndpoint string = monitorWorkspace.outputs.prometheusQueryEndpoint
+
+@description('Data Collection Rule resource ID for OTLP metrics ingestion')
+output dataCollectionRuleId string = dataCollection.outputs.dataCollectionRuleId
+
+@description('Data Collection Rule immutable ID for OTLP metrics ingestion')
+output dataCollectionRuleImmutableId string = dataCollection.outputs.dataCollectionRuleImmutableId
+
+@description('DCE metrics ingestion endpoint')
+output metricsIngestionEndpoint string = dataCollection.outputs.metricsIngestionEndpoint

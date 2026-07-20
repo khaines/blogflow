@@ -4,7 +4,7 @@
 // Runs the BlogFlow container. Telemetry is handled by the ACA managed
 // OpenTelemetry agent (configured on the environment):
 //   - Traces → Application Insights
-//   - Metrics → not exported via OTel (app still exposes /metrics on :8080)
+//   - Metrics → Azure Monitor workspace via DCE/DCR
 //
 // The ACA managed OTel agent automatically injects OTEL_EXPORTER_OTLP_ENDPOINT
 // and other standard OTel env vars at runtime. BlogFlow's OTel SDK discovers
@@ -93,6 +93,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
         {
           name: 'appinsights-cs'
+          #disable-next-line use-secure-value-for-secure-inputs
           value: 'deprecated-see-env-level-config'
         }
       ]
@@ -126,13 +127,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             // The ACA managed OTel agent auto-injects OTEL_EXPORTER_OTLP_ENDPOINT.
             // BlogFlow hardcodes OTEL_SERVICE_NAME='blogflow' in code (cmd/blogflow/main.go).
-            // We only set the trace exporter type so BlogFlow's OTel SDK initializes tracing.
-            // OTEL_METRICS_EXPORTER is intentionally UNSET (not "none") because BlogFlow's
-            // init code checks `os.Getenv != ""` — any non-empty value enables the metrics
-            // bridge. Leaving it unset skips metrics initialization entirely. See Phase 2
-            // in SETUP.md for future metrics export.
+            // Enable OTLP traces and metrics so the managed agent can route telemetry.
             {
               name: 'OTEL_TRACES_EXPORTER'
+              value: 'otlp'
+            }
+            {
+              name: 'OTEL_METRICS_EXPORTER'
               value: 'otlp'
             }
             {
