@@ -4,8 +4,8 @@
 
 ### Security
 
-* [ENHANCEMENT] Webhook: the IP allowlist (`allowed_ips`) matches CIDR ranges (`net.ParseCIDR` / `net.IPNet.Contains`), and `NewWebhookStrategy` requires an explicit `IPResolver` so the built-in X-Forwarded-For fallback is not trusted by default. #237
-* [ENHANCEMENT] Webhook: additional security hardening — IPv6-robust bare-IP allowlist matching (`net.IP.Equal` instead of exact-string comparison) and fail-closed client-IP resolution. #252
+* [ENHANCEMENT] Webhook: the IP allowlist (`allowed_ips`) matches CIDR ranges (`net.ParseCIDR` / `net.IPNet.Contains`), and `NewWebhookStrategy` requires an explicit `IPResolver` so the built-in X-Forwarded-For fallback is no longer used in production. #237
+* [ENHANCEMENT] Webhook: additional security hardening — the HMAC signature is verified before event/branch filtering, IPv6-robust bare-IP allowlist matching (`net.IP.Equal` instead of exact-string comparison), and fail-closed client-IP resolution. #252
 * [CHANGE] Webhook: branch-mismatch response changed from `200 OK` ("accepted (no action)") to `202 Accepted` with an `X-Blogflow-Branch-Skipped` header. External consumers checking for a 200 status code on branch-skip responses must be updated. #237
 * [ENHANCEMENT] Config: file size limit enforced during load — oversized files (> 1 MB) are rejected before parsing. #250
 
