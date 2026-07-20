@@ -173,7 +173,7 @@ type SiteSnapshot struct {
     Config             *config.Config
     SearchRouteEnabled bool // startup/router-build value surfaced to templates as Search.Enabled
     Content            *content.Index
-    Search             *SearchIndex // nil when search disabled (not built), or when enabled but the index build has not yet succeeded (handler returns 503).
+    Search             *SearchIndex // nil when search disabled (not built), or when enabled but this generation's search build failed while the content build succeeded (handler returns 503).
 }
 
 const (
@@ -261,7 +261,7 @@ Tokenization is the approved v1 Unicode-normalized word tokenization: apply Unic
 | Search disabled at router build | 404 | `/search` is not registered and falls through to normal 404 handling. |
 | HEAD | 200/400/503 | Served by the GET handler semantics with no response body, per `net/http`. |
 | Unsupported method | 405 | All methods other than GET and implicit HEAD return Method Not Allowed with `Allow: GET`. |
-| Index unavailable/not ready | 503 | Render a friendly “search is temporarily unavailable” page, log ERROR, and count error metrics; `Searcher` returns `ErrIndexUnavailable`. |
+| Search build failed for this generation | 503 | When the route is registered and `Search` is nil because this generation's inline search build failed while the content build succeeded, render a friendly “search is temporarily unavailable” page, log ERROR, count error metrics, and return `ErrIndexUnavailable`; the next successful rebuild swaps in non-nil `Search`. |
 | Template render failure | 500 | Return Internal Server Error without partial content. |
 
 Validation ownership is split deliberately: the handler validates normalized query rune length, page parameters, method/route behavior, and per-page limit/offset; the `Searcher` validates snapshot/index availability and query term count and returns typed errors such as `ErrIndexUnavailable` and `ErrQueryTooComplex`. `min_query_length` and `max_query_length` are counted in runes after trimming and Unicode NFC normalization. `max_query_terms` is counted after tokenization, deduplication, and lexicographic sorting of unique normalized terms; default is 32.
