@@ -33,6 +33,7 @@ targetScope = 'resourceGroup'
 param location string = 'eastus2'
 
 @description('Base name prefix for all resources')
+@minLength(1)
 param environmentName string
 
 @description('Full container image reference')
@@ -41,8 +42,26 @@ param containerImage string = 'ghcr.io/khaines/blogflow:main'
 @description('GitHub username for GHCR image pulls')
 param ghcrUsername string = 'khaines'
 
-@description('Pinned OpenTelemetry Collector Contrib image reference')
-param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+@description('OpenTelemetry Collector Contrib image repository and tag, without @ or digest. The template rejects embedded digests so tag-only overrides remain impossible.')
+param otelCollectorImageRepository string = 'otel/opentelemetry-collector-contrib:0.148.0'
+
+@description('OpenTelemetry Collector Contrib image lowercase-hex SHA-256 digest, without the sha256: prefix. The template enforces ^[0-9a-f]{64}$ before rendering @sha256:<digest>.')
+@minLength(64)
+@maxLength(64)
+param otelCollectorImageDigest string = '8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+
+@description('Data Collection Endpoint public network access. Keep Enabled for public Azure Monitor ingestion; set Disabled only with a private endpoint path for ingestion.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param dcePublicNetworkAccess string = 'Enabled'
+
+@description('Enable a Prometheus alert when no blogflow_* metrics are ingested into the Azure Monitor workspace. Effective only when scaleMinReplicas > 0 to avoid scale-to-zero false positives.')
+param enableMetricsIngestionAbsenceAlert bool = true
+
+@description('Optional Azure Monitor action group resource ID for the metrics ingestion absence alert. Empty creates the alert rule without notification actions.')
+param metricsIngestionAbsenceActionGroupId string = ''
 
 @description('Minimum replica count (0 = scale to zero)')
 @minValue(0)
@@ -77,6 +96,13 @@ param appInsightsConnectionString string
 @maxValue(730)
 param logRetentionDays int = 30
 
+var otelCollectorDigestWithoutDigits = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(otelCollectorImageDigest, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', '')
+var otelCollectorDigestWithoutHex = replace(replace(replace(replace(replace(replace(otelCollectorDigestWithoutDigits, 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')
+var validatedOtelCollectorImageRepository = contains(otelCollectorImageRepository, '@') ? fail('otelCollectorImageRepository must not contain @ or an embedded digest. Set otelCollectorImageDigest separately.') : otelCollectorImageRepository
+var validatedOtelCollectorImageDigest = length(otelCollectorDigestWithoutHex) == 0 ? otelCollectorImageDigest : fail('otelCollectorImageDigest must be a 64-character lowercase hexadecimal SHA-256 digest without the sha256: prefix.')
+
+var metricsIngestionAbsenceAlertEnabled = enableMetricsIngestionAbsenceAlert && scaleMinReplicas > 0
+
 // ---------------------------------------------------------------------------
 // Module: Azure Monitor Workspace (Prometheus metrics destination)
 // ---------------------------------------------------------------------------
@@ -97,6 +123,21 @@ module dataCollection 'modules/data-collection.bicep' = {
     location: location
     environmentName: environmentName
     monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+    publicNetworkAccess: dcePublicNetworkAccess
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module: Metrics ingestion absence alert
+// ---------------------------------------------------------------------------
+module metricsIngestionAlerts 'modules/metric-alerts.bicep' = {
+  name: 'metrics-ingestion-alerts'
+  params: {
+    location: location
+    environmentName: environmentName
+    monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+    enabled: metricsIngestionAbsenceAlertEnabled
+    actionGroupId: metricsIngestionAbsenceActionGroupId
   }
 }
 
@@ -124,7 +165,9 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
-    otelCollectorImage: otelCollectorImage
+    deploymentEnvironmentName: environmentName
+    otelCollectorImageRepository: validatedOtelCollectorImageRepository
+    otelCollectorImageDigest: validatedOtelCollectorImageDigest
     appInsightsConnectionString: appInsightsConnectionString
     dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
     dataCollectionRuleImmutableId: dataCollection.outputs.dataCollectionRuleImmutableId

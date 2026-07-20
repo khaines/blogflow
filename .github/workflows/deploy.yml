@@ -55,6 +55,12 @@ jobs:
             echo "tag=main" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate Azure collector image pinning
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_deploy == true)
+        run: python3 deploy/azure/validate-collector-image-pin.py
+
       # Full Bicep deploy — only on infra changes or explicit manual trigger
       - name: Deploy Bicep template (full)
         if: >-

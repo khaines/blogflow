@@ -12,6 +12,13 @@
 //     GHCR_PASSWORD            — GitHub PAT with read:packages scope
 //     APPINSIGHTS_CONNECTION_STRING — Application Insights connection string
 //
+//   Optional non-secret overrides:
+//     otelCollectorImageRepository — repository plus tag, no @/digest
+//     otelCollectorImageDigest     — 64-character lowercase hex digest, no sha256: prefix
+//     dcePublicNetworkAccess       — Enabled (default) or Disabled with private endpoint
+//     enableMetricsIngestionAbsenceAlert — true (default); false for scale-to-zero
+//     metricsIngestionAbsenceActionGroupId — optional Azure Monitor action group ID
+//
 // ============================================================================
 
 using '../main.bicep'
