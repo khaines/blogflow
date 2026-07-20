@@ -4,24 +4,18 @@
 
 ### Security
 
-* [ENHANCEMENT] Webhook IP allowlist now supports CIDR notation in `allowed_ips` (previously only bare IPs were matched, making CIDR entries silently non-functional).
-* [ENHANCEMENT] Webhook: mandatory `IPResolver` argument on `NewWebhookStrategy` — the built-in X-Forwarded-For fallback is no longer used, preventing blind trust in untrusted XFF data.
-* [BREAKING CHANGE] Webhook: branch-mismatch response changed from `200 OK / "accepted (no action)"` to `202 Accepted` with `X-Blogflow-Branch-Skipped` header. External consumers checking for 200 status code on branch-skip responses must be updated.
-* [ENHANCEMENT] Config file size limit enforced during load — oversized files (> 1 MB) are rejected before parsing.
+* [ENHANCEMENT] Webhook: the HMAC signature is now verified before IP-allowlist/auth checks, with fail-closed client-IP resolution and IPv6/CIDR-aware allowlist matching (`net.IPNet.Contains()` instead of exact-string comparison, which silently dropped CIDR ranges). #252
+* [ENHANCEMENT] Webhook: `IPResolver` is now a mandatory argument on `NewWebhookStrategy` — the built-in X-Forwarded-For fallback is removed, preventing blind trust in untrusted XFF data. #252
+* [CHANGE] Webhook: branch-mismatch response changed from `200 OK` ("accepted (no action)") to `202 Accepted` with an `X-Blogflow-Branch-Skipped` header. External consumers checking for a 200 status code on branch-skip responses must be updated. #237
+* [ENHANCEMENT] Config: file size limit enforced during load — oversized files (> 1 MB) are rejected before parsing. #250
 
 ### Configuration
 
-* [BREAKING CHANGE] WebhookConfig: `ip_allowlist bool` renamed to `allowed_ips []string` with CIDR-aware matching at enforcement time. Existing config with `ip_allowlist: true` will cause a YAML parse error (`KnownFields(true)` rejects unknown fields) — operators must update to use `allowed_ips` in their configuration before upgrading.
-* [ENHANCEMENT] ServerConfig gains `MetricsPort`, `TLSTerminated`, `HSTSMaxAge`, and `TrustedProxyCIDRs` fields for observability and TLS termination support.
-* [ENHANCEMENT] WebhookConfig gains `MaxBodySize` to configure the POST body size limit (default 1 MB).
-
-### Bug Fixes
-
-* [BUGFIX] Webhook IP allowlist handler now properly matches CIDR entries using `net.IPNet.Contains()` instead of exact-string matching (which silently dropped all CIDR ranges).
+* [ENHANCEMENT] Webhook: add `allowed_ips` (`[]string`) to allowlist request source IPs, with CIDR-aware matching at enforcement time. This implements the IP allowlist sketched in the configuration design doc (which described a placeholder `ip_allowlist` flag that never shipped in code); no existing configuration key changes. #237
 
 ### Testing
 
-* [TEST] TestGap: Add comprehensive test coverage for test-gap items #217–#235 including CSP headers, symlink escape, IP allowlist (bare IP + CIDR), webhook secret length, environment override validation, and overlayFS overlay features.
+* [ENHANCEMENT] Add test coverage for gap-analysis items #217–#235: CSP headers on non-HTML responses, symlink-escape detection, IP allowlist (bare IP + CIDR), webhook secret-length bounds, environment-override validation, and overlay-FS behaviors. #237
 
 ## 0.4.1 / 2026-05-18
 
