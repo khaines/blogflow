@@ -60,7 +60,7 @@ func TestNewEngineRejectsOversizedReadFileFSBeforeRead(t *testing.T) {
 		t.Fatalf("NewEngine error = %v, want size-limit rejection", err)
 	}
 	if oversized.readFileCalled.Load() {
-		t.Fatal("ReadFileFS.ReadFile was called; want Stat-based rejection before full read")
+		t.Fatal("ReadFileFS.ReadFile was called; want bounded Open/readAll rejection before full read")
 	}
 }
 
