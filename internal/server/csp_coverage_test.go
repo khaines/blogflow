@@ -101,10 +101,7 @@ func TestCSPOn404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent-page", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resultCSP(t, resp)
-	if csp == "" {
-		t.Fatal("CSP header missing on 404 handler response")
-	}
+	assertCompleteCSP(t, resultCSP(t, resp), "404 handler")
 	if n := resp.Code; n != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", n)
 	}
@@ -148,10 +145,7 @@ func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
 
 	assertPrometheusBody(t, "/metrics", resp.Body.String())
 
-	csp := resultCSP(t, resp)
-	if csp == "" {
-		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")
-	}
+	assertCompleteCSP(t, resultCSP(t, resp), "/metrics (dedicated server)")
 
 	// Also verify other security headers arrive identically on metrics port.
 	wantHeaders := map[string]string{
