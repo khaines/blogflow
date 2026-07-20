@@ -305,58 +305,27 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	}
 
 	for i := startLayer; i < len(layers); i++ {
-		if rfs, ok := layers[i].(fs.ReadFileFS); ok {
-			// S1: Check symlink escape for disk layers before reading
+		f, err := layers[i].Open(name)
+		if err == nil {
+			// S1: Check symlink escape for disk layers.
 			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
 				if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
+					_ = f.Close()
 					return nil, symlinkErr
 				}
 			}
-			data, err := rfs.ReadFile(name)
-			if err == nil {
-				if len(data) > maxReadSize {
-					return nil, fmt.Errorf("overlayfs: file %q exceeds maximum read size of %d bytes", name, maxReadSize)
-				}
-				if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
-					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
-				}
-				if o.metrics != nil {
-					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
-					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
-				}
-				return data, nil
+			// Always bound the payload read. Stat is advisory for mutable or
+			// synthetic filesystems, and fs.ReadFileFS may allocate the whole file.
+			data, readErr := readAll(f)
+			_ = f.Close()
+			if readErr != nil {
+				return nil, readErr
 			}
-			if !isNotExist(err) {
-				return nil, err
-			}
-		} else {
-			// Fallback: open and read
-			f, err := layers[i].Open(name)
-			if err == nil {
-				// S1: Check symlink escape for disk layers
-				if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
-					if symlinkErr := checkSymlinkSafe(o.layerMeta[i].rootPath, name); symlinkErr != nil {
-						_ = f.Close()
-						return nil, symlinkErr
-					}
-				}
-				data, readErr := readAll(f)
-				_ = f.Close()
-				if readErr != nil {
-					return nil, readErr
-				}
-				if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
-					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
-				}
-				if o.metrics != nil {
-					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
-					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
-				}
-				return data, nil
-			}
-			if !isNotExist(err) {
-				return nil, err
-			}
+			o.recordReadFileHit(name, i, negCacheHit, cachedFirstCandidateLayer, start)
+			return data, nil
+		}
+		if !isNotExist(err) {
+			return nil, err
 		}
 	}
 
@@ -365,6 +334,16 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 		o.metrics.missTotal.Inc()
 	}
 	return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrNotExist}
+}
+
+func (o *OverlayFS) recordReadFileHit(name string, layer int, negCacheHit bool, cachedFirstCandidateLayer int, start time.Time) {
+	if layer > 0 && (!negCacheHit || layer != cachedFirstCandidateLayer) {
+		o.negCacheStore(name, negCacheEntry{firstCandidateLayer: layer})
+	}
+	if o.metrics != nil {
+		o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
+		o.metrics.layerHitTotal.WithLabelValues(o.layerName(layer)).Inc()
+	}
 }
 
 // ReadDir implements fs.ReadDirFS. Returns the UNION of directory

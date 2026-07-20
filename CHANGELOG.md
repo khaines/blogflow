@@ -5,6 +5,7 @@
 ### BlogFlow
 
 * [CHANGE] overlayfs: negative cache now uses true LRU eviction of the least-recently-used entry at capacity (previously admission-capped — stopped caching new misses once full). #245
+* [BUGFIX] overlayfs: reject files exceeding the 64 MiB read limit before fully reading them (the `fs.ReadFileFS` fast-path previously read the whole file before the size check — latent OOM on the content trust boundary); covers template loading. #234
 
 ### Security
 
