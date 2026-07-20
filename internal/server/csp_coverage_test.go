@@ -3,18 +3,82 @@
 package server
 
 import (
+	"fmt"
+	"html/template"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/server/handlers"
 )
 
 func newCSPTestServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := defaultTestConfig()
+	cfg.Site.Title = "CSP Test Blog"
+	cfg.Site.Description = "CSP coverage test blog"
+	cfg.Site.BaseURL = "https://example.com"
+	cfg.Site.Author.Name = "CSP Tester"
+	cfg.Feed.Type = "atom"
+	cfg.Feed.Items = 20
+
 	s := New(cfg, nil)
-	s.RegisterRoutes(testRouteOptions())
+	opts := testRouteOptions()
+	deps := handlers.NewDeps(cfg, cspTestIndex(), nil)
+	opts.FeedHandler = handlers.NewFeedHandler(deps).ServeHTTP
+	opts.SitemapHandler = handlers.NewSitemapHandler(deps).ServeHTTP
+	s.RegisterRoutes(opts)
 	return s
+}
+
+func cspTestIndex() *content.Index {
+	idx := &content.Index{
+		BySlug:     make(map[string]*content.Post),
+		ByTag:      make(map[string][]*content.Post),
+		ByYear:     make(map[int][]*content.Post),
+		PageBySlug: make(map[string]*content.Post),
+	}
+	base := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	for i := range 2 {
+		p := &content.Post{
+			Slug:    fmt.Sprintf("csp-post-%d", i+1),
+			Summary: fmt.Sprintf("Summary for CSP post %d", i+1),
+			Content: template.HTML(fmt.Sprintf("<p>CSP content %d</p>", i+1)), //nolint:gosec
+		}
+		p.Title = fmt.Sprintf("CSP Post %d", i+1)
+		p.Date = base.AddDate(0, 0, -i)
+		idx.Posts = append(idx.Posts, p)
+		idx.BySlug[p.Slug] = p
+	}
+	return idx
+}
+
+func resultCSP(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	res := rec.Result()
+	defer func() { _ = res.Body.Close() }()
+	_, _ = io.Copy(io.Discard, res.Body)
+	return res.Header.Get("Content-Security-Policy")
+}
+
+func assertCompleteCSP(t *testing.T, csp, endpoint string) {
+	t.Helper()
+	if csp == "" {
+		t.Fatalf("CSP header missing on %s response", endpoint)
+	}
+	directives := []string{
+		"default-src", "script-src", "style-src", "img-src", "font-src",
+		"connect-src", "frame-ancestors", "base-uri", "form-action", "object-src",
+	}
+	for _, d := range directives {
+		if !strings.Contains(csp, d) {
+			t.Errorf("%s CSP missing directive: %s", endpoint, d)
+		}
+	}
 }
 
 func TestCSPOn404(t *testing.T) {
@@ -23,7 +87,7 @@ func TestCSPOn404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent-page", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resp.Header().Get("Content-Security-Policy")
+	csp := resultCSP(t, resp)
 	if csp == "" {
 		t.Fatal("CSP header missing on 404 handler response")
 	}
@@ -40,7 +104,7 @@ func TestCSPOnSeparateMetricsPort(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resp.Header().Get("Content-Security-Policy")
+	csp := resultCSP(t, resp)
 	if csp == "" {
 		t.Fatal("CSP header missing on main server response when MetricsPort is set")
 	}
@@ -78,7 +142,7 @@ func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
 		t.Errorf("/metrics body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", body[:min(200, len(body))])
 	}
 
-	csp := resp.Header().Get("Content-Security-Policy")
+	csp := resultCSP(t, resp)
 	if csp == "" {
 		t.Fatal("CSP header missing on /metrics response from dedicated metrics server")
 	}
@@ -104,56 +168,49 @@ func TestCSPDirectiveCompleteness(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resp.Header().Get("Content-Security-Policy")
-	directives := []string{
-		"default-src", "script-src", "style-src", "img-src", "font-src",
-		"connect-src", "frame-ancestors", "base-uri", "form-action", "object-src",
-	}
-	for _, d := range directives {
-		if !strings.Contains(csp, d) {
-			t.Errorf("CSP missing directive: %s", d)
-		}
-	}
+	assertCompleteCSP(t, resultCSP(t, resp), "/")
 }
 
-func TestCSPOnFeedXML(t *testing.T) {
+func TestCSPOnMainMuxMetrics(t *testing.T) {
 	t.Parallel()
 	s := newCSPTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	if resp.Code < 200 || resp.Code >= 300 {
-		t.Errorf("feed.xml status = %d, want 2xx", resp.Code)
+	if resp.Code != http.StatusOK {
+		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
 	}
-	csp := resp.Header().Get("Content-Security-Policy")
-	if csp == "" {
-		t.Fatal("CSP header missing on /feed.xml non-HTML response")
+	body := resp.Body.String()
+	if body == "" {
+		t.Fatal("/metrics body is empty")
 	}
-	// Check key directives present
-	for _, d := range []string{"default-src", "script-src", "style-src", "img-src"} {
-		if !strings.Contains(csp, d) {
-			t.Errorf("feed.xml CSP missing directive: %s", d)
-		}
+	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
+		t.Errorf("/metrics body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", body[:min(200, len(body))])
 	}
+	assertCompleteCSP(t, resultCSP(t, resp), "/metrics")
 }
 
-func TestCSPOnSitemapXML(t *testing.T) {
+func TestCSPOnXMLHandlers(t *testing.T) {
 	t.Parallel()
 	s := newCSPTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
-	resp := httptest.NewRecorder()
-	s.httpServer.Handler.ServeHTTP(resp, req)
-	if resp.Code < 200 || resp.Code >= 300 {
-		t.Errorf("sitemap.xml status = %d, want 2xx", resp.Code)
-	}
-	csp := resp.Header().Get("Content-Security-Policy")
-	if csp == "" {
-		t.Fatal("CSP header missing on /sitemap.xml non-HTML response")
-	}
-	for _, d := range []string{"default-src", "script-src", "style-src", "img-src"} {
-		if !strings.Contains(csp, d) {
-			t.Errorf("sitemap.xml CSP missing directive: %s", d)
-		}
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "feed", path: "/feed.xml"},
+		{name: "sitemap", path: "/sitemap.xml"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			resp := httptest.NewRecorder()
+			s.httpServer.Handler.ServeHTTP(resp, req)
+			if resp.Code < 200 || resp.Code >= 300 {
+				t.Errorf("%s status = %d, want 2xx", tc.path, resp.Code)
+			}
+			assertCompleteCSP(t, resultCSP(t, resp), tc.path)
+		})
 	}
 }
 
@@ -163,7 +220,7 @@ func TestCSPOnHealthzEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resp.Header().Get("Content-Security-Policy")
+	csp := resultCSP(t, resp)
 	if csp == "" {
 		t.Fatal("CSP header missing on /healthz response")
 	}
@@ -175,7 +232,7 @@ func TestCSPOnReadyzEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	resp := httptest.NewRecorder()
 	s.httpServer.Handler.ServeHTTP(resp, req)
-	csp := resp.Header().Get("Content-Security-Policy")
+	csp := resultCSP(t, resp)
 	if csp == "" {
 		t.Fatal("CSP header missing on /readyz response")
 	}
