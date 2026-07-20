@@ -352,8 +352,13 @@ Verify the promoted label after deploy with:
 count by (deployment_environment) (blogflow_http_requests_total)
 ```
 
-The result should include the current `<environmentName>` value before enabling
-or depending on the absence alert.
+Generate a request first if the app is scaled to zero or idle, for example
+`curl -fsS https://<container-app-fqdn>/healthz`, then run the query. Otherwise
+an idle deployment with no recent `blogflow_http_requests_total` samples can
+return empty even when the label promotion is configured correctly. For older
+samples, use a wider range query in Azure Monitor. The result should include the
+current `<environmentName>` value before enabling or depending on the absence
+alert.
 
 If the expression remains active for `PT5M`, Azure Monitor raises a severity
 2 alert indicating no BlogFlow custom metrics have arrived for the previous 30

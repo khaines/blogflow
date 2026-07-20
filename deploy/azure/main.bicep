@@ -33,6 +33,7 @@ targetScope = 'resourceGroup'
 param location string = 'eastus2'
 
 @description('Base name prefix for all resources')
+@minLength(1)
 param environmentName string
 
 @description('Full container image reference')

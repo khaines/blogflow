@@ -48,6 +48,7 @@ param metricsIngestionEndpoint string
 param otelMetricsStreamName string
 
 @description('Deployment environment label value applied to OTEL_RESOURCE_ATTRIBUTES and alert scoping')
+@minLength(1)
 param deploymentEnvironmentName string
 
 @description('OpenTelemetry Collector Contrib image repository and tag, without @ or digest. The template rejects embedded digests so tag-only overrides remain impossible.')
