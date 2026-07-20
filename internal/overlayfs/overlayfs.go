@@ -14,6 +14,7 @@
 package overlayfs
 
 import (
+	"container/list"
 	"embed"
 	"errors"
 	"fmt"
@@ -47,11 +48,13 @@ type OverlayFS struct {
 	mu sync.RWMutex // protects layers slice during hot-reload
 
 	// Negative cache: tracks paths confirmed absent from upper layers.
-	negCache      sync.Map // map[string]negCacheEntry
+	negCacheMu    sync.Mutex
+	negCache      map[string]*list.Element // map path to *negCacheListEntry in negCacheLRU
+	negCacheLRU   *list.List
 	negCacheCount atomic.Int64
 
-	// maxNegCacheEntries bounds the negative cache size. When exceeded,
-	// new entries are not cached (graceful degradation).
+	// maxNegCacheEntries bounds the negative cache size. At capacity,
+	// inserting a new entry evicts the least-recently-used entry.
 	maxNegCacheEntries int
 
 	// metrics is nil when WithMetrics is not used (zero overhead).
@@ -63,6 +66,11 @@ type negCacheEntry struct {
 	// contain this path. Layers [0, firstCandidateLayer) are known
 	// misses and skipped on subsequent lookups.
 	firstCandidateLayer int
+}
+
+type negCacheListEntry struct {
+	key   string
+	value negCacheEntry
 }
 
 // Resolution describes which layer served a file.
@@ -98,6 +106,8 @@ func NewOverlayFS(layers ...fs.FS) *OverlayFS {
 		layers:             filtered,
 		layerNames:         filteredNames,
 		layerMeta:          make([]layerMeta, len(filtered)),
+		negCache:           make(map[string]*list.Element),
+		negCacheLRU:        list.New(),
 		maxNegCacheEntries: 100_000,
 	}
 }
@@ -215,8 +225,7 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 	o.mu.RUnlock()
 
 	startLayer := 0
-	if cached, ok := o.negCache.Load(name); ok {
-		entry := cached.(negCacheEntry)
+	if entry, ok := o.negCacheLookup(name); ok {
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -236,15 +245,8 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 				}
 			}
 			// Cache: record that layers [0, i) don't have this path
-			if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
-				if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
-					firstCandidateLayer: i,
-				}); !loaded {
-					o.negCacheCount.Add(1)
-					if o.metrics != nil {
-						o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
-					}
-				}
+			if i > 0 {
+				o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 			}
 			if o.metrics != nil {
 				o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
@@ -285,8 +287,7 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	o.mu.RUnlock()
 
 	startLayer := 0
-	if cached, ok := o.negCache.Load(name); ok {
-		entry := cached.(negCacheEntry)
+	if entry, ok := o.negCacheLookup(name); ok {
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -308,15 +309,8 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 				if len(data) > maxReadSize {
 					return nil, fmt.Errorf("overlayfs: file %q exceeds maximum read size of %d bytes", name, maxReadSize)
 				}
-				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
-					if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
-						firstCandidateLayer: i,
-					}); !loaded {
-						o.negCacheCount.Add(1)
-						if o.metrics != nil {
-							o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
-						}
-					}
+				if i > 0 {
+					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 				}
 				if o.metrics != nil {
 					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
@@ -343,15 +337,8 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 				if readErr != nil {
 					return nil, readErr
 				}
-				if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
-					if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
-						firstCandidateLayer: i,
-					}); !loaded {
-						o.negCacheCount.Add(1)
-						if o.metrics != nil {
-							o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
-						}
-					}
+				if i > 0 {
+					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 				}
 				if o.metrics != nil {
 					o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
@@ -453,8 +440,7 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 	o.mu.RUnlock()
 
 	startLayer := 0
-	if cached, ok := o.negCache.Load(name); ok {
-		entry := cached.(negCacheEntry)
+	if entry, ok := o.negCacheLookup(name); ok {
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -533,34 +519,80 @@ func (o *OverlayFS) OpenFile(name string) (fs.File, fs.FileInfo, error) {
 	return f, info, nil
 }
 
-// InvalidateLayer clears negative cache entries for a specific layer.
-// Called when files within a layer change (e.g., file edit, new file).
-func (o *OverlayFS) InvalidateLayer(layerIndex int) {
-	o.negCache.Range(func(key, value any) bool {
-		entry := value.(negCacheEntry)
-		if entry.firstCandidateLayer >= layerIndex {
-			if _, deleted := o.negCache.LoadAndDelete(key); deleted {
-				o.negCacheCount.Add(-1)
-			}
+func (o *OverlayFS) negCacheLookup(name string) (negCacheEntry, bool) {
+	o.negCacheMu.Lock()
+	defer o.negCacheMu.Unlock()
+
+	elem, ok := o.negCache[name]
+	if !ok {
+		return negCacheEntry{}, false
+	}
+	o.negCacheLRU.MoveToFront(elem)
+	return elem.Value.(negCacheListEntry).value, true
+}
+
+func (o *OverlayFS) negCacheStore(name string, entry negCacheEntry) {
+	if o.maxNegCacheEntries <= 0 {
+		return
+	}
+
+	o.negCacheMu.Lock()
+	if elem, ok := o.negCache[name]; ok {
+		elem.Value = negCacheListEntry{key: name, value: entry}
+		o.negCacheLRU.MoveToFront(elem)
+		o.negCacheMu.Unlock()
+		return
+	}
+
+	if len(o.negCache) >= o.maxNegCacheEntries {
+		oldest := o.negCacheLRU.Back()
+		if oldest != nil {
+			oldestEntry := oldest.Value.(negCacheListEntry)
+			o.removeNegCacheElement(oldestEntry.key, oldest)
 		}
-		return true
-	})
+	}
+
+	elem := o.negCacheLRU.PushFront(negCacheListEntry{key: name, value: entry})
+	o.negCache[name] = elem
+	o.negCacheCount.Store(int64(len(o.negCache)))
+	o.negCacheMu.Unlock()
+	o.updateNegCacheSizeMetric()
+}
+
+func (o *OverlayFS) removeNegCacheElement(key string, elem *list.Element) {
+	delete(o.negCache, key)
+	o.negCacheLRU.Remove(elem)
+	o.negCacheCount.Store(int64(len(o.negCache)))
+}
+
+func (o *OverlayFS) updateNegCacheSizeMetric() {
 	if o.metrics != nil {
 		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
 	}
 }
 
+// InvalidateLayer clears negative cache entries for a specific layer.
+// Called when files within a layer change (e.g., file edit, new file).
+func (o *OverlayFS) InvalidateLayer(layerIndex int) {
+	o.negCacheMu.Lock()
+	for key, elem := range o.negCache {
+		entry := elem.Value.(negCacheListEntry)
+		if entry.value.firstCandidateLayer >= layerIndex {
+			o.removeNegCacheElement(key, elem)
+		}
+	}
+	o.negCacheMu.Unlock()
+	o.updateNegCacheSizeMetric()
+}
+
 // InvalidateAll clears the entire negative cache.
 func (o *OverlayFS) InvalidateAll() {
-	o.negCache.Range(func(key, _ any) bool {
-		if _, deleted := o.negCache.LoadAndDelete(key); deleted {
-			o.negCacheCount.Add(-1)
-		}
-		return true
-	})
-	if o.metrics != nil {
-		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
-	}
+	o.negCacheMu.Lock()
+	o.negCache = make(map[string]*list.Element)
+	o.negCacheLRU.Init()
+	o.negCacheCount.Store(0)
+	o.negCacheMu.Unlock()
+	o.updateNegCacheSizeMetric()
 }
 
 // ReplaceLayer atomically replaces a layer's backing fs.FS and clears
@@ -575,18 +607,15 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 	}
 	o.layers[layerIndex] = newFS
 	// Clear neg-cache entries that reference this or higher layers
-	o.negCache.Range(func(key, value any) bool {
-		entry := value.(negCacheEntry)
-		if entry.firstCandidateLayer >= layerIndex {
-			if _, deleted := o.negCache.LoadAndDelete(key); deleted {
-				o.negCacheCount.Add(-1)
-			}
+	o.negCacheMu.Lock()
+	for key, elem := range o.negCache {
+		entry := elem.Value.(negCacheListEntry)
+		if entry.value.firstCandidateLayer >= layerIndex {
+			o.removeNegCacheElement(key, elem)
 		}
-		return true
-	})
-	if o.metrics != nil {
-		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
 	}
+	o.negCacheMu.Unlock()
+	o.updateNegCacheSizeMetric()
 	return nil
 }
 

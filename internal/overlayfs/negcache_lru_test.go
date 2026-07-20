@@ -1,5 +1,3 @@
-// Negative cache admission bound policy verification per test-gap-analysis.md item #13
-// Addresses Critical finding: original tests never exercised negCache population or eviction.
 package overlayfs
 
 import (
@@ -95,36 +93,25 @@ func TestNegativeCachePopulates(t *testing.T) {
 	}
 }
 
-// TestNegativeCacheAdmissionWithSmallLimit verifies the admission bound (capping) works.
-// maxNegCacheEntries is unexported, but since this test is in package overlayfs
-// we can set it directly for validation.
-func TestNegativeCacheAdmissionWithSmallLimit(t *testing.T) {
+// TestNegativeCacheLRUEvictsLeastRecentlyUsed verifies a full negative cache
+// evicts the oldest not-recently-used entry, not the newest insertion.
+func TestNegativeCacheLRUEvictsLeastRecentlyUsed(t *testing.T) {
 	t.Parallel()
 
-	// Set a very small limit so we can verify admission control.
-	const testLimit = 5
+	const testLimit = 3
 
-	// layer 0 (theme) is empty — all files will miss layer 0.
 	emptyLayer := fstest.MapFS{}
-
 	lowerLayer := fstest.MapFS{}
-	for i := 1; i <= 10; i++ {
+	for i := 1; i <= 4; i++ {
 		key := fmt.Sprintf("file%02d", i)
 		lowerLayer[key] = &fstest.MapFile{Data: []byte(fmt.Sprintf("data-%d", i))}
 	}
 
 	ofs := NewOverlayFS(emptyLayer, lowerLayer).WithLayerNames([]string{"theme", "defaults"})
-	// Override the unexported limit (white-box test, same package).
 	ofs.maxNegCacheEntries = testLimit
 
-	uniquePaths := make([]string, 10)
-	for i := 1; i <= 10; i++ {
-		uniquePaths[i-1] = fmt.Sprintf("file%02d", i)
-	}
-
-	// Read all 10 paths. Each misses layer 0 and hits layer 1 (i=1 > 0).
-	// negCache should cap at 5 due to maxNegCacheEntries.
-	for _, name := range uniquePaths {
+	for i := 1; i <= testLimit; i++ {
+		name := fmt.Sprintf("file%02d", i)
 		data, err := ofs.ReadFile(name)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
@@ -132,14 +119,37 @@ func TestNegativeCacheAdmissionWithSmallLimit(t *testing.T) {
 		if len(data) == 0 {
 			t.Errorf("ReadFile(%q) returned empty data", name)
 		}
-		_ = data
 	}
 
-	count := ofs.negCacheCount.Load()
-	if count > int64(testLimit) {
-		t.Errorf("negCacheEntry count = %d, want <= %d (admission bound violated)", count, testLimit)
+	if count := ofs.negCacheCount.Load(); count != int64(testLimit) {
+		t.Fatalf("negCacheEntry count after warmup = %d, want %d", count, testLimit)
 	}
-	if count == 0 {
-		t.Error("negCache should have entries with multi-layer setup where path is absent from layer 0")
+
+	// Refresh file01. A true LRU cache should now evict file02, not file01.
+	if _, err := ofs.ReadFile("file01"); err != nil {
+		t.Fatalf("ReadFile(file01) refresh unexpectedly failed: %v", err)
+	}
+	if _, err := ofs.ReadFile("file04"); err != nil {
+		t.Fatalf("ReadFile(file04) insertion unexpectedly failed: %v", err)
+	}
+
+	if count := ofs.negCacheCount.Load(); count != int64(testLimit) {
+		t.Fatalf("negCacheEntry count after eviction = %d, want %d", count, testLimit)
+	}
+
+	assertNegCacheContains(t, ofs, "file01", true)
+	assertNegCacheContains(t, ofs, "file02", false)
+	assertNegCacheContains(t, ofs, "file03", true)
+	assertNegCacheContains(t, ofs, "file04", true)
+}
+
+func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool) {
+	t.Helper()
+
+	ofs.negCacheMu.Lock()
+	_, got := ofs.negCache[name]
+	ofs.negCacheMu.Unlock()
+	if got != want {
+		t.Fatalf("negCache contains %q = %v, want %v", name, got, want)
 	}
 }

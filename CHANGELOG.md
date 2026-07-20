@@ -2,6 +2,10 @@
 
 ## main / unreleased
 
+### BlogFlow
+
+* [CHANGE] overlayfs: negative cache now uses true LRU eviction of the least-recently-used entry at capacity (previously admission-capped — stopped caching new misses once full). #245
+
 ### Security
 
 * [ENHANCEMENT] Webhook IP allowlist now supports CIDR notation in `allowed_ips` (previously only bare IPs were matched, making CIDR entries silently non-functional).
