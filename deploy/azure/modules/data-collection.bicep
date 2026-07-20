@@ -2,9 +2,10 @@
 // Data Collection — OTLP metrics ingestion for Azure Monitor workspace
 // ============================================================================
 // Creates the Azure Monitor Data Collection Endpoint (DCE) and Data Collection
-// Rule (DCR) used by the ACA managed OpenTelemetry agent to send OTLP metrics
-// to the Azure Monitor workspace. Authentication is handled by Entra ID via
-// role assignment in main.bicep; no static API keys are configured here.
+// Rule (DCR) used by the self-managed OpenTelemetry Collector sidecar to send
+// OTLP metrics to the Azure Monitor workspace. Authentication is handled by
+// Microsoft Entra ID through the collector's Azure auth extension; no static API
+// keys are configured here.
 // ============================================================================
 
 @description('Azure region')
@@ -92,11 +93,14 @@ output dataCollectionRuleId string = dataCollectionRule.id
 @description('Data Collection Rule immutable ID used in OTLP ingestion URLs')
 output dataCollectionRuleImmutableId string = dataCollectionRule.properties.immutableId
 
+@description('DCR stream name for Azure Monitor OTLP metrics ingestion')
+output otelMetricsStreamName string = otelMetricsStreamName
+
 @description('DCE logs ingestion endpoint')
 output logsIngestionEndpoint string = dataCollectionEndpoint.properties.logsIngestion.endpoint
 
 @description('DCE metrics ingestion endpoint')
 output metricsIngestionEndpoint string = dataCollectionEndpoint.properties.metricsIngestion.endpoint
 
-@description('Full OTLP metrics endpoint for the ACA managed OpenTelemetry agent')
-output otlpMetricsEndpoint string = '${dataCollectionEndpoint.properties.metricsIngestion.endpoint}/dataCollectionRules/${dataCollectionRule.properties.immutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'
+@description('Full OTLP metrics endpoint for the self-managed OpenTelemetry Collector')
+output otlpMetricsEndpoint string = '${dataCollectionEndpoint.properties.metricsIngestion.endpoint}/datacollectionRules/${dataCollectionRule.properties.immutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'

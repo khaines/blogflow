@@ -6,10 +6,10 @@
 //   - Log Analytics workspace for container diagnostics
 //   - Azure Monitor workspace for Prometheus metrics
 //   - DCE/DCR pipeline for OTLP metrics ingestion
-//   - ACA managed OpenTelemetry agent:
+//   - Self-managed OpenTelemetry Collector sidecar:
 //       • Traces → Application Insights
-//       • Metrics → DCE/DCR → Azure Monitor workspace
-//   - Container App with system-assigned managed identity
+//       • Metrics → DCE/DCR → Azure Monitor workspace with Entra auth
+//   - Container App with user-assigned managed identity for the collector
 //
 // All account-specific values (subscription, resource group, connection
 // strings, credentials) are passed as parameters — never hardcoded.
@@ -98,22 +98,19 @@ module dataCollection 'modules/data-collection.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Module: Container Apps Environment + Log Analytics + OTel routing
+// Module: Container Apps Environment + Log Analytics
 // ---------------------------------------------------------------------------
 module environment 'modules/container-app-env.bicep' = {
   name: 'container-app-env'
   params: {
     location: location
     environmentName: environmentName
-    appInsightsConnectionString: appInsightsConnectionString
     logRetentionDays: logRetentionDays
-    otlpMetricsEndpoint: dataCollection.outputs.otlpMetricsEndpoint
-    dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
   }
 }
 
 // ---------------------------------------------------------------------------
-// Module: Container App (BlogFlow — no sidecar)
+// Module: Container App (BlogFlow + OTel Collector sidecar)
 // ---------------------------------------------------------------------------
 module containerApp 'modules/container-app.bicep' = {
   name: 'container-app'
@@ -124,6 +121,11 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
+    appInsightsConnectionString: appInsightsConnectionString
+    dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
+    dataCollectionRuleImmutableId: dataCollection.outputs.dataCollectionRuleImmutableId
+    metricsIngestionEndpoint: dataCollection.outputs.metricsIngestionEndpoint
+    otelMetricsStreamName: dataCollection.outputs.otelMetricsStreamName
     scaleMinReplicas: scaleMinReplicas
     scaleMaxReplicas: scaleMaxReplicas
     customDomainName: customDomainName
@@ -158,3 +160,9 @@ output dataCollectionRuleImmutableId string = dataCollection.outputs.dataCollect
 
 @description('DCE metrics ingestion endpoint')
 output metricsIngestionEndpoint string = dataCollection.outputs.metricsIngestionEndpoint
+
+@description('Container App managed identity principal ID used by the OTel Collector')
+output containerAppManagedIdentityPrincipalId string = containerApp.outputs.principalId
+
+@description('Container App managed identity client ID used by the OTel Collector')
+output containerAppManagedIdentityClientId string = containerApp.outputs.clientId

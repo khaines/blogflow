@@ -1,50 +1,55 @@
-# OTel Collector configuration — RETIRED
+# OTel Collector configuration — reference only
 #
-# This file was previously used by the OTel Collector sidecar to receive traces
-# and metrics from BlogFlow and export them to Azure Monitor (Application Insights).
+# The active Azure Container Apps deployment passes an equivalent collector YAML
+# through the OTELCOL_CONFIG environment variable and starts the sidecar with:
 #
-# PROBLEM: The azuremonitor exporter sent BOTH traces and metrics to App Insights,
-# which stored metrics in the AppMetrics table of the backing Log Analytics workspace
-# at expensive PerGB2018 rates. Metrics should never go to Log Analytics.
+#   otelcol-contrib --config=env:OTELCOL_CONFIG
 #
-# REPLACED BY: ACA managed OpenTelemetry agent (configured in container-app-env.bicep)
-#   - Traces → Application Insights (correct)
-#   - Metrics → NOT exported (Phase 2 will route to Azure Monitor for Prometheus via DCE/DCR)
+# ACA does not provide a simple config-file mount for this sidecar. Keeping the
+# config inline in Bicep avoids a custom collector image while the configuration
+# remains small. If it grows substantially, bake this YAML into a tiny custom
+# collector image and change container-app.bicep accordingly.
 #
-# The OTel Collector sidecar has been removed from container-app.bicep.
-# This file is kept for reference only.
-#
-# --- Original configuration ---
-#
-# receivers:
-#   otlp:
-#     protocols:
-#       http:
-#         endpoint: 0.0.0.0:4318
-#   prometheus:
-#     config:
-#       scrape_configs:
-#         - job_name: blogflow
-#           scrape_interval: 30s
-#           static_configs:
-#             - targets: ["localhost:9090"]
-#
-# processors:
-#   batch:
-#     timeout: 10s
-#     send_batch_size: 256
-#
-# exporters:
-#   azuremonitor:
-#     connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
-#
-# service:
-#   pipelines:
-#     traces:
-#       receivers: [otlp]
-#       processors: [batch]
-#       exporters: [azuremonitor]
-#     metrics:                          # <-- THIS caused metrics in Log Analytics
-#       receivers: [otlp, prometheus]   # <-- DUPLICATE: both push and scrape
-#       processors: [batch]
-#       exporters: [azuremonitor]       # <-- Wrong destination for metrics
+# See deploy/azure/modules/container-app.bicep for the rendered configuration,
+# which injects the managed identity client ID, DCR immutable ID, and DCE metrics
+# endpoint at deploy time.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  cumulativetodelta:
+  batch:
+    timeout: 10s
+    send_batch_size: 256
+
+extensions:
+  azure_auth:
+    managed_identity:
+      client_id: <container-app-user-assigned-managed-identity-client-id>
+    scopes:
+      - https://monitor.azure.com/.default
+
+exporters:
+  azuremonitor/traces: {}
+  otlphttp/azuremonitor_metrics:
+    metrics_endpoint: "https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics"
+    auth:
+      authenticator: azure_auth
+
+service:
+  extensions: [azure_auth]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azuremonitor/traces]
+    metrics:
+      receivers: [otlp]
+      processors: [cumulativetodelta, batch]
+      exporters: [otlphttp/azuremonitor_metrics]

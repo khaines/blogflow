@@ -35,12 +35,24 @@ az ad app federated-credential create --id <APP_ID> --parameters '{
 > If you rename the repo or deploy from a different branch, update this credential
 > or the OIDC exchange will fail silently.
 
-## 4. Grant Contributor Role to the Service Principal
+## 4. Grant Deployment Roles to the Service Principal
+
+The deployment principal creates Azure resources **and** a DCR-scoped role
+assignment for the Container App managed identity. `Contributor` alone cannot
+create role assignments because it lacks `Microsoft.Authorization/roleAssignments/write`.
+Grant `Contributor` plus either `Role Based Access Control Administrator`
+(preferred least-privilege role for RBAC management) or `User Access Administrator`
+at the target resource group scope.
 
 ```bash
 az role assignment create \
   --assignee <SP_OBJECT_ID> \
   --role Contributor \
+  --scope /subscriptions/<SUB_ID>/resourceGroups/<RG_NAME>
+
+az role assignment create \
+  --assignee <SP_OBJECT_ID> \
+  --role "Role Based Access Control Administrator" \
   --scope /subscriptions/<SUB_ID>/resourceGroups/<RG_NAME>
 ```
 
@@ -71,8 +83,9 @@ az monitor app-insights component create \
 > Treat it as a secret — do not commit it to source control.
 
 > **ℹ️ Note:** Application Insights is used for **traces only**. Metrics are
-> exported through the ACA managed OTel agent to Azure Monitor for Prometheus
-> via DCE/DCR, avoiding the expensive Log Analytics metrics ingestion path.
+> exported through the self-managed OTel Collector sidecar to Azure Monitor for
+> Prometheus via DCE/DCR, avoiding the expensive Log Analytics metrics ingestion
+> path.
 
 ## 6. Create GitHub Environment and Secrets
 
@@ -119,10 +132,12 @@ The deployment creates:
 - **Log Analytics workspace** — container diagnostics (default 30-day retention)
 - **Azure Monitor workspace** — Prometheus metrics destination
 - **Data Collection Endpoint + Rule** — OTLP metrics ingestion pipeline
-- **Container Apps Environment** — with managed OTel agent routing:
-  - Traces → Application Insights
-  - Metrics → DCE/DCR → Azure Monitor workspace
-- **Container App** — BlogFlow (single container, no sidecar)
+- **Container Apps Environment** — runtime host and container diagnostics only
+- **User-assigned managed identity** — attached to the Container App for OTel
+  Collector authentication
+- **DCR-scoped role assignment** — grants that identity
+  **Monitoring Metrics Publisher** on the Data Collection Rule
+- **Container App** — BlogFlow plus an OTel Collector sidecar
 
 The workflow also runs automatically when the **Publish** workflow completes
 on main (i.e., after a new container image is pushed to GHCR).
@@ -144,68 +159,126 @@ on main (i.e., after a new container image is pushed to GHCR).
 
 ## 8. Verify Metrics Are Routed to Azure Monitor (Post-Deploy)
 
-After the first deploy, confirm metrics are **not** going to Log Analytics and
-then verify that the Azure Monitor workspace receives Prometheus metrics.
+After the first deploy, generate a little traffic so BlogFlow emits metrics:
 
 ```bash
-# Check that AppMetrics table is NOT receiving new data in Application Insights / Log Analytics
+curl -fsS https://<container-app-fqdn>/healthz
+curl -fsS https://<container-app-fqdn>/readyz
+```
+
+Confirm metrics are **not** going to Log Analytics / Application Insights:
+
+```bash
 az monitor app-insights query \
   --app <APP_INSIGHTS_NAME> \
   --resource-group <RG> \
   --analytics-query "AppMetrics | where TimeGenerated > ago(1h) | count"
 ```
 
-Use the `prometheusQueryEndpoint` deployment output with Azure Managed Grafana
-or another PromQL client to confirm BlogFlow metrics appear in the Azure Monitor
-workspace after the app has emitted metrics for a few minutes.
+Then query the Azure Monitor workspace using the deployment output
+`prometheusQueryEndpoint`. Example with the Azure CLI REST command:
 
-## 9. Phase 2: Metrics Export via DCE/DCR
+```bash
+PROM_ENDPOINT="$(az deployment group show \
+  --resource-group <RG> \
+  --name <DEPLOYMENT_NAME> \
+  --query properties.outputs.prometheusQueryEndpoint.value -o tsv)"
 
-Metrics export is enabled through Azure Monitor native OTLP ingestion:
+az rest --method get \
+  --url "${PROM_ENDPOINT}/api/v1/query?query=up"
+```
 
-1. **Data Collection Endpoint (DCE)** — exposes the OTLP metrics ingestion URL
-2. **Data Collection Rule (DCR)** — routes the `Custom-Metrics-Otel` stream to
-   the Azure Monitor workspace created by `monitor-workspace.bicep`
-3. **Managed identity authentication** — the Container Apps Environment has a
-   system-assigned managed identity, and Bicep grants it the
-   **Monitoring Metrics Publisher** role on the DCR
-4. **ACA OTLP configuration** — `container-app-env.bicep` adds an
-   `azureMonitorMetrics` OTLP destination under
-   `openTelemetryConfiguration.destinationsConfiguration.otlpConfigurations`
-   and references it from `metricsConfiguration.destinations`
-5. **BlogFlow metrics exporter** — `container-app.bicep` sets
-   `OTEL_METRICS_EXPORTER=otlp`, so the app exports metrics to the ACA managed
-   OTel agent instead of leaving metrics disabled
+For a BlogFlow-specific check, replace `up` with a known BlogFlow Prometheus
+series visible from `/metrics`, for example a `blogflow_*` metric name if one is
+present. A successful PromQL response with data confirms the app → collector →
+DCE/DCR → Azure Monitor workspace path is working. If the query is empty, first
+verify the app has received traffic and then check the `otel-collector` container
+logs for auth or export errors.
 
-No static API keys are configured. The deployment assumes the ACA managed OTel
-agent can use the environment's managed identity when sending to the DCE/DCR
-endpoint. The managed OTel agent and its `2024-10-02-preview` API remain preview
-features; validate ingestion in Azure after deployment.
+## 9. Phase 2: Metrics Export via Self-Managed OTel Collector Sidecar
+
+Metrics export is enabled through Azure Monitor native OTLP ingestion, but **not**
+through the ACA managed OpenTelemetry agent. The managed agent's OTLP destination
+configuration supports static headers/API keys and does not acquire the Microsoft
+Entra bearer token required by the DCE. Managed-identity authentication therefore
+requires a self-managed OpenTelemetry Collector sidecar.
+
+The deployed flow is:
+
+1. **BlogFlow app container** — exports traces and metrics over OTLP/HTTP to
+   `http://localhost:4318` inside the Container App replica.
+2. **OTel Collector sidecar** — image `otel/opentelemetry-collector-contrib:0.148.0`
+   receives OTLP on localhost ports 4317/4318.
+3. **Traces** — exported to Application Insights using the collector's
+   `azuremonitor` exporter and the `APPLICATIONINSIGHTS_CONNECTION_STRING`
+   secret.
+4. **Metrics** — exported with `otlphttp` to the DCE metrics-ingestion endpoint:
+   `.../datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics`.
+5. **Authentication** — the collector uses the contrib `azure_auth` extension,
+   a user-assigned managed identity attached to the Container App, and the token
+   scope `https://monitor.azure.com/.default`.
+6. **Authorization** — Bicep grants **Monitoring Metrics Publisher** to that
+   managed identity at the DCR scope only, using a deterministic `guid()` role
+   assignment and `principalType: 'ServicePrincipal'`.
+
+### Collector config delivery
+
+Azure Container Apps does not provide a simple config-file mount for this sidecar,
+so Bicep passes the collector YAML in the `OTELCOL_CONFIG` environment variable
+and starts the collector with:
+
+```bash
+otelcol-contrib --config=env:OTELCOL_CONFIG
+```
+
+This keeps the deployment self-contained and avoids building a custom collector
+image. The assumption is that the collector config remains small enough for ACA
+environment-variable limits; if the config grows substantially, switch to a small
+custom image with the YAML baked in.
+
+### DCR stream name
+
+The DCR uses the Azure Monitor OTLP metrics stream `Custom-Metrics-Otel`. This
+matches the Azure Monitor OTLP ingestion URL pattern documented by Microsoft:
+
+```text
+https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics
+```
+
+The stream name is case-sensitive and must exactly match the DCR `dataFlows`
+stream. A mismatch can result in dropped metrics.
+
+### Temporality
+
+The app sets `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, matching
+Azure Monitor's OTLP guidance for metrics. The collector metrics pipeline also
+includes the `cumulativetodelta` processor as a defensive conversion if any SDK
+or bridge emits cumulative metrics.
+
+### Rollout ordering and RBAC propagation
+
+The Container App module creates the user-assigned managed identity, creates the
+DCR-scoped `Monitoring Metrics Publisher` role assignment, and the Container App
+resource explicitly depends on that role assignment before creating the app
+revision. The app module consumes DCR and Container Apps Environment outputs, so
+Bicep orders those modules first. Microsoft Entra RBAC propagation can still lag
+after role assignment creation, so initial collector samples may receive 401/403
+and be dropped during the first few minutes.
 
 See [Azure Monitor OTLP ingestion docs](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/opentelemetry-protocol-ingestion)
-for the DCE/DCR ingestion model.
+for the DCE/DCR ingestion model and the Entra-authenticated collector pattern.
 
-## Rollback: Revert to OTel Collector Sidecar
+## Rollback: Disable DCE Metrics Export
 
-If the ACA managed OTel agent fails to deliver traces (preview API instability,
-misconfiguration, or Azure outage), follow these steps to revert:
+If the collector-sidecar metrics path fails (preview API instability, collector
+image regression, RBAC propagation issue, or Azure ingestion outage), temporarily
+redeploy with `OTEL_METRICS_EXPORTER` unset in `container-app.bicep` to stop
+metrics export while keeping BlogFlow serving traffic and traces flowing to
+Application Insights. Re-enable metrics after fixing the collector/DCR issue.
 
-1. In `container-app-env.bicep`: revert API to `2024-03-01`, remove
-   `appInsightsConfiguration` and `openTelemetryConfiguration`
-2. In `container-app.bicep`: re-add the OTel Collector sidecar container
-   definition (see `otel/collector-config.yaml` for the original config),
-   restore the `appinsights-cs` secret, and add back `OTEL_SERVICE_NAME`,
-   `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_METRICS_EXPORTER=otlp`, and
-   `BLOGFLOW_METRICS_PORT=9090` env vars
-3. Restore `otel/collector-config.yaml` to its active (uncommented) state
-4. Redeploy with `full_deploy=true`
-
-> **⚠️ Warning:** Rolling back re-enables metrics export to App Insights →
-> Log Analytics, which will resume the PerGB2018 ingestion costs this change
-> was designed to eliminate. Use as a temporary measure only.
-
-> **Note**: The original sidecar config is preserved (commented out) in
-> `otel/collector-config.yaml` for reference.
+> **⚠️ Warning:** Do not roll back to exporting metrics with the collector's
+> `azuremonitor` exporter unless you intentionally accept App Insights → Log
+> Analytics `AppMetrics` ingestion costs.
 
 ## 10. Custom Domain + TLS (Optional)
 
@@ -265,10 +338,10 @@ This ensures the domain binding survives a full infrastructure redeploy.
 
 ## Architecture: Telemetry Flow
 
-```
-BlogFlow app ──OTLP──▶ ACA managed OTel agent ──── traces ──▶ App Insights ──▶ LA workspace
-                                      │                                         (AppTraces only)
-                                      └──── metrics ──▶ DCE ──▶ DCR ──▶ Azure Monitor workspace
+```text
+BlogFlow app ──OTLP localhost:4318──▶ OTel Collector sidecar ── traces ──▶ App Insights ──▶ LA workspace
+                                                   │                         (AppTraces only)
+                                                   └─ metrics + Entra token ─▶ DCE ─▶ DCR ─▶ Azure Monitor workspace
 
 Container Apps runtime ──console logs──▶ Log Analytics workspace (default 30-day retention)
 ```
@@ -277,5 +350,7 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
 - Metrics do NOT go to App Insights or Log Analytics (fixes the cost issue)
 - Traces go to App Insights → Log Analytics `AppTraces` table (acceptable cost)
 - Metrics go to Azure Monitor workspace through DCE/DCR OTLP ingestion
-- The DCR authorizes the Container Apps Environment managed identity with the
-  Monitoring Metrics Publisher role; no static OTLP API keys are stored
+- The collector uses the Container App's user-assigned managed identity and the
+  Azure auth extension to acquire Entra tokens for Azure Monitor
+- The DCR authorizes that identity with Monitoring Metrics Publisher at DCR
+  scope only; no static OTLP API keys are stored
