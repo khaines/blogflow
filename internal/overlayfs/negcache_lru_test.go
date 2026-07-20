@@ -2,6 +2,7 @@ package overlayfs
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -125,9 +126,10 @@ func TestNegativeCacheLRUEvictsLeastRecentlyUsed(t *testing.T) {
 		t.Fatalf("negCacheEntry count after warmup = %d, want %d", count, testLimit)
 	}
 
-	// Refresh file01. A true LRU cache should now evict file02, not file01.
-	if _, err := ofs.ReadFile("file01"); err != nil {
-		t.Fatalf("ReadFile(file01) refresh unexpectedly failed: %v", err)
+	// Refresh file01 through Stat, which performs lookup-only recency refresh.
+	// A true LRU cache should now evict file02, not file01.
+	if _, err := ofs.Stat("file01"); err != nil {
+		t.Fatalf("Stat(file01) refresh unexpectedly failed: %v", err)
 	}
 	if _, err := ofs.ReadFile("file04"); err != nil {
 		t.Fatalf("ReadFile(file04) insertion unexpectedly failed: %v", err)
@@ -143,6 +145,122 @@ func TestNegativeCacheLRUEvictsLeastRecentlyUsed(t *testing.T) {
 	assertNegCacheContains(t, ofs, "file04", true)
 }
 
+func TestNegativeCacheStoreUpdatesExistingEntry(t *testing.T) {
+	t.Parallel()
+
+	ofs := NewOverlayFS(fstest.MapFS{}, fstest.MapFS{}, fstest.MapFS{})
+
+	ofs.negCacheStore("shared/path.txt", negCacheEntry{firstCandidateLayer: 1})
+	ofs.negCacheStore("shared/path.txt", negCacheEntry{firstCandidateLayer: 2})
+
+	entry, ok := ofs.negCacheLookup("shared/path.txt")
+	if !ok {
+		t.Fatal("negCacheLookup(shared/path.txt) missed after store")
+	}
+	if entry.firstCandidateLayer != 2 {
+		t.Fatalf("firstCandidateLayer = %d, want 2", entry.firstCandidateLayer)
+	}
+	if count := ofs.negCacheCount.Load(); count != 1 {
+		t.Fatalf("negCacheEntry count = %d, want 1", count)
+	}
+	assertNegCacheListSync(t, ofs)
+}
+
+func TestNegativeCacheSelectiveInvalidationKeepsMapAndListInSync(t *testing.T) {
+	t.Parallel()
+
+	t.Run("InvalidateLayer", func(t *testing.T) {
+		t.Parallel()
+
+		ofs := NewOverlayFS(fstest.MapFS{}, fstest.MapFS{}, fstest.MapFS{})
+		ofs.negCacheStore("layer1.txt", negCacheEntry{firstCandidateLayer: 1})
+		ofs.negCacheStore("layer2.txt", negCacheEntry{firstCandidateLayer: 2})
+		ofs.negCacheStore("layer3.txt", negCacheEntry{firstCandidateLayer: 3})
+
+		ofs.InvalidateLayer(2)
+
+		assertNegCacheContains(t, ofs, "layer1.txt", true)
+		assertNegCacheContains(t, ofs, "layer2.txt", false)
+		assertNegCacheContains(t, ofs, "layer3.txt", false)
+		assertNegCacheListSync(t, ofs)
+	})
+
+	t.Run("ReplaceLayer", func(t *testing.T) {
+		t.Parallel()
+
+		ofs := NewOverlayFS(fstest.MapFS{}, fstest.MapFS{}, fstest.MapFS{})
+		ofs.negCacheStore("layer1.txt", negCacheEntry{firstCandidateLayer: 1})
+		ofs.negCacheStore("layer2.txt", negCacheEntry{firstCandidateLayer: 2})
+		ofs.negCacheStore("layer3.txt", negCacheEntry{firstCandidateLayer: 3})
+
+		if err := ofs.ReplaceLayer(2, fstest.MapFS{}); err != nil {
+			t.Fatalf("ReplaceLayer(2) failed: %v", err)
+		}
+
+		assertNegCacheContains(t, ofs, "layer1.txt", true)
+		assertNegCacheContains(t, ofs, "layer2.txt", false)
+		assertNegCacheContains(t, ofs, "layer3.txt", false)
+		assertNegCacheListSync(t, ofs)
+	})
+}
+
+func TestNegativeCacheInvalidateAllZeroValue(t *testing.T) {
+	t.Parallel()
+
+	var ofs OverlayFS
+	ofs.InvalidateAll()
+	assertNegCacheListSync(t, &ofs)
+}
+
+func TestNegativeCacheConcurrentReadFileInvalidateLayer(t *testing.T) {
+	t.Parallel()
+
+	ofs := NewOverlayFS(
+		fstest.MapFS{},
+		fstest.MapFS{"hot.txt": {Data: []byte("hot")}},
+	)
+	if _, err := ofs.ReadFile("hot.txt"); err != nil {
+		t.Fatalf("warm ReadFile(hot.txt) failed: %v", err)
+	}
+
+	const iterations = 200
+	var wg sync.WaitGroup
+	errs := make(chan error, 8*iterations)
+
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				data, err := ofs.ReadFile("hot.txt")
+				if err != nil {
+					errs <- err
+					return
+				}
+				if string(data) != "hot" {
+					errs <- fmt.Errorf("ReadFile(hot.txt) = %q, want hot", data)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			ofs.InvalidateLayer(1)
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	assertNegCacheListSync(t, ofs)
+}
+
 func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool) {
 	t.Helper()
 
@@ -151,5 +269,21 @@ func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool
 	ofs.negCacheMu.Unlock()
 	if got != want {
 		t.Fatalf("negCache contains %q = %v, want %v", name, got, want)
+	}
+}
+
+func assertNegCacheListSync(t *testing.T, ofs *OverlayFS) {
+	t.Helper()
+
+	ofs.negCacheMu.Lock()
+	mapLen := len(ofs.negCache)
+	listLen := 0
+	if ofs.negCacheLRU != nil {
+		listLen = ofs.negCacheLRU.Len()
+	}
+	ofs.negCacheMu.Unlock()
+
+	if listLen != mapLen {
+		t.Fatalf("negCacheLRU.Len() = %d, want len(negCache) %d", listLen, mapLen)
 	}
 }

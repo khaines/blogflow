@@ -225,7 +225,11 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 	o.mu.RUnlock()
 
 	startLayer := 0
+	negCacheHit := false
+	cachedFirstCandidateLayer := -1
 	if entry, ok := o.negCacheLookup(name); ok {
+		negCacheHit = true
+		cachedFirstCandidateLayer = entry.firstCandidateLayer
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -245,7 +249,7 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 				}
 			}
 			// Cache: record that layers [0, i) don't have this path
-			if i > 0 {
+			if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
 				o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 			}
 			if o.metrics != nil {
@@ -287,7 +291,11 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	o.mu.RUnlock()
 
 	startLayer := 0
+	negCacheHit := false
+	cachedFirstCandidateLayer := -1
 	if entry, ok := o.negCacheLookup(name); ok {
+		negCacheHit = true
+		cachedFirstCandidateLayer = entry.firstCandidateLayer
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -309,7 +317,7 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 				if len(data) > maxReadSize {
 					return nil, fmt.Errorf("overlayfs: file %q exceeds maximum read size of %d bytes", name, maxReadSize)
 				}
-				if i > 0 {
+				if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
 					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 				}
 				if o.metrics != nil {
@@ -337,7 +345,7 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 				if readErr != nil {
 					return nil, readErr
 				}
-				if i > 0 {
+				if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
 					o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
 				}
 				if o.metrics != nil {
@@ -519,6 +527,8 @@ func (o *OverlayFS) OpenFile(name string) (fs.File, fs.FileInfo, error) {
 	return f, info, nil
 }
 
+// Exact LRU refreshes recency on every hit, so this path intentionally takes
+// the global cache lock. See #271 for sharded/approximate-LRU follow-up.
 func (o *OverlayFS) negCacheLookup(name string) (negCacheEntry, bool) {
 	o.negCacheMu.Lock()
 	defer o.negCacheMu.Unlock()
@@ -540,7 +550,9 @@ func (o *OverlayFS) negCacheStore(name string, entry negCacheEntry) {
 	if elem, ok := o.negCache[name]; ok {
 		elem.Value = negCacheListEntry{key: name, value: entry}
 		o.negCacheLRU.MoveToFront(elem)
+		size := int64(len(o.negCache))
 		o.negCacheMu.Unlock()
+		o.updateNegCacheSizeMetric(size)
 		return
 	}
 
@@ -554,9 +566,10 @@ func (o *OverlayFS) negCacheStore(name string, entry negCacheEntry) {
 
 	elem := o.negCacheLRU.PushFront(negCacheListEntry{key: name, value: entry})
 	o.negCache[name] = elem
-	o.negCacheCount.Store(int64(len(o.negCache)))
+	size := int64(len(o.negCache))
+	o.negCacheCount.Store(size)
 	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric()
+	o.updateNegCacheSizeMetric(size)
 }
 
 func (o *OverlayFS) removeNegCacheElement(key string, elem *list.Element) {
@@ -565,9 +578,9 @@ func (o *OverlayFS) removeNegCacheElement(key string, elem *list.Element) {
 	o.negCacheCount.Store(int64(len(o.negCache)))
 }
 
-func (o *OverlayFS) updateNegCacheSizeMetric() {
+func (o *OverlayFS) updateNegCacheSizeMetric(size int64) {
 	if o.metrics != nil {
-		o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+		o.metrics.negCacheSize.Set(float64(size))
 	}
 }
 
@@ -581,18 +594,23 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 			o.removeNegCacheElement(key, elem)
 		}
 	}
+	size := int64(len(o.negCache))
 	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric()
+	o.updateNegCacheSizeMetric(size)
 }
 
 // InvalidateAll clears the entire negative cache.
 func (o *OverlayFS) InvalidateAll() {
 	o.negCacheMu.Lock()
 	o.negCache = make(map[string]*list.Element)
-	o.negCacheLRU.Init()
+	if o.negCacheLRU == nil {
+		o.negCacheLRU = list.New()
+	} else {
+		o.negCacheLRU.Init()
+	}
 	o.negCacheCount.Store(0)
 	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric()
+	o.updateNegCacheSizeMetric(0)
 }
 
 // ReplaceLayer atomically replaces a layer's backing fs.FS and clears
@@ -614,8 +632,9 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 			o.removeNegCacheElement(key, elem)
 		}
 	}
+	size := int64(len(o.negCache))
 	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric()
+	o.updateNegCacheSizeMetric(size)
 	return nil
 }
 

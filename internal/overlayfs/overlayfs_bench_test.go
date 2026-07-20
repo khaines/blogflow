@@ -105,6 +105,50 @@ func BenchmarkOpen_NegCacheHit(b *testing.B) {
 	}
 }
 
+func BenchmarkNegCacheHit_Parallel(b *testing.B) {
+	ofs := NewOverlayFS(
+		fstest.MapFS{},
+		fstest.MapFS{"hot/path.txt": {Data: []byte("data")}},
+	).WithLayerNames([]string{"theme", "defaults"})
+
+	if _, err := ofs.ReadFile("hot/path.txt"); err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("ReadFile", func(b *testing.B) {
+		b.SetParallelism(8)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				data, err := ofs.ReadFile("hot/path.txt")
+				if err != nil {
+					b.Error(err)
+					return
+				}
+				if len(data) == 0 {
+					b.Error("ReadFile returned empty data")
+					return
+				}
+			}
+		})
+	})
+
+	b.Run("Stat", func(b *testing.B) {
+		b.SetParallelism(8)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				if _, err := ofs.Stat("hot/path.txt"); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	})
+}
+
 func BenchmarkReadDir_Union(b *testing.B) {
 	ofs := benchReadDirOverlay(25)
 	b.ReportAllocs()
