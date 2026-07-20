@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/gitops"
@@ -102,6 +103,51 @@ func TestWebhookHandler_IPAllowlistAllowedIP(t *testing.T) {
 
 	if !called.Load() {
 		t.Fatal("reloader should be called for allowed IP")
+	}
+}
+
+func TestWebhookHandler_IPAllowlistFromConfigEnvOverrideEnforced(t *testing.T) {
+	t.Setenv("BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS", "203.0.113.10")
+
+	cfg, err := config.NewLoader(fstest.MapFS{}).Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	secret := "test-secure-webhook-secret-long-enough32bytes!!!"
+	var called atomic.Int32
+	webhookCfg := cfg.Sync.Webhook
+	webhookCfg.Path = "/hook"
+	webhookCfg.Secret = secret
+	webhookCfg.BranchFilter = "main"
+
+	w, err := gitops.NewWebhookStrategy(webhookCfg, gitops.ContentReloader(func() error {
+		called.Add(1)
+		return nil
+	}), webhookLogger(), testResolverIPIns)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sendWithIP := func(ip string) int {
+		payload := makePayload("refs/heads/main")
+		req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", signPayload([]byte(secret), payload))
+		req.Header.Set("X-GitHub-Event", "push")
+		req.RemoteAddr = ip + ":12345"
+		rec := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := sendWithIP("203.0.113.10"); code != http.StatusOK {
+		t.Fatalf("listed IP: got %d, want %d", code, http.StatusOK)
+	}
+	if code := sendWithIP("198.51.100.10"); code != http.StatusForbidden {
+		t.Fatalf("unlisted IP: got %d, want %d", code, http.StatusForbidden)
+	}
+	if got := called.Load(); got != 1 {
+		t.Fatalf("reloader calls = %d, want 1", got)
 	}
 }
 

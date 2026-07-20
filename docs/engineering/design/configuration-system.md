@@ -16,7 +16,7 @@ The Configuration System (`internal/config`) is BlogFlow's centralized settings 
 ### 1.2 Functionality It Provides
 
 - **YAML-based configuration** — loads `site.yaml` from the config layer with fallback to the embedded `defaults.yaml`
-- **Environment variable overrides** — `BLOGFLOW_` prefixed env vars override any YAML value at runtime
+- **Environment variable overrides** — `BLOGFLOW_` prefixed env vars override a defined subset of YAML values at runtime; `internal/config/loader.go`'s `envMap` is the source of truth for supported keys.
 - **Embedded zero-config defaults** — a compiled-in `defaults.yaml` ensures the binary is fully functional with no external files
 - **Startup validation** — fails fast on invalid configuration with actionable error messages
 - **Secret isolation** — enforces that sensitive values (webhook secrets, git tokens) are injected only via env vars, never in YAML files
@@ -486,28 +486,36 @@ type SecretInYAMLError struct {
 
 #### Environment Variable Mapping
 
-Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths that map directly to the YAML hierarchy:
+Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths for a curated subset of fields. The supported config overrides are exactly the keys registered in `internal/config/loader.go`'s `envMap`:
 
 | YAML Path | Environment Variable | Example |
 |-----------|---------------------|---------|
 | `site.title` | `BLOGFLOW_SITE_TITLE` | `BLOGFLOW_SITE_TITLE="My Blog"` |
+| `site.description` | `BLOGFLOW_SITE_DESCRIPTION` | `BLOGFLOW_SITE_DESCRIPTION="Notes on Go"` |
 | `site.base_url` | `BLOGFLOW_SITE_BASE_URL` | `BLOGFLOW_SITE_BASE_URL="https://blog.example.com"` |
+| `site.homepage` | `BLOGFLOW_SITE_HOMEPAGE` | `BLOGFLOW_SITE_HOMEPAGE="/about"` |
 | `server.port` | `BLOGFLOW_SERVER_PORT` | `BLOGFLOW_SERVER_PORT=9090` |
 | `server.read_timeout` | `BLOGFLOW_SERVER_READ_TIMEOUT` | `BLOGFLOW_SERVER_READ_TIMEOUT=10s` |
+| `server.write_timeout` | `BLOGFLOW_SERVER_WRITE_TIMEOUT` | `BLOGFLOW_SERVER_WRITE_TIMEOUT=10s` |
 | `server.idle_timeout` | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | `BLOGFLOW_SERVER_IDLE_TIMEOUT=120s` |
+| `server.tls_terminated` | `BLOGFLOW_SERVER_TLS_TERMINATED` | `BLOGFLOW_SERVER_TLS_TERMINATED=true` |
+| `server.hsts_max_age` | `BLOGFLOW_SERVER_HSTS_MAX_AGE` | `BLOGFLOW_SERVER_HSTS_MAX_AGE=31536000` |
+| `server.metrics_port` | `BLOGFLOW_SERVER_METRICS_PORT` | `BLOGFLOW_SERVER_METRICS_PORT=9091` |
 | `cache.enabled` | `BLOGFLOW_CACHE_ENABLED` | `BLOGFLOW_CACHE_ENABLED=false` |
 | `sync.strategy` | `BLOGFLOW_SYNC_STRATEGY` | `BLOGFLOW_SYNC_STRATEGY=webhook` |
-| `sync.webhook.secret` | `BLOGFLOW_WEBHOOK_SECRET` | `BLOGFLOW_WEBHOOK_SECRET=whsec_abc123` |
+| `sync.repo` | `BLOGFLOW_SYNC_REPO` | `BLOGFLOW_SYNC_REPO="git@github.com:org/content.git"` |
+| `sync.branch` | `BLOGFLOW_SYNC_BRANCH` | `BLOGFLOW_SYNC_BRANCH=main` |
 | `sync.webhook.rate_limit` | `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT=20` |
+| `sync.webhook.allowed_ips` | `BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS` | `BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS="203.0.113.10,198.51.100.0/24"` |
+| `sync.poll_interval` | `BLOGFLOW_SYNC_POLL_INTERVAL` | `BLOGFLOW_SYNC_POLL_INTERVAL=5m` |
+| `sync.sparse_dirs` | `BLOGFLOW_SYNC_SPARSE_DIRS` | `BLOGFLOW_SYNC_SPARSE_DIRS="posts,pages"` |
+| `sync.clone_depth` | `BLOGFLOW_SYNC_CLONE_DEPTH` | `BLOGFLOW_SYNC_CLONE_DEPTH=10` |
 | `feed.type` | `BLOGFLOW_FEED_TYPE` | `BLOGFLOW_FEED_TYPE=rss` |
+| `content.posts_dir` | `BLOGFLOW_CONTENT_POSTS_DIR` | `BLOGFLOW_CONTENT_POSTS_DIR=posts` |
+| `content.pages_dir` | `BLOGFLOW_CONTENT_PAGES_DIR` | `BLOGFLOW_CONTENT_PAGES_DIR=pages` |
+| N/A (`yaml:"-"`) | `BLOGFLOW_WEBHOOK_SECRET` | `BLOGFLOW_WEBHOOK_SECRET=whsec_abc123` |
 
-**Secret-only variables** (no YAML equivalent):
-
-| Environment Variable | Maps to | Notes |
-|---------------------|---------|-------|
-| `BLOGFLOW_WEBHOOK_SECRET` | `sync.webhook.secret` | HMAC-SHA256 webhook signing secret |
-| `BLOGFLOW_GIT_TOKEN` | Git auth token | Used by `internal/gitops`, not in Config struct |
-| `BLOGFLOW_GIT_SSH_KEY` | SSH key path | Used by `internal/gitops`, not in Config struct |
+Git authentication environment variables used directly by `internal/gitops` are outside the configuration override `envMap` and are not listed here.
 
 ### 2.6 Dependencies
 
