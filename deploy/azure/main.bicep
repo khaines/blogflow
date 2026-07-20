@@ -41,8 +41,26 @@ param containerImage string = 'ghcr.io/khaines/blogflow:main'
 @description('GitHub username for GHCR image pulls')
 param ghcrUsername string = 'khaines'
 
-@description('Pinned OpenTelemetry Collector Contrib image reference')
-param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+@description('OpenTelemetry Collector Contrib image repository and tag. The digest is supplied separately so tag-only overrides are impossible.')
+param otelCollectorImageRepository string = 'otel/opentelemetry-collector-contrib:0.148.0'
+
+@description('OpenTelemetry Collector Contrib image SHA-256 digest, without the sha256: prefix.')
+@minLength(64)
+@maxLength(64)
+param otelCollectorImageDigest string = '8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+
+@description('Data Collection Endpoint public network access. Keep Enabled for public Azure Monitor ingestion; set Disabled only with a private endpoint path for ingestion.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param dcePublicNetworkAccess string = 'Enabled'
+
+@description('Enable a Prometheus alert when no blogflow_* metrics are ingested into the Azure Monitor workspace.')
+param enableMetricsIngestionAbsenceAlert bool = true
+
+@description('Optional Azure Monitor action group resource ID for the metrics ingestion absence alert. Empty creates the alert rule without notification actions.')
+param metricsIngestionAbsenceActionGroupId string = ''
 
 @description('Minimum replica count (0 = scale to zero)')
 @minValue(0)
@@ -97,6 +115,20 @@ module dataCollection 'modules/data-collection.bicep' = {
     location: location
     environmentName: environmentName
     monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+    publicNetworkAccess: dcePublicNetworkAccess
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module: Metrics ingestion absence alert
+// ---------------------------------------------------------------------------
+module metricsIngestionAlerts 'modules/metric-alerts.bicep' = if (enableMetricsIngestionAbsenceAlert) {
+  name: 'metrics-ingestion-alerts'
+  params: {
+    location: location
+    environmentName: environmentName
+    monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+    actionGroupId: metricsIngestionAbsenceActionGroupId
   }
 }
 
@@ -124,7 +156,8 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
-    otelCollectorImage: otelCollectorImage
+    otelCollectorImageRepository: otelCollectorImageRepository
+    otelCollectorImageDigest: otelCollectorImageDigest
     appInsightsConnectionString: appInsightsConnectionString
     dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
     dataCollectionRuleImmutableId: dataCollection.outputs.dataCollectionRuleImmutableId

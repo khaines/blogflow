@@ -47,8 +47,13 @@ param metricsIngestionEndpoint string
 @description('DCR stream name for Azure Monitor OTLP metrics ingestion')
 param otelMetricsStreamName string
 
-@description('Pinned OpenTelemetry Collector Contrib image reference')
-param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+@description('OpenTelemetry Collector Contrib image repository and tag. The digest is supplied separately so tag-only overrides are impossible.')
+param otelCollectorImageRepository string = 'otel/opentelemetry-collector-contrib:0.148.0'
+
+@description('OpenTelemetry Collector Contrib image SHA-256 digest, without the sha256: prefix.')
+@minLength(64)
+@maxLength(64)
+param otelCollectorImageDigest string = '8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
 
 @description('Minimum replica count')
 param scaleMinReplicas int = 0
@@ -63,6 +68,7 @@ param customDomainName string = ''
 param customDomainCertificateId string = ''
 
 var monitoringMetricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
+var otelCollectorImage = '${otelCollectorImageRepository}@sha256:${otelCollectorImageDigest}'
 var otlpMetricsEndpoint = '${metricsIngestionEndpoint}/datacollectionRules/${dataCollectionRuleImmutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'
 var otelCollectorConfig = join([
   'receivers:'
@@ -84,6 +90,8 @@ var otelCollectorConfig = join([
   ''
   'extensions:'
   '  health_check:'
+  '    # ACA probes originate from the platform, not inside the container process.'
+  '    # Keep this on 0.0.0.0; loopback-only binds are not reachable by ACA probes.'
   '    endpoint: 0.0.0.0:13133'
   '  azure_auth:'
   '    managed_identity:'
@@ -328,6 +336,25 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ]
           probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              periodSeconds: 2
+              failureThreshold: 60
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 5
+              failureThreshold: 12
+            }
             {
               type: 'Liveness'
               httpGet: {

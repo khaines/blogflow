@@ -17,6 +17,13 @@ param environmentName string
 @description('Azure Monitor workspace resource ID for Prometheus metrics')
 param monitorWorkspaceId string
 
+@description('Data Collection Endpoint public network access. Set Disabled only when a private endpoint path exists for OTLP ingestion.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param publicNetworkAccess string = 'Enabled'
+
 var otelMetricsStreamName = 'Custom-Metrics-Otel'
 var monitorWorkspaceDestinationName = 'azureMonitorWorkspace'
 
@@ -29,7 +36,7 @@ resource dataCollectionEndpoint 'Microsoft.Insights/dataCollectionEndpoints@2024
   properties: {
     description: 'OTLP metrics ingestion endpoint for BlogFlow'
     networkAcls: {
-      publicNetworkAccess: 'Enabled'
+      publicNetworkAccess: publicNetworkAccess
     }
   }
 }

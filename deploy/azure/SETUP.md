@@ -137,6 +137,7 @@ The deployment creates:
   Collector authentication
 - **DCR-scoped role assignment** — grants that identity
   **Monitoring Metrics Publisher** on the Data Collection Rule
+- **Prometheus rule group** — alerts when no `blogflow_*` metrics are ingested
 - **Container App** — BlogFlow plus an OTel Collector sidecar
 
 The workflow also runs automatically when the **Publish** workflow completes
@@ -236,6 +237,36 @@ image. The assumption is that the collector config remains small enough for ACA
 environment-variable limits; if the config grows substantially, switch to a small
 custom image with the YAML baked in.
 
+### Collector image pinning
+
+The collector image is assembled from two Bicep parameters instead of one free-form
+image string:
+
+- `otelCollectorImageRepository` — repository plus tag, default
+  `otel/opentelemetry-collector-contrib:0.148.0`
+- `otelCollectorImageDigest` — 64-character SHA-256 digest without the
+  `sha256:` prefix
+
+The deployed image is always rendered as
+`<repository>@sha256:<digest>`, so a tag-only collector override cannot be
+deployed accidentally. Update both parameters together when intentionally moving
+to a newer collector release.
+
+### Collector health probes and bind address
+
+The `otel-collector` sidecar has Startup, Readiness, and Liveness probes against
+the collector `health_check` extension on port 13133. Startup gives the collector
+up to two minutes to initialize, Readiness gates the Container App revision until
+the sidecar health endpoint is responding, and Liveness restarts a wedged
+collector. This reduces the cold-start window where BlogFlow could emit metrics
+before the collector pipeline is available.
+
+The collector `health_check` extension intentionally binds `0.0.0.0:13133` rather
+than `localhost:13133`. Azure Container Apps probes originate from the platform
+against the container, not from inside the collector process; loopback-only
+listeners are not reliably reachable by ACA HTTP probes. The port is still only
+used as an in-replica health endpoint and is not exposed through public ingress.
+
 ### DCR stream name
 
 The DCR uses the native OTLP custom metrics stream `Custom-Metrics-Otel` for the
@@ -249,6 +280,19 @@ https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Cust
 
 The stream name must exactly match the DCR `dataFlows` stream. A mismatch can
 result in silently dropped metrics.
+
+### DCE network exposure
+
+The DCE defaults to `dcePublicNetworkAccess=Enabled` for compatibility with the
+standard Container Apps egress path to Azure Monitor ingestion. In this mode,
+ingestion is still gated by Microsoft Entra authorization: the collector's
+user-assigned managed identity must have **Monitoring Metrics Publisher** on the
+DCR scope, and no static OTLP API keys are configured.
+
+For stricter threat models, set `dcePublicNetworkAccess=Disabled` and provide a
+private endpoint / private DNS path that allows the Container App environment to
+reach the DCE metrics ingestion endpoint. Do not disable public network access
+until that private ingestion path is in place, or collector exports will fail.
 
 ### Temporality
 
@@ -271,6 +315,33 @@ RBAC propagates.
 
 See [Azure Monitor OTLP ingestion docs](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/opentelemetry-protocol-ingestion)
 for the DCE/DCR ingestion model and the Entra-authenticated collector pattern.
+
+### Metrics ingestion absence alert
+
+Bicep deploys a Prometheus rule group named
+`<environmentName>-metrics-ingestion` by default. The alert
+`BlogFlowMetricsIngestionAbsent` evaluates this PromQL expression every minute:
+
+```promql
+absent_over_time({__name__=~"blogflow_.*"}[30m])
+```
+
+If the expression remains active for 10 minutes, Azure Monitor raises a severity
+2 alert indicating no BlogFlow custom metrics have arrived for the previous 30
+minutes. This is intended to catch persistent collector authentication/export
+failures, including 401/403 responses that otherwise appear only in
+`otel-collector` logs.
+
+Optional parameters:
+
+- `enableMetricsIngestionAbsenceAlert` — default `true`; set `false` if the app
+  intentionally scales to zero for long periods or metrics are not expected.
+- `metricsIngestionAbsenceActionGroupId` — Azure Monitor action group resource
+  ID for notifications. Leave empty to create the alert rule without notification
+  actions, then attach actions later in Azure Monitor.
+
+If `scaleMinReplicas=0`, expect this alert to fire during sustained idle periods
+unless an external synthetic check keeps the app warm or the alert is disabled.
 
 ## Rollback: Disable DCE Metrics Export
 
@@ -355,9 +426,14 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
 - Traces go to App Insights → Log Analytics `AppTraces` table (acceptable cost)
 - Metrics go to Azure Monitor workspace through DCE/DCR OTLP ingestion
 - The app sets `OTEL_SERVICE_NAME=blogflow` so ingested series are attributable
-- The collector exposes `health_check` on port 13133 for liveness probing and
-  starts telemetry pipelines with `memory_limiter` to reduce OOM risk
+- The collector exposes `health_check` on port 13133 for Startup, Readiness,
+  and Liveness probing and starts telemetry pipelines with `memory_limiter` to
+  reduce OOM risk
 - The collector uses the Container App's user-assigned managed identity and the
   Azure auth extension to acquire Entra tokens for Azure Monitor
 - The DCR authorizes that identity with Monitoring Metrics Publisher at DCR
   scope only; no static OTLP API keys are stored
+- The DCE defaults to public network access for compatibility; use
+  `dcePublicNetworkAccess=Disabled` only with a working private ingestion path
+- A Prometheus rule group alerts when `blogflow_*` metrics disappear from the
+  Azure Monitor workspace
