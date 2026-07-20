@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/khaines/blogflow/internal/content"
@@ -31,6 +32,9 @@ func newCSPTestServer(t *testing.T) *Server {
 	deps := handlers.NewDeps(cfg, cspTestIndex(), nil)
 	opts.FeedHandler = handlers.NewFeedHandler(deps).ServeHTTP
 	opts.SitemapHandler = handlers.NewSitemapHandler(deps).ServeHTTP
+	opts.StaticFS = fstest.MapFS{
+		"css/main.css": {Data: []byte("body { color: #111; }\n")},
+	}
 	s.RegisterRoutes(opts)
 	return s
 }
@@ -78,6 +82,16 @@ func assertCompleteCSP(t *testing.T, csp, endpoint string) {
 		if !strings.Contains(csp, d) {
 			t.Errorf("%s CSP missing directive: %s", endpoint, d)
 		}
+	}
+}
+
+func assertPrometheusBody(t *testing.T, endpoint, body string) {
+	t.Helper()
+	if body == "" {
+		t.Fatalf("%s body is empty", endpoint)
+	}
+	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
+		t.Errorf("%s body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", endpoint, body[:min(200, len(body))])
 	}
 }
 
@@ -132,15 +146,7 @@ func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
 		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
 	}
 
-	// Assert Prometheus format content in the body.
-	body := resp.Body.String()
-	if body == "" {
-		t.Fatal("/metrics body is empty")
-	}
-	// Prometheus exposition format requires # HELP or # TYPE lines.
-	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
-		t.Errorf("/metrics body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", body[:min(200, len(body))])
-	}
+	assertPrometheusBody(t, "/metrics", resp.Body.String())
 
 	csp := resultCSP(t, resp)
 	if csp == "" {
@@ -180,33 +186,29 @@ func TestCSPOnMainMuxMetrics(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Errorf("/metrics status = %d, want %d", resp.Code, http.StatusOK)
 	}
-	body := resp.Body.String()
-	if body == "" {
-		t.Fatal("/metrics body is empty")
-	}
-	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") {
-		t.Errorf("/metrics body does not contain valid Prometheus format markers (expected # HELP or # TYPE, got: %q)", body[:min(200, len(body))])
-	}
+	assertPrometheusBody(t, "/metrics", resp.Body.String())
 	assertCompleteCSP(t, resultCSP(t, resp), "/metrics")
 }
 
-func TestCSPOnXMLHandlers(t *testing.T) {
+func TestCSPOnNonHTMLEndpoints(t *testing.T) {
 	t.Parallel()
 	s := newCSPTestServer(t)
 	for _, tc := range []struct {
-		name string
-		path string
+		name    string
+		path    string
+		want2xx bool
 	}{
-		{name: "feed", path: "/feed.xml"},
-		{name: "sitemap", path: "/sitemap.xml"},
+		{name: "feed", path: "/feed.xml", want2xx: true},
+		{name: "sitemap", path: "/sitemap.xml", want2xx: true},
+		{name: "readyz-content", path: "/readyz/content"},
+		{name: "static", path: "/static/css/main.css"},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			resp := httptest.NewRecorder()
 			s.httpServer.Handler.ServeHTTP(resp, req)
-			if resp.Code < 200 || resp.Code >= 300 {
+			if tc.want2xx && (resp.Code < 200 || resp.Code >= 300) {
 				t.Errorf("%s status = %d, want 2xx", tc.path, resp.Code)
 			}
 			assertCompleteCSP(t, resultCSP(t, resp), tc.path)
