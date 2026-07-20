@@ -2,6 +2,10 @@
 
 ## main / unreleased
 
+### BlogFlow
+
+* [CHANGE] overlayfs: negative cache now uses true LRU eviction of the least-recently-used entry at capacity (previously admission-capped — stopped caching new misses once full). #245
+
 ### Security
 
 * [ENHANCEMENT] Webhook: the IP allowlist (`allowed_ips`) matches CIDR ranges (`net.ParseCIDR` / `net.IPNet.Contains`), and `NewWebhookStrategy` requires an explicit `IPResolver` so the built-in X-Forwarded-For fallback is no longer used in production. #237
