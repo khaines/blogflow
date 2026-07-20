@@ -41,6 +41,9 @@ param containerImage string = 'ghcr.io/khaines/blogflow:main'
 @description('GitHub username for GHCR image pulls')
 param ghcrUsername string = 'khaines'
 
+@description('Pinned OpenTelemetry Collector Contrib image reference')
+param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+
 @description('Minimum replica count (0 = scale to zero)')
 @minValue(0)
 @maxValue(10)
@@ -121,6 +124,7 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
+    otelCollectorImage: otelCollectorImage
     appInsightsConnectionString: appInsightsConnectionString
     dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
     dataCollectionRuleImmutableId: dataCollection.outputs.dataCollectionRuleImmutableId

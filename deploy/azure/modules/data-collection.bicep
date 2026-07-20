@@ -17,7 +17,7 @@ param environmentName string
 @description('Azure Monitor workspace resource ID for Prometheus metrics')
 param monitorWorkspaceId string
 
-var otelMetricsStreamName = 'Custom-Metrics-Otel'
+var otelMetricsStreamName = 'Microsoft-PrometheusMetrics'
 var monitorWorkspaceDestinationName = 'azureMonitorWorkspace'
 
 // ---------------------------------------------------------------------------

@@ -47,6 +47,9 @@ param metricsIngestionEndpoint string
 @description('DCR stream name for Azure Monitor OTLP metrics ingestion')
 param otelMetricsStreamName string
 
+@description('Pinned OpenTelemetry Collector Contrib image reference')
+param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+
 @description('Minimum replica count')
 param scaleMinReplicas int = 0
 
@@ -60,7 +63,6 @@ param customDomainName string = ''
 param customDomainCertificateId string = ''
 
 var monitoringMetricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
-var otelCollectorImage = 'otel/opentelemetry-collector-contrib:0.148.0'
 var otlpMetricsEndpoint = '${metricsIngestionEndpoint}/datacollectionRules/${dataCollectionRuleImmutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'
 var otelCollectorConfig = join([
   'receivers:'
@@ -72,12 +74,17 @@ var otelCollectorConfig = join([
   '        endpoint: localhost:4318'
   ''
   'processors:'
-  '  cumulativetodelta:'
+  '  memory_limiter:'
+  '    check_interval: 1s'
+  '    limit_mib: 384'
+  '    spike_limit_mib: 96'
   '  batch:'
   '    timeout: 10s'
   '    send_batch_size: 256'
   ''
   'extensions:'
+  '  health_check:'
+  '    endpoint: 0.0.0.0:13133'
   '  azure_auth:'
   '    managed_identity:'
   '      client_id: ${containerAppIdentity.properties.clientId}'
@@ -90,17 +97,22 @@ var otelCollectorConfig = join([
   '    metrics_endpoint: "${otlpMetricsEndpoint}"'
   '    auth:'
   '      authenticator: azure_auth'
+  '    retry_on_failure:'
+  '      enabled: true'
+  '      initial_interval: 5s'
+  '      max_interval: 30s'
+  '      max_elapsed_time: 10m'
   ''
   'service:'
-  '  extensions: [azure_auth]'
+  '  extensions: [health_check, azure_auth]'
   '  pipelines:'
   '    traces:'
   '      receivers: [otlp]'
-  '      processors: [batch]'
+  '      processors: [memory_limiter, batch]'
   '      exporters: [azuremonitor/traces]'
   '    metrics:'
   '      receivers: [otlp]'
-  '      processors: [cumulativetodelta, batch]'
+  '      processors: [memory_limiter, batch]'
   '      exporters: [otlphttp/azuremonitor_metrics]'
 ], '\n')
 
@@ -207,6 +219,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           }
           env: [
             {
+              name: 'OTEL_SERVICE_NAME'
+              value: 'blogflow'
+            }
+            {
               name: 'OTEL_TRACES_EXPORTER'
               value: 'otlp'
             }
@@ -224,7 +240,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE'
-              value: 'delta'
+              value: 'cumulative'
             }
             {
               name: 'BLOGFLOW_SYNC_STRATEGY'
@@ -309,6 +325,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               secretRef: 'appinsights-cs'
+            }
+          ]
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 15
             }
           ]
         }

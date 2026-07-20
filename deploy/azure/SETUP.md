@@ -176,7 +176,7 @@ az monitor app-insights query \
 ```
 
 Then query the Azure Monitor workspace using the deployment output
-`prometheusQueryEndpoint`. Example with the Azure CLI REST command:
+`prometheusQueryEndpoint`. Query a concrete BlogFlow series (after hitting the app so the counter exists):
 
 ```bash
 PROM_ENDPOINT="$(az deployment group show \
@@ -185,15 +185,13 @@ PROM_ENDPOINT="$(az deployment group show \
   --query properties.outputs.prometheusQueryEndpoint.value -o tsv)"
 
 az rest --method get \
-  --url "${PROM_ENDPOINT}/api/v1/query?query=up"
+  --url "${PROM_ENDPOINT}/api/v1/query?query=blogflow_http_requests_total"
 ```
 
-For a BlogFlow-specific check, replace `up` with a known BlogFlow Prometheus
-series visible from `/metrics`, for example a `blogflow_*` metric name if one is
-present. A successful PromQL response with data confirms the app → collector →
-DCE/DCR → Azure Monitor workspace path is working. If the query is empty, first
-verify the app has received traffic and then check the `otel-collector` container
-logs for auth or export errors.
+A successful PromQL response containing `blogflow_http_requests_total` confirms
+the app → collector → DCE/DCR → Azure Monitor workspace path is working. If the
+query is empty, first verify the app has received traffic and then check the
+`otel-collector` container logs for auth or export errors.
 
 ## 9. Phase 2: Metrics Export via Self-Managed OTel Collector Sidecar
 
@@ -207,13 +205,15 @@ The deployed flow is:
 
 1. **BlogFlow app container** — exports traces and metrics over OTLP/HTTP to
    `http://localhost:4318` inside the Container App replica.
-2. **OTel Collector sidecar** — image `otel/opentelemetry-collector-contrib:0.148.0`
-   receives OTLP on localhost ports 4317/4318.
+2. **OTel Collector sidecar** — image
+   `otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c`
+   receives OTLP on localhost ports 4317/4318 and exposes a health endpoint on
+   port 13133 for the ACA liveness probe.
 3. **Traces** — exported to Application Insights using the collector's
    `azuremonitor` exporter and the `APPLICATIONINSIGHTS_CONNECTION_STRING`
    secret.
 4. **Metrics** — exported with `otlphttp` to the DCE metrics-ingestion endpoint:
-   `.../datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics`.
+   `.../datacollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/otlp/v1/metrics`.
 5. **Authentication** — the collector uses the contrib `azure_auth` extension,
    a user-assigned managed identity attached to the Container App, and the token
    scope `https://monitor.azure.com/.default`.
@@ -238,22 +238,24 @@ custom image with the YAML baked in.
 
 ### DCR stream name
 
-The DCR uses the Azure Monitor OTLP metrics stream `Custom-Metrics-Otel`. This
-matches the Azure Monitor OTLP ingestion URL pattern documented by Microsoft:
+The DCR uses the Managed Prometheus stream `Microsoft-PrometheusMetrics` for the
+Azure Monitor workspace (`monitoringAccounts`) destination. The collector uses
+the Azure Monitor OTLP `metrics_endpoint` form documented by Microsoft, with the
+DCE metrics endpoint, DCR immutable ID, and the same case-sensitive stream name:
 
 ```text
-https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics
+https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/otlp/v1/metrics
 ```
 
-The stream name is case-sensitive and must exactly match the DCR `dataFlows`
-stream. A mismatch can result in dropped metrics.
+The stream name must exactly match the DCR `dataFlows` stream. A mismatch can
+result in silently dropped metrics.
 
 ### Temporality
 
-The app sets `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, matching
-Azure Monitor's OTLP guidance for metrics. The collector metrics pipeline also
-includes the `cumulativetodelta` processor as a defensive conversion if any SDK
-or bridge emits cumulative metrics.
+Managed Prometheus expects cumulative metrics, so the app sets
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative`. The collector does
+not use `cumulativetodelta`; its metrics pipeline starts with `memory_limiter`,
+then `batch`, preserving cumulative temporality.
 
 ### Rollout ordering and RBAC propagation
 
@@ -263,7 +265,9 @@ resource explicitly depends on that role assignment before creating the app
 revision. The app module consumes DCR and Container Apps Environment outputs, so
 Bicep orders those modules first. Microsoft Entra RBAC propagation can still lag
 after role assignment creation, so initial collector samples may receive 401/403
-and be dropped during the first few minutes.
+during the first few minutes. The collector `otlphttp` exporter has
+`retry_on_failure` enabled with bounded backoff to reduce early metric loss while
+RBAC propagates.
 
 See [Azure Monitor OTLP ingestion docs](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/opentelemetry-protocol-ingestion)
 for the DCE/DCR ingestion model and the Entra-authenticated collector pattern.
@@ -350,6 +354,9 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
 - Metrics do NOT go to App Insights or Log Analytics (fixes the cost issue)
 - Traces go to App Insights → Log Analytics `AppTraces` table (acceptable cost)
 - Metrics go to Azure Monitor workspace through DCE/DCR OTLP ingestion
+- The app sets `OTEL_SERVICE_NAME=blogflow` so ingested series are attributable
+- The collector exposes `health_check` on port 13133 for liveness probing and
+  starts telemetry pipelines with `memory_limiter` to reduce OOM risk
 - The collector uses the Container App's user-assigned managed identity and the
   Azure auth extension to acquire Entra tokens for Azure Monitor
 - The DCR authorizes that identity with Monitoring Metrics Publisher at DCR

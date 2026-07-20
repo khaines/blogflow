@@ -23,12 +23,17 @@ receivers:
         endpoint: localhost:4318
 
 processors:
-  cumulativetodelta:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
   batch:
     timeout: 10s
     send_batch_size: 256
 
 extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
   azure_auth:
     managed_identity:
       client_id: <container-app-user-assigned-managed-identity-client-id>
@@ -38,18 +43,23 @@ extensions:
 exporters:
   azuremonitor/traces: {}
   otlphttp/azuremonitor_metrics:
-    metrics_endpoint: "https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics"
+    metrics_endpoint: "https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/otlp/v1/metrics"
     auth:
       authenticator: azure_auth
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 10m
 
 service:
-  extensions: [azure_auth]
+  extensions: [health_check, azure_auth]
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [azuremonitor/traces]
     metrics:
       receivers: [otlp]
-      processors: [cumulativetodelta, batch]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/azuremonitor_metrics]
