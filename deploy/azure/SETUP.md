@@ -213,7 +213,7 @@ The deployed flow is:
    `azuremonitor` exporter and the `APPLICATIONINSIGHTS_CONNECTION_STRING`
    secret.
 4. **Metrics** — exported with `otlphttp` to the DCE metrics-ingestion endpoint:
-   `.../datacollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/otlp/v1/metrics`.
+   `.../datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics`.
 5. **Authentication** — the collector uses the contrib `azure_auth` extension,
    a user-assigned managed identity attached to the Container App, and the token
    scope `https://monitor.azure.com/.default`.
@@ -238,13 +238,13 @@ custom image with the YAML baked in.
 
 ### DCR stream name
 
-The DCR uses the Managed Prometheus stream `Microsoft-PrometheusMetrics` for the
+The DCR uses the native OTLP custom metrics stream `Custom-Metrics-Otel` for the
 Azure Monitor workspace (`monitoringAccounts`) destination. The collector uses
 the Azure Monitor OTLP `metrics_endpoint` form documented by Microsoft, with the
 DCE metrics endpoint, DCR immutable ID, and the same case-sensitive stream name:
 
 ```text
-https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Microsoft-PrometheusMetrics/otlp/v1/metrics
+https://<metrics-dce-domain>/datacollectionRules/<dcr-immutable-id>/streams/Custom-Metrics-Otel/otlp/v1/metrics
 ```
 
 The stream name must exactly match the DCR `dataFlows` stream. A mismatch can
@@ -252,7 +252,7 @@ result in silently dropped metrics.
 
 ### Temporality
 
-Managed Prometheus expects cumulative metrics, so the app sets
+Azure Monitor workspace / Prometheus metrics are cumulative, so the app sets
 `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative`. The collector does
 not use `cumulativetodelta`; its metrics pipeline starts with `memory_limiter`,
 then `batch`, preserving cumulative temporality.
