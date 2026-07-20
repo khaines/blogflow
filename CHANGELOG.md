@@ -4,14 +4,14 @@
 
 ### Security
 
-* [ENHANCEMENT] Webhook: the HMAC signature is now verified before IP-allowlist/auth checks, with fail-closed client-IP resolution and IPv6/CIDR-aware allowlist matching (`net.IPNet.Contains()` instead of exact-string comparison, which silently dropped CIDR ranges). #252
-* [ENHANCEMENT] Webhook: `IPResolver` is now a mandatory argument on `NewWebhookStrategy` — the built-in X-Forwarded-For fallback is removed, preventing blind trust in untrusted XFF data. #252
+* [ENHANCEMENT] Webhook: the IP allowlist (`allowed_ips`) matches CIDR ranges (`net.ParseCIDR` / `net.IPNet.Contains`), and `NewWebhookStrategy` requires an explicit `IPResolver` so the built-in X-Forwarded-For fallback is not trusted by default. #237
+* [ENHANCEMENT] Webhook: additional security hardening — IPv6-robust bare-IP allowlist matching (`net.IP.Equal` instead of exact-string comparison) and fail-closed client-IP resolution. #252
 * [CHANGE] Webhook: branch-mismatch response changed from `200 OK` ("accepted (no action)") to `202 Accepted` with an `X-Blogflow-Branch-Skipped` header. External consumers checking for a 200 status code on branch-skip responses must be updated. #237
 * [ENHANCEMENT] Config: file size limit enforced during load — oversized files (> 1 MB) are rejected before parsing. #250
 
 ### Configuration
 
-* [ENHANCEMENT] Webhook: add `allowed_ips` (`[]string`) to allowlist request source IPs, with CIDR-aware matching at enforcement time. This implements the IP allowlist sketched in the configuration design doc (which described a placeholder `ip_allowlist` flag that never shipped in code); no existing configuration key changes. #237
+* [CHANGE] Webhook: the IP allowlist is now configured via `allowed_ips` (`[]string`, CIDR-aware). The earlier `ip_allowlist: true` boolean that shipped in the embedded default config (`defaults/config/defaults.yaml`) was removed; with strict config parsing (`KnownFields(true)`), a `site.yaml` that still sets `ip_allowlist` will fail to load and must be migrated to `allowed_ips`. #237
 
 ### Testing
 
