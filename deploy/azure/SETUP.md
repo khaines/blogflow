@@ -338,10 +338,22 @@ Bicep deploys a Prometheus rule group named
 absent_over_time({__name__=~"blogflow_.*",deployment_environment="<environmentName>"}[30m])
 ```
 
-The app container sets `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>`,
-which is translated to the Prometheus label `deployment_environment`. This keeps
-shared Azure Monitor workspaces from masking one environment's broken pipeline
-with another environment's healthy `blogflow_*` series.
+The app container sets `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>`.
+OTLP resource attributes are not automatically labels on every metric series, so
+the collector metrics pipeline includes a targeted `transform/promote_env`
+processor that copies that single resource attribute onto each datapoint as
+`deployment_environment`. This keeps shared Azure Monitor workspaces from masking
+one environment's broken pipeline with another environment's healthy
+`blogflow_*` series.
+
+Verify the promoted label after deploy with:
+
+```promql
+count by (deployment_environment) (blogflow_http_requests_total)
+```
+
+The result should include the current `<environmentName>` value before enabling
+or depending on the absence alert.
 
 If the expression remains active for `PT5M`, Azure Monitor raises a severity
 2 alert indicating no BlogFlow custom metrics have arrived for the previous 30
@@ -448,8 +460,9 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
 - Traces go to App Insights → Log Analytics `AppTraces` table (acceptable cost)
 - Metrics go to Azure Monitor workspace through DCE/DCR OTLP ingestion
 - The app sets `OTEL_SERVICE_NAME=blogflow` and
-  `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>` so ingested
-  series are attributable and environment-scoped
+  `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>`; the
+  collector `transform/promote_env` processor promotes that resource attribute to
+  the per-series `deployment_environment` metric label
 - The collector exposes `health_check` on port 13133 for Startup, Readiness,
   and Liveness probing and starts telemetry pipelines with `memory_limiter` to
   reduce OOM risk

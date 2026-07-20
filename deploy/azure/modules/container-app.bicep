@@ -92,6 +92,12 @@ var otelCollectorConfig = join([
   '    check_interval: 1s'
   '    limit_mib: 384'
   '    spike_limit_mib: 96'
+  '  transform/promote_env:'
+  '    error_mode: ignore'
+  '    metric_statements:'
+  '      - context: datapoint'
+  '        statements:'
+  '          - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])'
   '  batch:'
   '    timeout: 10s'
   '    send_batch_size: 256'
@@ -128,7 +134,7 @@ var otelCollectorConfig = join([
   '      exporters: [azuremonitor/traces]'
   '    metrics:'
   '      receivers: [otlp]'
-  '      processors: [memory_limiter, batch]'
+  '      processors: [memory_limiter, transform/promote_env, batch]'
   '      exporters: [otlphttp/azuremonitor_metrics]'
 ], '\n')
 
