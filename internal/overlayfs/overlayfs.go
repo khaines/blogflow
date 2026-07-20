@@ -38,7 +38,13 @@ const negCacheShardCount = 16
 type negCacheTestHook func()
 
 var (
+	// negCacheAfterLayerSnapshotHook is a deterministic test synchronization
+	// point. It is nil in production, so the hot path only pays an atomic load
+	// and nil check.
 	negCacheAfterLayerSnapshotHook atomic.Pointer[negCacheTestHook]
+	// negCacheInvalidationLockedHook is a deterministic test synchronization
+	// point after invalidation has acquired all shard locks. It is nil in
+	// production and exists only to make race regressions reproducible.
 	negCacheInvalidationLockedHook atomic.Pointer[negCacheTestHook]
 )
 
@@ -586,9 +592,6 @@ func (o *OverlayFS) negCacheStoreWithGeneration(name string, entry negCacheEntry
 		elem.Value = negCacheListEntry{key: name, value: entry}
 		shard.lru.MoveToFront(elem)
 		shard.mu.Unlock()
-		if o.metrics != nil {
-			o.updateNegCacheSizeMetric(o.negCacheSize.Load())
-		}
 		return
 	}
 
@@ -602,17 +605,17 @@ func (o *OverlayFS) negCacheStoreWithGeneration(name string, entry negCacheEntry
 
 	elem := shard.lru.PushFront(negCacheListEntry{key: name, value: entry})
 	shard.m[name] = elem
-	o.negCacheSize.Add(1)
+	size := o.negCacheSize.Add(1)
 	shard.mu.Unlock()
 	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(o.negCacheSize.Load())
+		o.updateNegCacheSizeMetric(size)
 	}
 }
 
-func (o *OverlayFS) removeNegCacheElementLocked(shard *negCacheShard, key string, elem *list.Element) {
+func (o *OverlayFS) removeNegCacheElementLocked(shard *negCacheShard, key string, elem *list.Element) int64 {
 	delete(shard.m, key)
 	shard.lru.Remove(elem)
-	o.negCacheSize.Add(-1)
+	return o.negCacheSize.Add(-1)
 }
 
 func (o *OverlayFS) updateNegCacheSizeMetric(size int64) {
@@ -679,12 +682,16 @@ func negCacheShardIndex(name string) uint32 {
 	return h % negCacheShardCount
 }
 
+// runNegCacheAfterLayerSnapshotHook is a no-op-in-production deterministic
+// test sync point used to pause a resolver after it snapshots layers+generation.
 func runNegCacheAfterLayerSnapshotHook() {
 	if hook := negCacheAfterLayerSnapshotHook.Load(); hook != nil {
 		(*hook)()
 	}
 }
 
+// runNegCacheInvalidationLockedHook is a no-op-in-production deterministic
+// test sync point used after an invalidation owns every cache shard lock.
 func runNegCacheInvalidationLockedHook() {
 	if hook := negCacheInvalidationLockedHook.Load(); hook != nil {
 		(*hook)()
@@ -698,20 +705,21 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 	defer o.unlockAllNegCacheShards()
 	runNegCacheInvalidationLockedHook()
 
+	size := o.negCacheSize.Load()
 	for i := range o.negCacheShards {
 		shard := &o.negCacheShards[i]
 		if shard.m != nil {
 			for key, elem := range shard.m {
 				entry := elem.Value.(negCacheListEntry)
 				if entry.value.firstCandidateLayer >= layerIndex {
-					o.removeNegCacheElementLocked(shard, key, elem)
+					size = o.removeNegCacheElementLocked(shard, key, elem)
 				}
 			}
 		}
 	}
 	o.negCacheGen.Add(1)
 	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(o.negCacheSize.Load())
+		o.updateNegCacheSizeMetric(size)
 	}
 }
 
@@ -753,6 +761,7 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 	defer o.unlockAllNegCacheShards()
 	runNegCacheInvalidationLockedHook()
 
+	size := o.negCacheSize.Load()
 	// Clear neg-cache entries that reference this or higher layers
 	for i := range o.negCacheShards {
 		shard := &o.negCacheShards[i]
@@ -760,14 +769,14 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 			for key, elem := range shard.m {
 				entry := elem.Value.(negCacheListEntry)
 				if entry.value.firstCandidateLayer >= layerIndex {
-					o.removeNegCacheElementLocked(shard, key, elem)
+					size = o.removeNegCacheElementLocked(shard, key, elem)
 				}
 			}
 		}
 	}
 	o.negCacheGen.Add(1)
 	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(o.negCacheSize.Load())
+		o.updateNegCacheSizeMetric(size)
 	}
 	return nil
 }

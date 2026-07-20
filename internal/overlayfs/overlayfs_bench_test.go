@@ -167,11 +167,12 @@ func BenchmarkNegCacheHitCrossShard_Parallel(b *testing.B) {
 	}
 
 	b.Run("ReadFile", func(b *testing.B) {
+		offsets := benchWorkerOffsets(len(names))
 		b.SetParallelism(8)
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
-			i := 0
+			i := <-offsets
 			for pb.Next() {
 				name := names[i%len(names)]
 				i++
@@ -189,11 +190,12 @@ func BenchmarkNegCacheHitCrossShard_Parallel(b *testing.B) {
 	})
 
 	b.Run("Stat", func(b *testing.B) {
+		offsets := benchWorkerOffsets(len(names))
 		b.SetParallelism(8)
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
-			i := 0
+			i := <-offsets
 			for pb.Next() {
 				name := names[i%len(names)]
 				i++
@@ -250,7 +252,21 @@ func benchCrossShardNames(keysPerShard int) []string {
 		if len(namesByShard[shard]) != keysPerShard {
 			panic("could not generate enough cross-shard benchmark names")
 		}
-		names = append(names, namesByShard[shard]...)
+	}
+	for key := 0; key < keysPerShard; key++ {
+		for shard := range namesByShard {
+			names = append(names, namesByShard[shard][key])
+		}
 	}
 	return names
+}
+
+func benchWorkerOffsets(nameCount int) <-chan int {
+	const maxWorkers = 4096
+
+	offsets := make(chan int, maxWorkers)
+	for i := 0; i < maxWorkers; i++ {
+		offsets <- i % nameCount
+	}
+	return offsets
 }
