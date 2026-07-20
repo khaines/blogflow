@@ -605,23 +605,14 @@ func (o *OverlayFS) negCacheStoreWithGeneration(name string, entry negCacheEntry
 
 	elem := shard.lru.PushFront(negCacheListEntry{key: name, value: entry})
 	shard.m[name] = elem
-	size := o.negCacheSize.Add(1)
+	o.negCacheSize.Add(1)
 	shard.mu.Unlock()
-	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(size)
-	}
 }
 
-func (o *OverlayFS) removeNegCacheElementLocked(shard *negCacheShard, key string, elem *list.Element) int64 {
+func (o *OverlayFS) removeNegCacheElementLocked(shard *negCacheShard, key string, elem *list.Element) {
 	delete(shard.m, key)
 	shard.lru.Remove(elem)
-	return o.negCacheSize.Add(-1)
-}
-
-func (o *OverlayFS) updateNegCacheSizeMetric(size int64) {
-	if o.metrics != nil {
-		o.metrics.negCacheSize.Set(float64(size))
-	}
+	o.negCacheSize.Add(-1)
 }
 
 func (o *OverlayFS) negCacheShard(name string) *negCacheShard {
@@ -705,22 +696,18 @@ func (o *OverlayFS) InvalidateLayer(layerIndex int) {
 	defer o.unlockAllNegCacheShards()
 	runNegCacheInvalidationLockedHook()
 
-	size := o.negCacheSize.Load()
 	for i := range o.negCacheShards {
 		shard := &o.negCacheShards[i]
 		if shard.m != nil {
 			for key, elem := range shard.m {
 				entry := elem.Value.(negCacheListEntry)
 				if entry.value.firstCandidateLayer >= layerIndex {
-					size = o.removeNegCacheElementLocked(shard, key, elem)
+					o.removeNegCacheElementLocked(shard, key, elem)
 				}
 			}
 		}
 	}
 	o.negCacheGen.Add(1)
-	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(size)
-	}
 }
 
 // InvalidateAll clears the entire negative cache.
@@ -740,9 +727,6 @@ func (o *OverlayFS) InvalidateAll() {
 	}
 	o.negCacheSize.Store(0)
 	o.negCacheGen.Add(1)
-	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(0)
-	}
 }
 
 // ReplaceLayer atomically replaces a layer's backing fs.FS and clears
@@ -761,7 +745,6 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 	defer o.unlockAllNegCacheShards()
 	runNegCacheInvalidationLockedHook()
 
-	size := o.negCacheSize.Load()
 	// Clear neg-cache entries that reference this or higher layers
 	for i := range o.negCacheShards {
 		shard := &o.negCacheShards[i]
@@ -769,15 +752,12 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 			for key, elem := range shard.m {
 				entry := elem.Value.(negCacheListEntry)
 				if entry.value.firstCandidateLayer >= layerIndex {
-					size = o.removeNegCacheElementLocked(shard, key, elem)
+					o.removeNegCacheElementLocked(shard, key, elem)
 				}
 			}
 		}
 	}
 	o.negCacheGen.Add(1)
-	if o.metrics != nil {
-		o.updateNegCacheSizeMetric(size)
-	}
 	return nil
 }
 
