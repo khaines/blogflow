@@ -103,11 +103,11 @@ sequenceDiagram
     Builder->>Scanner: Scan(contentFS)
     Scanner-->>Builder: content.Index with published posts
     alt search enabled
-        Builder->>SIdx: build custom index from admitted posts
+        Builder->>SIdx: build custom index from the same content generation inline
         alt search build succeeds
             SIdx-->>Builder: SearchIndex generation N
-        else search build fails or not finished
-            SIdx-->>Builder: nil Search + recorded error
+        else search build fails
+            SIdx-->>Builder: nil Search + recorded ERROR
         end
     else search disabled
         Builder->>Builder: skip search build; Search=nil
@@ -127,7 +127,9 @@ sequenceDiagram
     end
 ```
 
-A single immutable `SiteSnapshot` bundles the `config.Config`, `content.Index`, and optional `SearchIndex` produced from the same reload generation. The server publishes a snapshot with one `atomic.Pointer` store as soon as the content scan succeeds, so content routes can serve even if search is disabled, still building, or failed. `SiteSnapshot.Search` is nil in exactly two cases: (a) `search.enabled=false`, where `/search` is not registered and search is not built; and (b) `search.enabled=true` but the search index build for that generation has not yet succeeded, where the registered handler returns 503 with a friendly message and logs ERROR. The next successful content scan/search build publishes a non-nil `Search` for the new generation. If the content scan fails, no new snapshot is published and the previous snapshot is retained. Handlers load the snapshot once per request and never mix config, content, and search indexes from different generations. Maps and slices inside the snapshot are immutable after publication; this invariant is required to pass `go test -race`.
+A single immutable `SiteSnapshot` bundles the `config.Config`, `content.Index`, and optional `SearchIndex` produced from the same reload generation. Rebuild is synchronous and has exactly one publish per generation: (1) scan content and build the content index; (2) if `search.enabled`, build the custom search index from that same content generation inline before publishing; (3) publish one immutable `SiteSnapshot{config, content, search-or-nil}` with a single `atomic.Pointer` store. There is no asynchronous “publish content first, search catches up later” second publish.
+
+`SiteSnapshot.Search` is non-nil when the inline search build succeeds. It is nil in exactly two cases: (a) `search.enabled=false`, where `/search` is not registered and search is not built; and (b) `search.enabled=true` but this generation's search build failed while the content build succeeded, where the snapshot still publishes so content keeps serving, the registered `/search` handler returns 503 with a friendly message, and ERROR is logged. The next successful rebuild swaps in a non-nil `Search`. If the content build fails, publish nothing and retain the previous snapshot entirely. Because content and search are built inline and published together in one atomic store, config/content/search are always from one generation, with no stale-generation window and no second guarded publish. Handlers load the snapshot once per request; maps and slices inside the snapshot are immutable after publication; this invariant is required to pass `go test -race`.
 
 #### Disabled and Invalid Query Paths
 
@@ -147,7 +149,7 @@ sequenceDiagram
     Theme-->>Client: 400 Bad Request HTML, no partial output
 ```
 
-`search.enabled` is read when the router is built at startup/restart. If it is false, `/search` is not registered and the default theme receives `Search.Enabled=false` so global header/nav search affordances are omitted site-wide. Runtime content reloads rebuild content and, when the route exists, search inside a single snapshot generation, but they do **not** register or unregister routes. `search.enabled` is restart-scoped: a runtime config reload that attempts to change this value logs WARN, keeps the router-state value in template data, and requires restart/router rebuild to take effect. Other search tunables reload together with content and search in a single snapshot generation. `SiteSnapshot.SearchRouteEnabled` is the single source surfaced to templates as `Search.Enabled`, so router-build state and template affordances cannot diverge.
+`search.enabled` is read when the router is built at startup/restart. If it is false, `/search` is not registered and the default theme receives `Search.Enabled=false` so global header/nav search affordances are omitted site-wide. Runtime content reloads synchronously rebuild content and, when the route exists, search inside a single snapshot generation before one atomic publish, but they do **not** register or unregister routes. `search.enabled` is restart-scoped: a runtime config reload that attempts to change this value logs WARN, keeps the router-state value in template data, and requires restart/router rebuild to take effect. Other search tunables reload together with content and search in a single snapshot generation. `SiteSnapshot.SearchRouteEnabled` is the single source surfaced to templates as `Search.Enabled`, so router-build state and template affordances cannot diverge.
 
 ### 2.4 Data Model / Schema
 
@@ -237,7 +239,7 @@ Admission is document-granular and deterministic: posts are considered in the sc
 
 Plain-text body extraction has one canonical source: strip tags from the already-rendered `Post.Content` HTML using the same state-machine approach as the content summary path, HTML-unescape entities, normalize whitespace, and treat the result as untrusted plain text. That representation is used for body tokenization and on-demand excerpt generation. The index discards the full body text after building postings; excerpts are generated only for the current result page by looking up the same-generation `content.Post` from the loaded `SiteSnapshot` and re-running the canonical plain-text extractor.
 
-Tokenization is the approved v1 Unicode-normalized word tokenization: apply Unicode NFC normalization, call `strings.ToLower` (case-folding == `strings.ToLower` for v1), and split on runes where `!unicode.IsLetter(r) && !unicode.IsDigit(r)`. This stdlib-only tokenizer treats whitespace and punctuation as delimiters while preserving CJK text as whole tokens; CJK bigrams are explicitly deferred.
+Tokenization is the approved v1 Unicode-normalized word tokenization: apply Unicode NFC normalization with `golang.org/x/text/unicode/norm.NFC`, call `strings.ToLower` (case-folding == `strings.ToLower` for v1), and split on runes where `!unicode.IsLetter(r) && !unicode.IsDigit(r)`. This reuses the already-present `golang.org/x/text` dependency and adds no new dependency. The tokenizer treats whitespace and punctuation as delimiters while preserving CJK text as whole tokens; CJK bigrams are explicitly deferred.
 
 ### 2.5 API Surface
 
@@ -321,6 +323,7 @@ Where `N` is the number of admitted documents, `df(t)` is the number of admitted
 | `internal/server` | Internal package | HTTP route registration and middleware | If search is disabled at router build, the route is not registered and `/search` returns normal 404 until restart/router rebuild. |
 | `internal/theme` | Internal package | `html/template` rendering | Render errors return 500 without partial response. |
 | `internal/config` | Internal package | YAML and defaults | Invalid search config fails startup/reload; previous snapshot remains active on reload failure. |
+| `golang.org/x/text/unicode/norm` | Existing library dependency | In-process Unicode normalization | Reuses `golang.org/x/text` already in the build graph; normalization failure is not expected for valid UTF-8 strings. |
 | Prometheus client | Library already present | In-process metrics | Metrics failure must not fail search responses. |
 | OpenTelemetry | Library already present | In-process spans | Tracing failure must not affect user-visible behavior. |
 | Bleve | External library candidate | Not used in v1 | Excluded from the implementation to preserve minimal dependencies and binary size; reconsider only in a future design if advanced analyzers become required. |
@@ -377,7 +380,7 @@ The canonical body source is plain text stripped from already-rendered `Post.Con
 - **Snapshot atomicity**: build content and search indexes from the same fixture generation, publish via one atomic snapshot store, run concurrent queries/reloads under `go test -race`, and assert handlers never observe mixed generations.
 - **Handler + theme**: use `httptest`, real handler deps, and a real theme engine with embedded/default templates; assert every status in §2.5, HEAD/405 behavior, `Allow: GET`, page-overflow behavior, and key HTML semantics.
 - **Route enablement**: verify `search.enabled: false` at router build leaves `/search` unregistered and removes global search affordances; verify toggling requires restart/router rebuild, while content reloads only update the snapshot.
-- **Sync/hot reload**: simulate a successful snapshot rebuild and assert old terms disappear while new terms become searchable; simulate failed content scan and assert the old snapshot remains active; simulate failed search build after content success and assert content serves with `Search=nil`/503.
+- **Sync/hot reload**: simulate a successful synchronous snapshot rebuild and assert old terms disappear while new terms become searchable after one atomic publish; simulate failed content scan and assert the old snapshot remains active; simulate failed inline search build after content success and assert one new content snapshot publishes with `Search=nil`/503.
 - **Metrics/tracing**: use Prometheus registry/test helpers where possible and OpenTelemetry test spans for query, rebuild, unavailable, and truncation paths.
 - **Golden ranking fixtures**: add table-driven fixtures with fixed corpora and expected `(docID, quantized score)` ordering. Float tolerance is 1e-6. Base corpus: D1 `{date: 2026-01-02, slug: "alpha", title: "Go Search", tags: ["go"], body: "go go search"}`, D2 `{date: 2026-01-03, slug: "beta", title: "Search", body: "go"}`, D3 `{date: 2026-01-01, slug: "gamma", title: "Other", tags: ["go"], body: "search search"}`. With `N=3`, `idf(go)=idf(search)=ln(2)=0.693147`; query `go` orders D1 `4.852030`, D3 `1.386294`, D2 `0.693147`; query `search` orders D1 `2.772589`, D2 `2.079442`, D3 `1.386294`; query `go go` equals query `go`; query `search go` verifies OR semantics and lexicographic term accumulation. Add a cap fixture with one doc containing `cap` 300 times and assert stored TF=255 and score `255*ln(2)=176.752531`. Add tie fixtures with equal quantized scores to assert date desc first, then slug asc when dates match.
 - **Cap/reload/race/memory tests**: include document-boundary cap truncation, logical-byte cap enforcement, failed search build producing `Search=nil`/503 while content serves, failed content scan retaining the previous snapshot, `go test -race` concurrent reload/query coverage, and peak rebuild memory measurement.
@@ -640,7 +643,7 @@ Rollback triggers:
 | 3 | What memory budget and corpus size must v1 support? | ✅ Decided | Target ~10,000 posts within an approximate ≤64 MiB active logical search-index budget per replica, with rebuild peak around 128–160 MiB actual heap envelope. Enforce `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864`; expose active and peak estimate metrics plus truncation alerts. |
 | 4 | Should `search.enabled` default to false or true? | ✅ Decided | Default `search.enabled` to `false`; search is opt-in for v1 while templates and docs make enablement straightforward. |
 | 5 | Should pages be searchable in addition to posts? | ✅ Decided | V1 indexes posts only. Static/content pages are a documented follow-up. |
-| 6 | What Unicode strategy is required for CJK and languages without whitespace? | ✅ Decided | V1 uses stdlib Unicode NFC normalization plus `strings.ToLower`, splitting on non-letter/non-digit runes (whitespace/punctuation delimiters, no CJK bigrams). CJK bigrams are deferred to a follow-up. |
+| 6 | What Unicode strategy is required for CJK and languages without whitespace? | ✅ Decided | V1 uses `golang.org/x/text/unicode/norm.NFC` plus `strings.ToLower`, splitting on non-letter/non-digit runes (whitespace/punctuation delimiters, no CJK bigrams). This reuses the existing x/text dependency; CJK bigrams are deferred to a follow-up. |
 | 7 | Disabled behavior: unregister route, 404, or disabled page? | ✅ Decided | When disabled, the search route is not registered; `/search` returns the normal 404 and does not advertise disabled functionality. |
 | 8 | Should result scores be visible to readers or only available in templates/metadata? | ✅ Decided | Maintainer-approved refinement of issue #129: relevance scores are available to templates/metadata for sorting or optional custom theme display, but the default reader-visible result body does not show numeric scores. |
 
