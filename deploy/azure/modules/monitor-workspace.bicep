@@ -5,14 +5,9 @@
 // Prometheus metrics. This workspace stores time-series data with a cost
 // model appropriate for metrics (unlike Log Analytics PerGB2018).
 //
-// Phase 1 (current): The workspace is provisioned but metrics are NOT yet
-//   routed here. The managed OTel agent only exports traces → App Insights.
-//   Metrics export requires DCE/DCR infrastructure and Entra ID auth, which
-//   is a Phase 2 follow-up.
-//
-// Phase 2 (future): Set up Data Collection Endpoint + Data Collection Rule
-//   for OTLP metrics ingestion, then configure the ACA managed OTel agent
-//   to export metrics to the DCE endpoint with proper authentication.
+// Metrics are routed here through the DCE/DCR resources and a self-managed
+// OpenTelemetry Collector sidecar. The collector authenticates to Azure Monitor
+// with the Container App's managed identity through the Azure auth extension.
 // ============================================================================
 
 @description('Azure region')
