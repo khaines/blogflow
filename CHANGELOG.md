@@ -21,7 +21,7 @@
 
 ### Testing
 
-* [ENHANCEMENT] theme: add coverage asserting templates >64 MiB are rejected before parse. #234
+* [BUGFIX] overlayfs: reject files exceeding the 64 MiB read limit before fully reading them (the fs.ReadFileFS fast-path previously read the whole file before the size check — latent OOM on the content trust boundary); covers template loading. #234
 * [TEST] TestGap: Add comprehensive test coverage for test-gap items #217–#235 including CSP headers, symlink escape, IP allowlist (bare IP + CIDR), webhook secret length, environment override validation, and overlayFS overlay features.
 
 ## 0.4.1 / 2026-05-18

@@ -1,9 +1,11 @@
 package theme
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -17,7 +19,7 @@ func TestNewEngineRejectsOversizedTemplateBeforeParse(t *testing.T) {
 	t.Parallel()
 
 	oversized := oversizedTemplateFS{
-		path: "templates/oversized.html",
+		path: "templates/base.html",
 		size: testMaxTemplateReadSize + 1,
 	}
 	defaults := fstest.MapFS{
@@ -36,6 +38,29 @@ func TestNewEngineRejectsOversizedTemplateBeforeParse(t *testing.T) {
 	}
 	if strings.Contains(msg, "parsing template") {
 		t.Fatalf("NewEngine error = %v, want rejection before parsing", err)
+	}
+}
+
+func TestNewEngineRejectsOversizedReadFileFSBeforeRead(t *testing.T) {
+	t.Parallel()
+
+	oversized := &oversizedReadFileFS{
+		path: "templates/base.html",
+		size: testMaxTemplateReadSize + 1,
+	}
+	fsys := overlayfs.NewOverlayFS(oversized).WithLayerNames([]string{"theme"})
+
+	_, err := NewEngine(fsys)
+	if err == nil {
+		t.Fatal("NewEngine returned nil error for oversized template")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "exceeds maximum read size") {
+		t.Fatalf("NewEngine error = %v, want size-limit rejection", err)
+	}
+	if oversized.readFileCalled.Load() {
+		t.Fatal("ReadFileFS.ReadFile was called; want Stat-based rejection before full read")
 	}
 }
 
@@ -64,6 +89,49 @@ func (f oversizedTemplateFS) ReadDir(name string) ([]fs.DirEntry, error) {
 			size: f.size,
 		},
 	}, nil
+}
+
+type oversizedReadFileFS struct {
+	path           string
+	size           int64
+	readFileCalled atomic.Bool
+}
+
+func (f *oversizedReadFileFS) Open(name string) (fs.File, error) {
+	if name != f.path {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return &syntheticTemplateFile{
+		name:      name,
+		remaining: f.size,
+	}, nil
+}
+
+func (f *oversizedReadFileFS) ReadFile(name string) ([]byte, error) {
+	f.readFileCalled.Store(true)
+	return nil, errors.New("full ReadFile should not be called for oversized templates")
+}
+
+func (f *oversizedReadFileFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if name != "templates" {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
+	}
+	return []fs.DirEntry{
+		syntheticDirEntry{
+			name: strings.TrimPrefix(f.path, "templates/"),
+			size: f.size,
+		},
+	}, nil
+}
+
+func (f *oversizedReadFileFS) Stat(name string) (fs.FileInfo, error) {
+	if name == "templates" {
+		return syntheticFileInfo{name: "templates", mode: fs.ModeDir}, nil
+	}
+	if name != f.path {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+	}
+	return syntheticFileInfo{name: name, size: f.size}, nil
 }
 
 type syntheticTemplateFile struct {
@@ -109,12 +177,13 @@ func (e syntheticDirEntry) Type() fs.FileMode {
 }
 
 func (e syntheticDirEntry) Info() (fs.FileInfo, error) {
-	return syntheticFileInfo(e), nil
+	return syntheticFileInfo{name: e.name, size: e.size}, nil
 }
 
 type syntheticFileInfo struct {
 	name string
 	size int64
+	mode fs.FileMode
 }
 
 func (i syntheticFileInfo) Name() string {
@@ -126,7 +195,7 @@ func (i syntheticFileInfo) Size() int64 {
 }
 
 func (i syntheticFileInfo) Mode() fs.FileMode {
-	return 0
+	return i.mode
 }
 
 func (i syntheticFileInfo) ModTime() time.Time {
@@ -134,7 +203,7 @@ func (i syntheticFileInfo) ModTime() time.Time {
 }
 
 func (i syntheticFileInfo) IsDir() bool {
-	return false
+	return i.mode.IsDir()
 }
 
 func (i syntheticFileInfo) Sys() any {

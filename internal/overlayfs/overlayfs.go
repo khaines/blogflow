@@ -303,6 +303,40 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 					return nil, symlinkErr
 				}
 			}
+			info, statErr := fs.Stat(rfs, name)
+			if statErr == nil {
+				if info.Size() > maxReadSize {
+					return nil, fmt.Errorf("overlayfs: file %q exceeds maximum read size of %d bytes", name, maxReadSize)
+				}
+			} else {
+				f, err := layers[i].Open(name)
+				if err == nil {
+					data, readErr := readAll(f)
+					_ = f.Close()
+					if readErr != nil {
+						return nil, readErr
+					}
+					if i > 0 && o.negCacheCount.Load() < int64(o.maxNegCacheEntries) {
+						if _, loaded := o.negCache.LoadOrStore(name, negCacheEntry{
+							firstCandidateLayer: i,
+						}); !loaded {
+							o.negCacheCount.Add(1)
+							if o.metrics != nil {
+								o.metrics.negCacheSize.Set(float64(o.negCacheCount.Load()))
+							}
+						}
+					}
+					if o.metrics != nil {
+						o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
+						o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
+					}
+					return data, nil
+				}
+				if !isNotExist(err) {
+					return nil, err
+				}
+				continue
+			}
 			data, err := rfs.ReadFile(name)
 			if err == nil {
 				if len(data) > maxReadSize {
