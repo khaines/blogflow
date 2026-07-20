@@ -30,7 +30,7 @@ Issue #129 identifies search as a core reader expectation for blogs with more th
 
 ### 1.4 Requirements Traceability
 
-No formal `REQ-*` requirements are referenced by the issue; the source issue is the requirement authority.
+No formal `REQ-*` requirements are referenced by the issue; the source issue is the requirement authority. Decision #8 is a maintainer-approved refinement of issue #129's original “show relevance score” criterion (approval recorded in the PR #277 review follow-up): relevance scores control ordering and are available to templates/metadata, but the default reader-visible result body hides numeric scores.
 
 | Requirement | Version | Priority | Summary |
 |-------------|---------|----------|---------|
@@ -102,23 +102,32 @@ sequenceDiagram
     Sync->>Builder: Build generation N from config + contentFS
     Builder->>Scanner: Scan(contentFS)
     Scanner-->>Builder: content.Index with published posts
-    loop for each admitted post
-        Builder->>Plain: strip rendered HTML to plain text
-        Plain-->>Builder: canonical plain text
-        Builder->>SIdx: tokenize title, tags, plain text body
+    alt search enabled
+        Builder->>SIdx: build custom index from admitted posts
+        alt search build succeeds
+            SIdx-->>Builder: SearchIndex generation N
+        else search build fails or not finished
+            SIdx-->>Builder: nil Search + recorded error
+        end
+    else search disabled
+        Builder->>Builder: skip search build; Search=nil
     end
-    Builder->>Snap: single atomic store of immutable SiteSnapshot N
+    Builder->>Snap: single atomic store of immutable SiteSnapshot N after content scan succeeds
     Client->>Handler: GET /search?q=unicode&page=1
     Handler->>Snap: load snapshot once
     Handler->>Handler: validate q and page params
-    Handler->>SIdx: Search(query, limit, offset)
-    SIdx-->>Handler: ranked hits + scores
-    Handler->>Plain: derive excerpts for current page only
-    Handler->>Theme: Render templates/search.html
-    Theme-->>Client: HTML results page
+    alt snapshot.Search is nil
+        Handler-->>Client: 503 friendly HTML (route exists but search unavailable)
+    else search ready
+        Handler->>SIdx: Search(query, limit, offset)
+        SIdx-->>Handler: ranked hits + scores
+        Handler->>Plain: derive excerpts for current page only
+        Handler->>Theme: Render templates/search.html
+        Theme-->>Client: HTML results page
+    end
 ```
 
-A single immutable `SiteSnapshot` bundles the `config.Config`, `content.Index`, and `SearchIndex` produced from the same reload generation. The server publishes it with one `atomic.Pointer` store only after the content scan and search-index build both succeed. Handlers load the snapshot once per request and never mix config, content, and search indexes from different generations. Maps and slices inside the snapshot are immutable after publication. If a rebuild fails, the previous snapshot remains active and the failed generation is logged and counted; this invariant is required to pass `go test -race`.
+A single immutable `SiteSnapshot` bundles the `config.Config`, `content.Index`, and optional `SearchIndex` produced from the same reload generation. The server publishes a snapshot with one `atomic.Pointer` store as soon as the content scan succeeds, so content routes can serve even if search is disabled, still building, or failed. `SiteSnapshot.Search` is nil in exactly two cases: (a) `search.enabled=false`, where `/search` is not registered and search is not built; and (b) `search.enabled=true` but the search index build for that generation has not yet succeeded, where the registered handler returns 503 with a friendly message and logs ERROR. The next successful content scan/search build publishes a non-nil `Search` for the new generation. If the content scan fails, no new snapshot is published and the previous snapshot is retained. Handlers load the snapshot once per request and never mix config, content, and search indexes from different generations. Maps and slices inside the snapshot are immutable after publication; this invariant is required to pass `go test -race`.
 
 #### Disabled and Invalid Query Paths
 
@@ -133,12 +142,12 @@ sequenceDiagram
     Router-->>Client: 404 Not Found because route is not registered
 
     Client->>Handler: GET /search?q=<oversized>
-    Handler->>Handler: reject before tokenization
+    Handler->>Handler: reject before search
     Handler->>Theme: Render search.html with validation message
     Theme-->>Client: 400 Bad Request HTML, no partial output
 ```
 
-`search.enabled` is read when the router is built at startup/restart. If it is false, `/search` is not registered and the default theme receives `Search.Enabled=false` so global header/nav search affordances are omitted site-wide. Runtime content reloads rebuild the content and, when the route exists, the search index inside the snapshot, but they do **not** register or unregister routes. `search.enabled` is restart-scoped: a runtime config reload that attempts to change this value logs WARN, keeps the router-state value in template data, and requires restart/router rebuild to take effect. Other search tunables reload together with content and search in a single snapshot generation. This preserves the decided disabled behavior (`/search` → 404) without mutating the live router or mixing config/content/search generations.
+`search.enabled` is read when the router is built at startup/restart. If it is false, `/search` is not registered and the default theme receives `Search.Enabled=false` so global header/nav search affordances are omitted site-wide. Runtime content reloads rebuild content and, when the route exists, search inside a single snapshot generation, but they do **not** register or unregister routes. `search.enabled` is restart-scoped: a runtime config reload that attempts to change this value logs WARN, keeps the router-state value in template data, and requires restart/router rebuild to take effect. Other search tunables reload together with content and search in a single snapshot generation. `SiteSnapshot.SearchRouteEnabled` is the single source surfaced to templates as `Search.Enabled`, so router-build state and template affordances cannot diverge.
 
 ### 2.4 Data Model / Schema
 
@@ -150,18 +159,19 @@ type SearchConfig struct {
     MaxResults     int   `yaml:"max_results"`      // default 20; per-page Limit
     MaxQueryLength int   `yaml:"max_query_length"` // default 128 normalized runes
     MinQueryLength int   `yaml:"min_query_length"` // default 2 normalized runes
-    ExcerptLength  int   `yaml:"excerpt_length"`   // default 180 display runes
+    MaxQueryTerms  int   `yaml:"max_query_terms"`  // default 32 unique normalized terms
+    ExcerptLength  int   `yaml:"excerpt_length"`   // default 200 display runes
     MaxDocs        int   `yaml:"max_docs"`         // default 10,000 posts
     MaxTokens      int   `yaml:"max_tokens"`       // default 2,000,000 posting occurrences
-    MaxIndexBytes  int64 `yaml:"max_index_bytes"`  // default 64 MiB active search-index heap target
+    MaxIndexBytes  int64 `yaml:"max_index_bytes"`  // default 64 MiB logical active index estimate
 }
 
 type SiteSnapshot struct {
     Generation         uint64
     Config             *config.Config
-    SearchRouteEnabled bool // startup/router-build value exposed to templates
+    SearchRouteEnabled bool // startup/router-build value surfaced to templates as Search.Enabled
     Content            *content.Index
-    Search             *SearchIndex // nil only when route enabled but index unavailable during startup failure
+    Search             *SearchIndex // nil when search disabled (not built), or when enabled but the index build has not yet succeeded (handler returns 503).
 }
 
 const (
@@ -171,14 +181,15 @@ const (
 )
 
 type SearchIndex struct {
-    docs       []SearchDoc
-    postings   map[string][]Posting // normalized token -> sorted posting list
-    docFreq    map[string]int
-    maxDocs    int
-    maxTokens  int
-    maxBytes   int64
-    truncated  bool
-    generation uint64
+    docs           []SearchDoc
+    postings       map[string][]Posting // normalized token -> sorted posting list
+    docFreq        map[string]int
+    logicalBytes   int64
+    maxDocs        int
+    maxTokens      int
+    maxBytes       int64
+    truncated      bool
+    generation     uint64
 }
 
 type SearchDoc struct {
@@ -187,14 +198,15 @@ type SearchDoc struct {
     Title string
     Tags  []string
     Date  time.Time
-    // No full body string is retained. Body text is derived from the
+    // No full body string is retained. Body text is re-derived from the
     // same-generation content.Index only for the current result page.
 }
 
 type Posting struct {
     DocID uint32
-    TF    uint16
+    TF    uint8 // capped min(rawCount, 255), used directly by scoring
     Field uint8 // FieldTitle, FieldTag, or FieldBody; no per-occurrence strings
+    // Expected size: 8 bytes after padding/alignment.
 }
 
 type SearchResult struct {
@@ -208,15 +220,24 @@ type SearchResult struct {
 }
 ```
 
-Index storage is bounded by document count, posting count, and byte budget. V1 indexes **posts only**, not static pages. Pages are a documented follow-up outside this implementation spec. Default caps are `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864` (64 MiB), targeting an active search-index heap budget of **≤~64 MiB per replica**.
+Index storage is bounded by document count, posting count, and a conservative logical byte estimate. V1 indexes **posts only**, not static pages. Pages are a documented follow-up outside this implementation spec. Default caps are `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864` (64 MiB), targeting an active logical search-index budget of **≤~64 MiB per replica**.
 
-The budget assumes approximately 10,000 admitted posts, 200 indexed token occurrences per post on average (2,000,000 postings), short metadata (`slug`, `title`, `tags`, `date`) per post, and no retained body text. With compact postings (`uint32` doc ID, `uint16` TF, `uint8` field plus padding) at roughly 12–16 bytes each, postings consume about 24–32 MiB; token maps, document metadata, and slice/map overhead consume the remaining budget. Rendered post HTML already exists in `content.Index` and is not counted as additional search-index heap. During rebuild, peak heap is expected to be about **2× active search-index size plus GC headroom** (approximately 128–160 MiB for the default budget) because the old snapshot remains live until the new snapshot is published and collected.
+The builder enforces `max_index_bytes` using the same incremental logical estimate exported by `blogflow_search_index_memory_bytes`:
 
-Admission is document-granular and deterministic: posts are considered in the scanner's deterministic post order, and the builder stops before admitting a document that would exceed `max_docs`, `max_tokens`, or `max_index_bytes`. It never partially indexes a document. When truncation occurs, the incomplete index is still published with `truncated=true`, a WARN log and metrics are emitted, and operators can raise caps or reduce content size.
+```text
+logicalBytes ≈
+  Σ_docs(len(slug) + len(title) + Σ len(tag) + 16B date/id overhead) +
+  Σ_postings(8B per Posting) +
+  Σ_unique_tokens(len(token) + 48B map-entry overhead)
+```
 
-Plain-text body extraction has one canonical source: strip tags from the already-rendered `Post.Content` HTML using the same state-machine approach as the content summary path, HTML-unescape entities, normalize whitespace, and treat the result as untrusted plain text. That representation is used for body tokenization and on-demand excerpt generation. The index discards the full body text after building postings; excerpts are generated only for the current result page by looking up the same-generation `content.Post` from the loaded `SiteSnapshot` and re-running the canonical plain-text extractor. Excerpt matching is case-insensitive and Unicode-aware by reusing tokenizer normalization and offsets mapped back to the original display text.
+This estimate is intentionally conservative and deterministic; it is distinct from actual Go heap usage. The budget assumes approximately 10,000 admitted posts, 200 indexed token occurrences per post on average (2,000,000 postings), and no retained body text. At 8 bytes each, 2,000,000 postings consume about 16 MiB; token strings/map overhead, posting slice overhead, and document metadata consume the remaining logical budget. Rendered post HTML already exists in `content.Index` and is not counted as additional search-index storage. During rebuild, peak heap is expected to be about **2× active index size plus GC headroom** (approximately 128–160 MiB for the default budget) because the old snapshot remains live until the new snapshot is published and collected.
 
-Tokenization is the approved v1 Unicode-normalized word tokenization: lowercase/case-fold, apply NFKD normalization, transliterate the same non-decomposable Latin characters as `theme.urlize`, remove combining marks, recompose to NFC, and split on runes for which neither `unicode.IsLetter` nor `unicode.IsDigit` is true. This treats whitespace and punctuation as delimiters while preserving CJK text as whole tokens; CJK bigrams are explicitly deferred.
+Admission is document-granular and deterministic: posts are considered in the scanner's deterministic post order, and the builder stops before admitting a document that would exceed `max_docs`, `max_tokens`, or `max_index_bytes` according to the logical estimate. It never partially indexes a document. When truncation occurs, the incomplete index is still published with `truncated=true`, a WARN log and metrics are emitted, and operators can raise caps or reduce content size.
+
+Plain-text body extraction has one canonical source: strip tags from the already-rendered `Post.Content` HTML using the same state-machine approach as the content summary path, HTML-unescape entities, normalize whitespace, and treat the result as untrusted plain text. That representation is used for body tokenization and on-demand excerpt generation. The index discards the full body text after building postings; excerpts are generated only for the current result page by looking up the same-generation `content.Post` from the loaded `SiteSnapshot` and re-running the canonical plain-text extractor.
+
+Tokenization is the approved v1 Unicode-normalized word tokenization: apply Unicode NFC normalization, call `strings.ToLower` (case-folding == `strings.ToLower` for v1), and split on runes where `!unicode.IsLetter(r) && !unicode.IsDigit(r)`. This stdlib-only tokenizer treats whitespace and punctuation as delimiters while preserving CJK text as whole tokens; CJK bigrams are explicitly deferred.
 
 ### 2.5 API Surface
 
@@ -230,20 +251,22 @@ Tokenization is the approved v1 Unicode-normalized word tokenization: lowercase/
 | Whitespace-only `q` | 200 | Trim to empty and render the same landing form. |
 | Non-empty query below `min_query_length` | 200 | Render form with an inline accessible validation message; do not scan the index. |
 | Query over `max_query_length` | 400 | Render HTML error/search page with validation message; reject before tokenization. |
+| Query over `max_query_terms` | 400 | `ErrQueryTooComplex`; render the same class of validation message as over-max-length. |
 | Valid query with results | 200 | Render results page with query echo, count, title, excerpt, date, links, pagination, and score metadata available to templates. Numeric scores are not shown by the default reader-visible body text. |
-| Valid query with no results | 200 | Render explicit no-results state, preserve the query, and no pagination links. |
-| `page < 1` or invalid `page` | 200 | Clamp to page 1. |
-| `page` beyond last page | 200 | Clamp to the last valid page; for zero results, page is 1 of 1. |
+| Valid query with no results | 200 | Render explicit no-results state, preserve the query, page 1 of 1, and no pagination links. |
+| `page < 1` or invalid `page` | 200 | Clamp to page 1 before computing offset. |
+| `page` beyond last page | 200 | Do not pre-clamp. Run search with `Offset=(page-1)*Limit`; if `Offset >= Total`, render an empty results page for the requested page and pagination that exposes the true last page. |
 | Search disabled at router build | 404 | `/search` is not registered and falls through to normal 404 handling. |
-| Unsupported method | 405 | Go `ServeMux` method matching returns Method Not Allowed for non-GET `/search` when the route exists. |
-| Index unavailable/not ready | 503 | Render a friendly “search is temporarily unavailable” page; `Searcher` returns `ErrIndexUnavailable`. |
+| HEAD | 200/400/503 | Served by the GET handler semantics with no response body, per `net/http`. |
+| Unsupported method | 405 | All methods other than GET and implicit HEAD return Method Not Allowed with `Allow: GET`. |
+| Index unavailable/not ready | 503 | Render a friendly “search is temporarily unavailable” page, log ERROR, and count error metrics; `Searcher` returns `ErrIndexUnavailable`. |
 | Template render failure | 500 | Return Internal Server Error without partial content. |
 
-Validation ownership is split deliberately: the handler validates normalized query rune length, page parameters, method/route behavior, and per-page limit/offset; the `Searcher` validates snapshot/index availability and returns typed errors such as `ErrIndexUnavailable` and `ErrQueryTooComplex`. `min_query_length` and `max_query_length` are counted in runes after trimming and Unicode normalization.
+Validation ownership is split deliberately: the handler validates normalized query rune length, page parameters, method/route behavior, and per-page limit/offset; the `Searcher` validates snapshot/index availability and query term count and returns typed errors such as `ErrIndexUnavailable` and `ErrQueryTooComplex`. `min_query_length` and `max_query_length` are counted in runes after trimming and Unicode NFC normalization. `max_query_terms` is counted after tokenization, deduplication, and lexicographic sorting of unique normalized terms; default is 32.
 
-`max_results` is the per-page window and maps directly to `SearchOptions.Limit`; the handler computes `Offset = (page-1) * Limit` after clamping `page`. V1 scores all candidate documents produced by the query terms within the admitted index, then returns the requested page window. If benchmarks show common-token queries exceed latency targets, add a separate `max_candidates` config in a follow-up design rather than overloading `max_results`.
+`max_results` is the per-page window and maps directly to `SearchOptions.Limit`; the handler computes `Offset = (page-1) * Limit` after clamping only invalid or below-1 pages to 1. V1 scores all candidate documents produced by the query terms within the admitted index, then returns the requested page window. If `Offset >= Total`, the response is HTTP 200 with zero results for that requested page and pagination metadata showing the true last page. There is no separate candidate cap in v1; `max_results` is only the per-page result window.
 
-The default search page data is also exposed to the base/layout template as `Search.Enabled` so header/nav templates can omit global search links and forms when disabled. When enabled, `templates/search.html` composes with `templates/base.html`; override points are `templates/search.html` for the page, `templates/partials/search-result.html` for a result item, and `templates/partials/search-pagination.html` for search-specific pagination. If a custom theme omits those partials, the embedded defaults provide them through the overlay system.
+The default search page data is also exposed to the base/layout template as `Search.Enabled` from `SiteSnapshot.SearchRouteEnabled` so header/nav templates can omit global search links and forms when disabled. When enabled, `templates/search.html` composes with `templates/base.html`; override points are `templates/search.html` for the page, `templates/partials/search-result.html` for a result item, and `templates/partials/search-pagination.html` for search-specific pagination. If a custom theme omits those partials, the embedded defaults provide them through the overlay system.
 
 Default template accessibility contract: the search form uses `role="search"`; the query input has an associated `<label>` or `aria-label`; the results region exposes the result count programmatically (for example with a labelled region or status text); no-results is an explicit state; and prev/next pagination uses real `<a>` links inside a labelled `<nav>`. These are implementation acceptance criteria, not optional styling guidance.
 
@@ -270,15 +293,15 @@ type SearchResponse struct {
 }
 
 var ErrIndexUnavailable = errors.New("search index unavailable")
-var ErrQueryTooComplex = errors.New("search query too complex")
+var ErrQueryTooComplex = errors.New("search query too complex") // unique normalized terms exceed cfg.Search.MaxQueryTerms
 ```
 
 #### Ranking approach
 
-Use deterministic **weighted TF-IDF**, not BM25. The score for a document `d` and deduplicated normalized query terms `Q` is:
+Use deterministic **weighted TF-IDF**, not BM25. The score for a document `d` and sorted unique normalized query terms `Q` is accumulated in lexicographic term order for reproducibility:
 
 ```text
-score(d, Q) = Σ_{t ∈ unique(Q)} idf(t) * (
+score(d, Q) = Σ_{t ∈ sort(unique(Q))} idf(t) * (
     3.0 * tf(title, d, t) +
     2.0 * tf(tag, d, t) +
     1.0 * tf(body, d, t)
@@ -287,7 +310,7 @@ score(d, Q) = Σ_{t ∈ unique(Q)} idf(t) * (
 idf(t) = ln(1 + (N + 1) / (df(t) + 1))
 ```
 
-Where `N` is the number of admitted documents, `df(t)` is the number of admitted documents containing term `t` in any field, and `tf(field,d,t)` is the capped term frequency in that field (`min(rawCount, 255)`) from the posting list. Multi-term queries use OR semantics with summed term contributions. Duplicate query terms are ignored after normalization so `go go` scores the same as `go`. There is no score-level recency boost; recency is only a deterministic tie-break after equal relevance. Sort comparator: `score desc → Date desc → Slug asc`.
+Where `N` is the number of admitted documents, `df(t)` is the number of admitted documents containing term `t` in any field, and `tf(field,d,t)` is the stored capped `uint8` term frequency (`min(rawCount, 255)`) from the posting list. Multi-term queries use OR semantics with summed term contributions. Duplicate query terms are ignored after normalization so `go go` scores the same as `go`. Before sorting results, scores are quantized by rounding to 1e-6; equality after quantization uses tie-breaks only. There is no score-level recency boost. Sort comparator: `quantized score desc → Date desc → Slug asc`.
 
 ### 2.6 Dependencies
 
@@ -306,7 +329,7 @@ Where `N` is the number of admitted documents, `df(t)` is the number of admitted
 
 Search indexes only content already accepted by the content pipeline. Draft posts, files without valid front matter, malformed front matter, unsafe image/template fields, and duplicate slugs remain excluded by `internal/content.Scanner`. Search must not read arbitrary paths or fetch remote resources; it consumes only the `Post` objects in the current immutable `SiteSnapshot` and inherits overlay filesystem isolation from the scan phase.
 
-The canonical body source is plain text stripped from already-rendered `Post.Content` HTML. The same representation drives body tokenization and excerpt generation; raw Markdown is not an alternate source. Query echoes, excerpts, result titles, tags, and validation messages are ordinary strings rendered through `html/template` auto-escaping. No search result field is typed as `template.HTML`, and v1 does not emit HTML highlight markup.
+The canonical body source is plain text stripped from already-rendered `Post.Content` HTML. The same representation drives body tokenization and excerpt generation; raw Markdown is not an alternate source. Excerpts are deterministic: for each result on the current page, recompute canonical plain text from the same-generation `content.Index`, find the first query-term match using case-insensitive Unicode NFC + `strings.ToLower` normalization that maps normalized terms back to source byte spans, then render a fixed `search.excerpt_length` window (default 200 runes) centered on that first match. The window is snapped to rune boundaries and whitespace-collapsed. If no match span is available, use the leading `excerpt_length` runes. Query echoes, excerpts, result titles, tags, and validation messages are ordinary strings rendered through `html/template` auto-escaping. No search result field is typed as `template.HTML`, and v1 does not emit HTML highlight markup.
 
 ---
 
@@ -321,7 +344,7 @@ The canonical body source is plain text stripped from already-rendered `Post.Con
 | 3 | Search body | Search enabled; rendered body text contains “overlay filesystem” | `GET /search?q=overlay` | Matching post appears with excerpt around the canonical plain-text body match. |
 | 4 | Ranked multi-field result | One post matches title and body; another only body | `GET /search?q=search` | Multi-field match ranks above body-only match under weighted TF-IDF. |
 | 5 | Unicode query | Post contains `Café`, `東京`, or Cyrillic text | Search with normalized equivalent where applicable | Unicode-normalized tokenizer finds expected posts without panics; CJK bigrams are not generated. |
-| 6 | Pagination | More matches than `search.max_results` | `GET /search?q=go&page=2` | Handler uses `Limit=max_results`, `Offset=(page-1)*Limit`; second page renders deterministic subset with real prev/next links. |
+| 6 | Pagination | More matches than `search.max_results` | `GET /search?q=go&page=2` | Handler uses `Limit=max_results`, `Offset=(page-1)*Limit`; second page renders deterministic subset with real prev/next links. Page overflow returns an empty 200 results page with pagination showing the true last page. |
 | 7 | Empty search page | Search enabled | `GET /search` | Search form renders with no error and no result list. |
 | 8 | Accessible results page | Search enabled with at least two pages of results | Navigate `GET /search?q=go` using keyboard | Form has `role="search"`, input has associated label or `aria-label`, result-count region is programmatically exposed, result links and pagination links are keyboard reachable in document order. |
 
@@ -334,36 +357,40 @@ The canonical body source is plain text stripped from already-rendered `Post.Con
 | 3 | Query below minimum length | `q=a` when min length is 2 normalized runes | HTTP 200 with inline accessible validation message; no index scan. |
 | 4 | Empty or whitespace query | Missing `q`, `q=`, or `q=+%20` | HTTP 200 search landing form; no validation error and no results. |
 | 5 | Query too long | Query exceeds `max_query_length` normalized runes | HTTP 400 HTML response; tokenization and search are skipped. |
-| 6 | Unsupported method | `POST /search` when route exists | HTTP 405 Method Not Allowed. |
-| 7 | Index unavailable | Route exists but snapshot has no usable search index | HTTP 503 friendly HTML message; `ErrIndexUnavailable` is recorded. |
-| 8 | Stop-word/common term | Query token appears in most posts | Results remain bounded and sorted; request latency stays within target. |
-| 9 | No results | Valid query has no matches | HTTP 200 explicit “No results” state, query preserved, page 1 of 1, no prev/next links. |
-| 10 | Bad page number | `page=-1`, `page=abc`, or very large page | HTTP 200; invalid/below 1 clamps to 1, beyond last clamps to last valid page. |
-| 11 | Content reload race | Query occurs during index rebuild | Handler uses old complete snapshot or new complete snapshot; no data race or mixed generations. |
-| 12 | Cap truncation | Corpus exceeds `max_docs`, `max_tokens`, or `max_index_bytes` | Builder stops at document boundary, publishes deterministic truncated index, emits WARN log and truncation metric. |
-| 13 | Rebuild failure | Content scan or search build fails | Previous snapshot remains active; failure metric/log emitted. |
-| 14 | Template override missing search template | Custom theme omits search templates/partials | Embedded default template and partials are used through overlay defaults. |
-| 15 | Malicious query string | Query contains HTML/script markup | Query echo and excerpts are escaped; no executable markup appears. |
-| 16 | Search disabled site-wide affordances | Any non-search page with `search.enabled: false` at router build | Base/header template data has `Search.Enabled=false`; no dangling search form/link to `/search` is emitted. |
+| 6 | Too many query terms | Unique normalized terms exceed `max_query_terms` default 32 | HTTP 400 HTML response; `ErrQueryTooComplex` is recorded. |
+| 7 | Unsupported method | `POST /search` when route exists | HTTP 405 Method Not Allowed with `Allow: GET`; HEAD follows GET semantics without a body. |
+| 8 | Index unavailable | Route exists but `SiteSnapshot.Search == nil` | HTTP 503 friendly HTML message; `ErrIndexUnavailable` is recorded and ERROR logged. |
+| 9 | Stop-word/common term | Query token appears in most posts | Results remain bounded and sorted; request latency stays within target. |
+| 10 | No results | Valid query has no matches | HTTP 200 explicit “No results” state, query preserved, page 1 of 1, no prev/next links. |
+| 11 | Bad page number | `page=-1`, `page=abc`, or very large page | HTTP 200; invalid/below 1 clamps to 1; beyond last is not pre-clamped and returns an empty results page with true-last-page pagination. |
+| 12 | Content reload race | Query occurs during index rebuild | Handler uses old complete snapshot or new complete snapshot; no data race or mixed generations. |
+| 13 | Cap truncation | Corpus exceeds `max_docs`, `max_tokens`, or `max_index_bytes` | Builder stops at document boundary, publishes deterministic truncated index, emits WARN log and truncation metric. |
+| 14 | Content scan failure | Content scan fails | Previous snapshot remains active; failure metric/log emitted. |
+| 15 | Search build failure after content success | Search enabled and content scan succeeds but search build fails | New content snapshot is published with `Search=nil`; content serves and `/search` returns 503 until a later successful build. |
+| 16 | Template override missing search template | Custom theme omits search templates/partials | Embedded default template and partials are used through overlay defaults. |
+| 17 | Malicious query string | Query contains HTML/script markup | Query echo and excerpts are escaped; no executable markup appears. |
+| 18 | Search disabled site-wide affordances | Any non-search page with `search.enabled: false` at router build | Base/header template data has `Search.Enabled=false`; no dangling search form/link to `/search` is emitted. |
 
 ### 3.3 Integration Test Boundaries
 
 - **Scanner + search index**: use real Markdown files in an in-memory or test filesystem, real front matter parsing, real renderer output, and the canonical rendered-HTML-to-plain-text extractor; assert draft and malformed posts are not searchable.
 - **Snapshot atomicity**: build content and search indexes from the same fixture generation, publish via one atomic snapshot store, run concurrent queries/reloads under `go test -race`, and assert handlers never observe mixed generations.
-- **Handler + theme**: use `httptest`, real handler deps, and a real theme engine with embedded/default templates; assert every status in §2.5 and key HTML semantics.
+- **Handler + theme**: use `httptest`, real handler deps, and a real theme engine with embedded/default templates; assert every status in §2.5, HEAD/405 behavior, `Allow: GET`, page-overflow behavior, and key HTML semantics.
 - **Route enablement**: verify `search.enabled: false` at router build leaves `/search` unregistered and removes global search affordances; verify toggling requires restart/router rebuild, while content reloads only update the snapshot.
-- **Sync/hot reload**: simulate a successful snapshot rebuild and assert old terms disappear while new terms become searchable; simulate failed rebuild and assert the old snapshot remains active.
+- **Sync/hot reload**: simulate a successful snapshot rebuild and assert old terms disappear while new terms become searchable; simulate failed content scan and assert the old snapshot remains active; simulate failed search build after content success and assert content serves with `Search=nil`/503.
 - **Metrics/tracing**: use Prometheus registry/test helpers where possible and OpenTelemetry test spans for query, rebuild, unavailable, and truncation paths.
+- **Golden ranking fixtures**: add table-driven fixtures with fixed corpora and expected `(docID, quantized score)` ordering. Float tolerance is 1e-6. Base corpus: D1 `{date: 2026-01-02, slug: "alpha", title: "Go Search", tags: ["go"], body: "go go search"}`, D2 `{date: 2026-01-03, slug: "beta", title: "Search", body: "go"}`, D3 `{date: 2026-01-01, slug: "gamma", title: "Other", tags: ["go"], body: "search search"}`. With `N=3`, `idf(go)=idf(search)=ln(2)=0.693147`; query `go` orders D1 `4.852030`, D3 `1.386294`, D2 `0.693147`; query `search` orders D1 `2.772589`, D2 `2.079442`, D3 `1.386294`; query `go go` equals query `go`; query `search go` verifies OR semantics and lexicographic term accumulation. Add a cap fixture with one doc containing `cap` 300 times and assert stored TF=255 and score `255*ln(2)=176.752531`. Add tie fixtures with equal quantized scores to assert date desc first, then slug asc when dates match.
+- **Cap/reload/race/memory tests**: include document-boundary cap truncation, logical-byte cap enforcement, failed search build producing `Search=nil`/503 while content serves, failed content scan retaining the previous snapshot, `go test -race` concurrent reload/query coverage, and peak rebuild memory measurement.
 
 ### 3.4 Acceptance Criteria Mapping
 
 | Acceptance Criterion | Test Scenario(s) | Coverage |
 |----------------------|-------------------|----------|
 | Search by title, tags, and body content | §3.1 #1, #2, #3; §3.3 scanner integration | ✅ Covered |
-| Results show title, excerpt, date, relevance score | §3.1 #1, #4; handler/template tests verify score controls ordering and is exposed to templates/metadata, not shown as default reader-visible body text | ✅ Covered |
+| Results show title, excerpt, date, relevance score | §3.1 #1, #4; handler/template tests verify the maintainer-approved refinement: score controls ordering and is exposed to templates/metadata, not shown as default reader-visible body text | ✅ Covered |
 | Handles Unicode content | §3.1 #5; tokenizer and excerpt tests | ✅ Covered |
-| Configurable through `search.enabled: true` | §3.2 #1, #2, #16; route enablement tests | ✅ Covered |
-| Accessible keyboard-navigable results | §3.1 #8; §3.2 #9; template accessibility tests | ✅ Covered |
+| Configurable through `search.enabled: true` | §3.2 #1, #2, #18; route enablement tests | ✅ Covered |
+| Accessible keyboard-navigable results | §3.1 #8; §3.2 #10; template accessibility tests | ✅ Covered |
 | Server-side, no JavaScript | Handler/theme integration; static template inspection | ✅ Covered |
 
 ## 4 · Performance
@@ -388,14 +415,14 @@ Search is read-heavy and request-driven. Small blogs may see occasional queries;
 
 ### 4.4 Scaling Strategy
 
-The component scales horizontally with BlogFlow replicas because each replica keeps its own immutable in-memory snapshot. The primary bottlenecks are memory for posting lists and CPU for scoring large candidate sets. Query work is bounded by normalized query length, `max_docs` (default 10,000), `max_tokens` (default 2,000,000 posting occurrences), `max_index_bytes` (default 64 MiB active search-index heap target), and the per-page `max_results` window. V1 scores all candidates within the admitted index; any separate candidate cap requires a follow-up design.
+The component scales horizontally with BlogFlow replicas because each replica keeps its own immutable in-memory snapshot. The primary bottlenecks are memory for posting lists and CPU for scoring large candidate sets. Query work is bounded by normalized query length, `max_query_terms` (default 32), `max_docs` (default 10,000), `max_tokens` (default 2,000,000 posting occurrences), `max_index_bytes` (default 64 MiB logical active index estimate), and the per-page `max_results` window. V1 scores all candidates within the admitted index; there is no separate candidate cap in v1.
 
 ### 4.5 Resource Budgets
 
 | Resource | Budget per Replica | Notes |
 |----------|-------------------|-------|
 | CPU | ≤ 1 core for p95 target on 10,000 posts | Query scoring is CPU-bound and should avoid regex backtracking. |
-| Memory | Active target ≤64 MiB search-index heap for ~10,000 typical posts; peak rebuild budget ~128–160 MiB | Enforced with `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864`; no full body strings retained. |
+| Memory | Active target ≤64 MiB logical search-index estimate for ~10,000 typical posts; peak rebuild budget ~128–160 MiB actual heap envelope | Enforced with `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864`; no full body strings retained. |
 | Storage | 0 Gi persistent storage for v1 | Index is rebuilt in memory; no on-disk index files. |
 
 ### 4.6 Performance Test Plan
@@ -426,9 +453,9 @@ Search is a public reader-facing feature and does not require authentication. It
 
 ### 5.3 Input Validation & Sanitization
 
-- Trim query whitespace, normalize it with the search tokenizer normalization, and count `search.min_query_length` / `search.max_query_length` in normalized runes.
-- Empty and whitespace-only queries render the 200 landing form; non-empty below-minimum queries render 200 with an inline accessible validation message; oversized queries render 400 and skip tokenization/search.
-- Limit query token count and ignore duplicate normalized query tokens to bound scoring work.
+- Trim query whitespace, normalize it with Unicode NFC + `strings.ToLower`, and count `search.min_query_length` / `search.max_query_length` in normalized runes.
+- Empty and whitespace-only queries render the 200 landing form; non-empty below-minimum queries render 200 with an inline accessible validation message; oversized queries and queries over `max_query_terms` render 400 and skip search.
+- Limit query token count to `max_query_terms` after deduplication and lexicographic sorting; ignore duplicate normalized query tokens to bound scoring work.
 - Avoid regular expressions in tokenization and excerpt matching; use rune iteration and tokenizer offsets to prevent ReDoS and keep normalized matches mapped to raw display text.
 - Render query echoes, excerpts, titles, tags, and validation messages as plain strings through `html/template`; no `template.HTML` search fields.
 - Do not log full query strings at INFO level; if debug logging is added, truncate and avoid recording sensitive accidental input.
@@ -526,11 +553,12 @@ Required structured fields: `request_id` for request logs, `trace_id` when traci
 | `blogflow_search_index_documents` | Gauge | none | Number of posts in the active search index. |
 | `blogflow_search_index_tokens` | Gauge | none | Number of indexed token occurrences in the active search index. |
 | `blogflow_search_index_rebuild_duration_seconds` | Histogram | `status` | Search index rebuild duration during content scans. |
-| `blogflow_search_index_memory_bytes` | Gauge | none | Estimated active search-index heap footprint. |
+| `blogflow_search_index_memory_bytes` | Gauge | none | Active logical index byte estimate computed with the §2.4 formula; distinct from actual Go heap. |
+| `blogflow_search_index_rebuild_peak_bytes` | Gauge | none | Peak logical bytes observed during the latest rebuild, sampled from the same estimator plus old active estimate while both generations are live. |
 | `blogflow_search_index_truncated_total` | Counter | `reason` (`max_docs`, `max_tokens`, `max_index_bytes`) | Count of rebuilds that published a truncated index. |
 | `blogflow_search_snapshot_generation` | Gauge | none | Current published snapshot generation. |
 
-Dashboard panels should show query rate, p95/p99 latency, zero-result rate, active/peak index size, rebuild duration, truncation count, published snapshot generation, and errors.
+Dashboard panels should show query rate, p95/p99 latency, zero-result rate, active logical index size, peak rebuild estimate, rebuild duration, truncation count, published snapshot generation, and errors.
 
 ### 7.3 Distributed Tracing
 
@@ -542,7 +570,7 @@ Create a `search.Query` span in the handler and a `search.IndexBuild` span durin
 |------------|-----------|----------|----------|
 | SearchHighErrorRate | `rate(blogflow_search_queries_total{status="error"}[5m]) / rate(blogflow_search_queries_total[5m]) > 0.05` | 🟠 High | Investigate handler/index/template errors; rollback if tied to release. |
 | SearchHighLatency | p99 search duration > 250 ms for 10 minutes | 🟡 Medium | Check corpus size, common queries, CPU saturation, and candidate bounds. |
-| SearchIndexRebuildFailed | Any rebuild failure in last 10 minutes | 🔴 Critical if search is enabled | Page on-call for production sites that advertise search; previous snapshot should remain active. |
+| SearchIndexRebuildFailed | Any content scan or search index build failure in last 10 minutes | 🔴 Critical if search is enabled | Page on-call for production sites that advertise search; content scan failures retain the previous snapshot, while search build failures publish content with `Search=nil` and `/search` returns 503. |
 | SearchIndexTruncated | `increase(blogflow_search_index_truncated_total[15m]) > 0` | 🟠 High | Notify operator that search results are incomplete; raise caps or reduce corpus. |
 | SearchZeroResultSpike | Zero-result rate doubles baseline for 30 minutes | 🟢 Low | Review tokenizer changes, content sync freshness, or UX issues. |
 
@@ -578,7 +606,7 @@ Rollback triggers:
 
 ### 8.4 Dependencies & Sequencing
 
-1. Add `SearchConfig` defaults, YAML parsing, and validation, including `max_index_bytes`.
+1. Add `SearchConfig` defaults, YAML parsing, and validation, including `max_query_terms` and `max_index_bytes`.
 2. Add tokenizer, canonical rendered-HTML plain-text extractor, and custom `SearchIndex` under `internal/content` or `internal/search`.
 3. Integrate content and search build into one immutable `SiteSnapshot` published by one atomic pointer store.
 4. Add `SearchHandler`, startup route registration, typed errors, page data, metrics, and tracing.
@@ -609,12 +637,12 @@ Rollback triggers:
 |---|----------|--------|------------|
 | 1 | Should v1 use Bleve or a custom in-memory inverted index? | ✅ Decided | Use a custom in-memory inverted index for v1. Do not add Bleve; the custom index better fits BlogFlow's minimal dependency, smaller binary, and direct scan-time integration goals. |
 | 2 | Should the search index be persistent or rebuilt in memory only? | ✅ Decided | Use in-memory-only indexes rebuilt at content scan time. This avoids filesystem writes and preserves distroless/read-only-root compatibility. |
-| 3 | What memory budget and corpus size must v1 support? | ✅ Decided | Target ~10,000 posts within an approximate ≤64 MiB active search-index heap budget per replica, with rebuild peak around 128–160 MiB. Enforce `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864`; expose metrics and truncation alerts. |
+| 3 | What memory budget and corpus size must v1 support? | ✅ Decided | Target ~10,000 posts within an approximate ≤64 MiB active logical search-index budget per replica, with rebuild peak around 128–160 MiB actual heap envelope. Enforce `max_docs: 10000`, `max_tokens: 2000000`, and `max_index_bytes: 67108864`; expose active and peak estimate metrics plus truncation alerts. |
 | 4 | Should `search.enabled` default to false or true? | ✅ Decided | Default `search.enabled` to `false`; search is opt-in for v1 while templates and docs make enablement straightforward. |
 | 5 | Should pages be searchable in addition to posts? | ✅ Decided | V1 indexes posts only. Static/content pages are a documented follow-up. |
-| 6 | What Unicode strategy is required for CJK and languages without whitespace? | ✅ Decided | V1 uses Unicode-normalized word tokenization aligned with existing i18n handling (whitespace/punctuation delimiters, no CJK bigrams). CJK bigrams are deferred to a follow-up. |
+| 6 | What Unicode strategy is required for CJK and languages without whitespace? | ✅ Decided | V1 uses stdlib Unicode NFC normalization plus `strings.ToLower`, splitting on non-letter/non-digit runes (whitespace/punctuation delimiters, no CJK bigrams). CJK bigrams are deferred to a follow-up. |
 | 7 | Disabled behavior: unregister route, 404, or disabled page? | ✅ Decided | When disabled, the search route is not registered; `/search` returns the normal 404 and does not advertise disabled functionality. |
-| 8 | Should result scores be visible to readers or only available in templates/metadata? | ✅ Decided | Relevance scores are available to templates/metadata for sorting or optional custom theme display, but the default reader-visible result body does not show numeric scores. |
+| 8 | Should result scores be visible to readers or only available in templates/metadata? | ✅ Decided | Maintainer-approved refinement of issue #129: relevance scores are available to templates/metadata for sorting or optional custom theme display, but the default reader-visible result body does not show numeric scores. |
 
 ---
 
