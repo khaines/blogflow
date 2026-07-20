@@ -304,6 +304,10 @@ func benchReadReloadPaths(b *testing.B, ofs *OverlayFS, names []string) {
 	}
 }
 
+// benchWarmReloadNegCache warms the negative cache by resolving names once. It
+// marks the "warm" setup phase of a reload benchmark and must be called inside a
+// b.StopTimer()/b.StartTimer() bracket so the warm-up is excluded from the
+// measured region.
 func benchWarmReloadNegCache(b *testing.B, ofs *OverlayFS, names []string) {
 	b.Helper()
 	benchReadReloadPaths(b, ofs, names)
@@ -348,6 +352,10 @@ func BenchmarkReplaceLayer_SingleLayer(b *testing.B) {
 // start from a warm neg-cache, invalidate the changed config layer, then resolve
 // the same paths. Entries cached for higher-priority content-layer hits survive,
 // so this detects regressions that accidentally wipe the whole cache.
+//
+// For a stable comparison against BenchmarkInvalidateAll_WarmNegCache, run with a
+// longer benchtime (e.g. -benchtime=2s -count=6) so b.N>1 and the single-layer
+// vs full-invalidation signal reflects an average rather than a single sample.
 func BenchmarkInvalidateLayer_SingleLayer(b *testing.B) {
 	const (
 		filesPerLayer = 1_000
