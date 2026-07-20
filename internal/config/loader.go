@@ -280,20 +280,20 @@ func isWordChar(c byte) bool {
 }
 
 // envMap maps BLOGFLOW_* env var names to setter functions.
-var envMap = map[string]func(*Config, string) error{
-	"BLOGFLOW_SITE_TITLE": func(c *Config, v string) error {
+var envMap = map[string]func(*Config, string, *slog.Logger) error{
+	"BLOGFLOW_SITE_TITLE": func(c *Config, v string, _ *slog.Logger) error {
 		c.Site.Title = v
 		return nil
 	},
-	"BLOGFLOW_SITE_DESCRIPTION": func(c *Config, v string) error {
+	"BLOGFLOW_SITE_DESCRIPTION": func(c *Config, v string, _ *slog.Logger) error {
 		c.Site.Description = v
 		return nil
 	},
-	"BLOGFLOW_SITE_BASE_URL": func(c *Config, v string) error {
+	"BLOGFLOW_SITE_BASE_URL": func(c *Config, v string, _ *slog.Logger) error {
 		c.Site.BaseURL = v
 		return nil
 	},
-	"BLOGFLOW_SERVER_PORT": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_PORT": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_PORT as int: %w", err)
@@ -301,7 +301,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.Port = n
 		return nil
 	},
-	"BLOGFLOW_SERVER_READ_TIMEOUT": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_READ_TIMEOUT": func(c *Config, v string, _ *slog.Logger) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_READ_TIMEOUT as duration: %w", err)
@@ -309,7 +309,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.ReadTimeout = d
 		return nil
 	},
-	"BLOGFLOW_SERVER_WRITE_TIMEOUT": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_WRITE_TIMEOUT": func(c *Config, v string, _ *slog.Logger) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_WRITE_TIMEOUT as duration: %w", err)
@@ -317,7 +317,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.WriteTimeout = d
 		return nil
 	},
-	"BLOGFLOW_SERVER_IDLE_TIMEOUT": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_IDLE_TIMEOUT": func(c *Config, v string, _ *slog.Logger) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_IDLE_TIMEOUT as duration: %w", err)
@@ -325,7 +325,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.IdleTimeout = d
 		return nil
 	},
-	"BLOGFLOW_CACHE_ENABLED": func(c *Config, v string) error {
+	"BLOGFLOW_CACHE_ENABLED": func(c *Config, v string, _ *slog.Logger) error {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_CACHE_ENABLED as bool: %w", err)
@@ -333,23 +333,23 @@ var envMap = map[string]func(*Config, string) error{
 		c.Cache.Enabled = b
 		return nil
 	},
-	"BLOGFLOW_SYNC_STRATEGY": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_STRATEGY": func(c *Config, v string, _ *slog.Logger) error {
 		c.Sync.Strategy = v
 		return nil
 	},
-	"BLOGFLOW_SYNC_REPO": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_REPO": func(c *Config, v string, _ *slog.Logger) error {
 		c.Sync.Repo = v
 		return nil
 	},
-	"BLOGFLOW_SYNC_BRANCH": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_BRANCH": func(c *Config, v string, _ *slog.Logger) error {
 		c.Sync.Branch = v
 		return nil
 	},
-	"BLOGFLOW_WEBHOOK_SECRET": func(c *Config, v string) error {
+	"BLOGFLOW_WEBHOOK_SECRET": func(c *Config, v string, _ *slog.Logger) error {
 		c.Sync.Webhook.Secret = v
 		return nil
 	},
-	"BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT as int: %w", err)
@@ -357,8 +357,12 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.Webhook.RateLimit = n
 		return nil
 	},
-	"BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS": func(c *Config, v string, log *slog.Logger) error {
 		if v == "" {
+			if log == nil {
+				log = slog.Default()
+			}
+			log.Warn("BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS is set but resolved to no entries — webhook IP allowlist enforcement is disabled")
 			c.Sync.Webhook.AllowedIPs = nil
 			return nil
 		}
@@ -369,14 +373,20 @@ var envMap = map[string]func(*Config, string) error{
 				ips = append(ips, ip)
 			}
 		}
+		if len(ips) == 0 {
+			if log == nil {
+				log = slog.Default()
+			}
+			log.Warn("BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS is set but resolved to no entries — webhook IP allowlist enforcement is disabled")
+		}
 		c.Sync.Webhook.AllowedIPs = ips
 		return nil
 	},
-	"BLOGFLOW_SYNC_POLL_INTERVAL": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_POLL_INTERVAL": func(c *Config, v string, _ *slog.Logger) error {
 		c.Sync.PollInterval = v
 		return nil
 	},
-	"BLOGFLOW_SYNC_SPARSE_DIRS": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_SPARSE_DIRS": func(c *Config, v string, _ *slog.Logger) error {
 		if v == "" {
 			c.Sync.SparseDirs = nil
 			return nil
@@ -391,7 +401,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.SparseDirs = dirs
 		return nil
 	},
-	"BLOGFLOW_SYNC_CLONE_DEPTH": func(c *Config, v string) error {
+	"BLOGFLOW_SYNC_CLONE_DEPTH": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SYNC_CLONE_DEPTH as int: %w", err)
@@ -399,11 +409,11 @@ var envMap = map[string]func(*Config, string) error{
 		c.Sync.CloneDepth = n
 		return nil
 	},
-	"BLOGFLOW_FEED_TYPE": func(c *Config, v string) error {
+	"BLOGFLOW_FEED_TYPE": func(c *Config, v string, _ *slog.Logger) error {
 		c.Feed.Type = v
 		return nil
 	},
-	"BLOGFLOW_SERVER_TLS_TERMINATED": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_TLS_TERMINATED": func(c *Config, v string, _ *slog.Logger) error {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_TLS_TERMINATED as bool: %w", err)
@@ -411,7 +421,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.TLSTerminated = b
 		return nil
 	},
-	"BLOGFLOW_SERVER_HSTS_MAX_AGE": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_HSTS_MAX_AGE": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_HSTS_MAX_AGE as int: %w", err)
@@ -419,7 +429,7 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.HSTSMaxAge = n
 		return nil
 	},
-	"BLOGFLOW_SERVER_METRICS_PORT": func(c *Config, v string) error {
+	"BLOGFLOW_SERVER_METRICS_PORT": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_METRICS_PORT as int: %w", err)
@@ -427,15 +437,15 @@ var envMap = map[string]func(*Config, string) error{
 		c.Server.MetricsPort = n
 		return nil
 	},
-	"BLOGFLOW_SITE_HOMEPAGE": func(c *Config, v string) error {
+	"BLOGFLOW_SITE_HOMEPAGE": func(c *Config, v string, _ *slog.Logger) error {
 		c.Site.Homepage = v
 		return nil
 	},
-	"BLOGFLOW_CONTENT_POSTS_DIR": func(c *Config, v string) error {
+	"BLOGFLOW_CONTENT_POSTS_DIR": func(c *Config, v string, _ *slog.Logger) error {
 		c.Content.PostsDir = v
 		return nil
 	},
-	"BLOGFLOW_CONTENT_PAGES_DIR": func(c *Config, v string) error {
+	"BLOGFLOW_CONTENT_PAGES_DIR": func(c *Config, v string, _ *slog.Logger) error {
 		c.Content.PagesDir = v
 		return nil
 	},
@@ -465,7 +475,7 @@ func applyEnvOverrides(cfg *Config, log *slog.Logger) ([]string, error) {
 		if !ok {
 			continue
 		}
-		if err := setter(cfg, v); err != nil {
+		if err := setter(cfg, v, log); err != nil {
 			return nil, err
 		}
 		applied = append(applied, name)
