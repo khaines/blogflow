@@ -2,6 +2,7 @@ package overlayfs
 
 import (
 	"fmt"
+	"io/fs"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -69,7 +70,7 @@ func TestNegativeCachePopulates(t *testing.T) {
 
 	// Verify negCache populated: we expect at least 2 entries for fallthrough paths,
 	// possibly more if layer 0 had paths that don't exist anywhere.
-	count := ofs.negCacheCount.Load()
+	count := ofs.negCacheLen()
 	if count < 2 {
 		t.Errorf("negCacheEntry count = %d, want >= 2 (paths absent from layer 0 must populate negCache)", count)
 	}
@@ -80,14 +81,14 @@ func TestNegativeCachePopulates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) unexpectedly failed: %v", err)
 	}
-	gotBefore := ofs.negCacheCount.Load()
+	gotBefore := ofs.negCacheLen()
 
 	// Reading the same path again should not increase count (already cached).
 	_, err = ofs.ReadFile("config.yaml")
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) 2nd try unexpectedly failed: %v", err)
 	}
-	gotAfter := ofs.negCacheCount.Load()
+	gotAfter := ofs.negCacheLen()
 
 	if gotBefore != gotAfter {
 		t.Errorf("double-read of layer-0 path changed negCache count from %d to %d; expected no change", gotBefore, gotAfter)
@@ -103,16 +104,16 @@ func TestNegativeCacheLRUEvictsLeastRecentlyUsed(t *testing.T) {
 
 	emptyLayer := fstest.MapFS{}
 	lowerLayer := fstest.MapFS{}
-	for i := 1; i <= 4; i++ {
-		key := fmt.Sprintf("file%02d", i)
+	names := sameNegCacheShardNames(t, testLimit+1)
+	for i, key := range names {
 		lowerLayer[key] = &fstest.MapFile{Data: []byte(fmt.Sprintf("data-%d", i))}
 	}
 
 	ofs := NewOverlayFS(emptyLayer, lowerLayer).WithLayerNames([]string{"theme", "defaults"})
-	ofs.maxNegCacheEntries = testLimit
+	ofs.maxNegCacheEntries = negCacheShardCount * testLimit
 
 	for i := 1; i <= testLimit; i++ {
-		name := fmt.Sprintf("file%02d", i)
+		name := names[i-1]
 		data, err := ofs.ReadFile(name)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) unexpectedly failed: %v", name, err)
@@ -122,27 +123,27 @@ func TestNegativeCacheLRUEvictsLeastRecentlyUsed(t *testing.T) {
 		}
 	}
 
-	if count := ofs.negCacheCount.Load(); count != int64(testLimit) {
+	if count := ofs.negCacheLen(); count != int64(testLimit) {
 		t.Fatalf("negCacheEntry count after warmup = %d, want %d", count, testLimit)
 	}
 
-	// Refresh file01 through Stat, which performs lookup-only recency refresh.
-	// A true LRU cache should now evict file02, not file01.
-	if _, err := ofs.Stat("file01"); err != nil {
-		t.Fatalf("Stat(file01) refresh unexpectedly failed: %v", err)
+	// Refresh the first file through Stat, which performs lookup-only recency refresh.
+	// A true per-shard LRU cache should now evict the second file, not the first.
+	if _, err := ofs.Stat(names[0]); err != nil {
+		t.Fatalf("Stat(%s) refresh unexpectedly failed: %v", names[0], err)
 	}
-	if _, err := ofs.ReadFile("file04"); err != nil {
-		t.Fatalf("ReadFile(file04) insertion unexpectedly failed: %v", err)
+	if _, err := ofs.ReadFile(names[3]); err != nil {
+		t.Fatalf("ReadFile(%s) insertion unexpectedly failed: %v", names[3], err)
 	}
 
-	if count := ofs.negCacheCount.Load(); count != int64(testLimit) {
+	if count := ofs.negCacheLen(); count != int64(testLimit) {
 		t.Fatalf("negCacheEntry count after eviction = %d, want %d", count, testLimit)
 	}
 
-	assertNegCacheContains(t, ofs, "file01", true)
-	assertNegCacheContains(t, ofs, "file02", false)
-	assertNegCacheContains(t, ofs, "file03", true)
-	assertNegCacheContains(t, ofs, "file04", true)
+	assertNegCacheContains(t, ofs, names[0], true)
+	assertNegCacheContains(t, ofs, names[1], false)
+	assertNegCacheContains(t, ofs, names[2], true)
+	assertNegCacheContains(t, ofs, names[3], true)
 }
 
 func TestNegativeCacheStoreUpdatesExistingEntry(t *testing.T) {
@@ -160,7 +161,7 @@ func TestNegativeCacheStoreUpdatesExistingEntry(t *testing.T) {
 	if entry.firstCandidateLayer != 2 {
 		t.Fatalf("firstCandidateLayer = %d, want 2", entry.firstCandidateLayer)
 	}
-	if count := ofs.negCacheCount.Load(); count != 1 {
+	if count := ofs.negCacheLen(); count != 1 {
 		t.Fatalf("negCacheEntry count = %d, want 1", count)
 	}
 	assertNegCacheListSync(t, ofs)
@@ -261,12 +262,59 @@ func TestNegativeCacheConcurrentReadFileInvalidateLayer(t *testing.T) {
 	assertNegCacheListSync(t, ofs)
 }
 
+func TestNegativeCacheInvalidationGenerationPreventsStaleStore(t *testing.T) {
+	t.Parallel()
+
+	const name = "posts/race.md"
+	upper := fstest.MapFS{}
+	lower := &blockingOpenFS{
+		base:      fstest.MapFS{name: {Data: []byte("lower")}},
+		blockName: name,
+		opened:    make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	ofs := NewOverlayFS(upper, lower).WithLayerNames([]string{"theme", "defaults"})
+
+	errCh := make(chan error, 1)
+	go func() {
+		data, err := ofs.ReadFile(name)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(data) != "lower" {
+			errCh <- fmt.Errorf("in-flight ReadFile(%q) = %q, want lower", name, data)
+			return
+		}
+		errCh <- nil
+	}()
+
+	<-lower.opened
+	upper[name] = &fstest.MapFile{Data: []byte("upper")}
+	ofs.InvalidateLayer(0)
+	close(lower.release)
+
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+
+	assertNegCacheContains(t, ofs, name, false)
+	data, err := ofs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) after invalidation failed: %v", name, err)
+	}
+	if string(data) != "upper" {
+		t.Fatalf("ReadFile(%q) after invalidation = %q, want upper", name, data)
+	}
+}
+
 func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool) {
 	t.Helper()
 
-	ofs.negCacheMu.Lock()
-	_, got := ofs.negCache[name]
-	ofs.negCacheMu.Unlock()
+	shard := ofs.negCacheShard(name)
+	shard.mu.Lock()
+	_, got := shard.m[name]
+	shard.mu.Unlock()
 	if got != want {
 		t.Fatalf("negCache contains %q = %v, want %v", name, got, want)
 	}
@@ -275,15 +323,53 @@ func assertNegCacheContains(t *testing.T, ofs *OverlayFS, name string, want bool
 func assertNegCacheListSync(t *testing.T, ofs *OverlayFS) {
 	t.Helper()
 
-	ofs.negCacheMu.Lock()
-	mapLen := len(ofs.negCache)
-	listLen := 0
-	if ofs.negCacheLRU != nil {
-		listLen = ofs.negCacheLRU.Len()
-	}
-	ofs.negCacheMu.Unlock()
+	for i := range ofs.negCacheShards {
+		shard := &ofs.negCacheShards[i]
+		shard.mu.Lock()
+		mapLen := 0
+		if shard.m != nil {
+			mapLen = len(shard.m)
+		}
+		listLen := 0
+		if shard.lru != nil {
+			listLen = shard.lru.Len()
+		}
+		shard.mu.Unlock()
 
-	if listLen != mapLen {
-		t.Fatalf("negCacheLRU.Len() = %d, want len(negCache) %d", listLen, mapLen)
+		if listLen != mapLen {
+			t.Fatalf("negCache shard %d lru.Len() = %d, want len(map) %d", i, listLen, mapLen)
+		}
 	}
+}
+
+func sameNegCacheShardNames(t *testing.T, count int) []string {
+	t.Helper()
+
+	byShard := make(map[uint32][]string)
+	for i := 0; i < 10_000; i++ {
+		name := fmt.Sprintf("file%05d", i)
+		shard := negCacheShardIndex(name)
+		byShard[shard] = append(byShard[shard], name)
+		if len(byShard[shard]) == count {
+			return byShard[shard]
+		}
+	}
+	t.Fatalf("could not find %d names in one negative-cache shard", count)
+	return nil
+}
+
+type blockingOpenFS struct {
+	base      fs.FS
+	blockName string
+	opened    chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (b *blockingOpenFS) Open(name string) (fs.File, error) {
+	if name == b.blockName {
+		b.once.Do(func() { close(b.opened) })
+		<-b.release
+	}
+	return b.base.Open(name)
 }
