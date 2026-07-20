@@ -30,6 +30,24 @@ import (
 	"time"
 )
 
+// negCacheShardCount spreads exact-LRU bookkeeping across independent locks.
+// Sixteen shards keeps hot-path contention low without making invalidation,
+// which is infrequent and locks all shards, unnecessarily expensive.
+const negCacheShardCount = 16
+
+type negCacheTestHook func()
+
+var (
+	// negCacheAfterLayerSnapshotHook is a deterministic test synchronization
+	// point. It is nil in production, so the hot path only pays an atomic load
+	// and nil check.
+	negCacheAfterLayerSnapshotHook atomic.Pointer[negCacheTestHook]
+	// negCacheInvalidationLockedHook is a deterministic test synchronization
+	// point after invalidation has acquired all shard locks. It is nil in
+	// production and exists only to make race regressions reproducible.
+	negCacheInvalidationLockedHook atomic.Pointer[negCacheTestHook]
+)
+
 // layerMeta stores resolved root paths for disk-backed layers.
 // Used for symlink escape detection on non-Linux platforms.
 type layerMeta struct {
@@ -48,17 +66,26 @@ type OverlayFS struct {
 	mu sync.RWMutex // protects layers slice during hot-reload
 
 	// Negative cache: tracks paths confirmed absent from upper layers.
-	negCacheMu    sync.Mutex
-	negCache      map[string]*list.Element // map path to *negCacheListEntry in negCacheLRU
-	negCacheLRU   *list.List
-	negCacheCount atomic.Int64
+	negCacheShards [negCacheShardCount]negCacheShard
+	// negCacheGen is bumped on every invalidation. Stores captured under an
+	// older generation are dropped so stale misses cannot be resurrected after
+	// a layer changes.
+	negCacheGen  atomic.Uint64
+	negCacheSize atomic.Int64
 
 	// maxNegCacheEntries bounds the negative cache size. At capacity,
-	// inserting a new entry evicts the least-recently-used entry.
+	// inserting a new entry evicts the least-recently-used entry in that
+	// entry's shard. This is an approximate, not global, LRU under key skew.
 	maxNegCacheEntries int
 
 	// metrics is nil when WithMetrics is not used (zero overhead).
 	metrics *overlayMetrics
+}
+
+type negCacheShard struct {
+	mu  sync.Mutex
+	m   map[string]*list.Element // map path to *negCacheListEntry in lru
+	lru *list.List
 }
 
 type negCacheEntry struct {
@@ -106,8 +133,6 @@ func NewOverlayFS(layers ...fs.FS) *OverlayFS {
 		layers:             filtered,
 		layerNames:         filteredNames,
 		layerMeta:          make([]layerMeta, len(filtered)),
-		negCache:           make(map[string]*list.Element),
-		negCacheLRU:        list.New(),
 		maxNegCacheEntries: 100_000,
 	}
 }
@@ -222,7 +247,9 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 	o.mu.RLock()
 	layers := make([]fs.FS, len(o.layers))
 	copy(layers, o.layers)
+	negCacheGen := o.negCacheGen.Load()
 	o.mu.RUnlock()
+	runNegCacheAfterLayerSnapshotHook()
 
 	startLayer := 0
 	negCacheHit := false
@@ -250,7 +277,7 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 			}
 			// Cache: record that layers [0, i) don't have this path
 			if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
-				o.negCacheStore(name, negCacheEntry{firstCandidateLayer: i})
+				o.negCacheStoreWithGeneration(name, negCacheEntry{firstCandidateLayer: i}, negCacheGen)
 			}
 			if o.metrics != nil {
 				o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
@@ -288,7 +315,9 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	o.mu.RLock()
 	layers := make([]fs.FS, len(o.layers))
 	copy(layers, o.layers)
+	negCacheGen := o.negCacheGen.Load()
 	o.mu.RUnlock()
+	runNegCacheAfterLayerSnapshotHook()
 
 	startLayer := 0
 	negCacheHit := false
@@ -321,7 +350,7 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			if readErr != nil {
 				return nil, readErr
 			}
-			o.recordReadFileHit(name, i, negCacheHit, cachedFirstCandidateLayer, start)
+			o.recordReadFileHit(name, i, negCacheHit, cachedFirstCandidateLayer, negCacheGen, start)
 			return data, nil
 		}
 		if !isNotExist(err) {
@@ -336,9 +365,9 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 	return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrNotExist}
 }
 
-func (o *OverlayFS) recordReadFileHit(name string, layer int, negCacheHit bool, cachedFirstCandidateLayer int, start time.Time) {
+func (o *OverlayFS) recordReadFileHit(name string, layer int, negCacheHit bool, cachedFirstCandidateLayer int, negCacheGen uint64, start time.Time) {
 	if layer > 0 && (!negCacheHit || layer != cachedFirstCandidateLayer) {
-		o.negCacheStore(name, negCacheEntry{firstCandidateLayer: layer})
+		o.negCacheStoreWithGeneration(name, negCacheEntry{firstCandidateLayer: layer}, negCacheGen)
 	}
 	if o.metrics != nil {
 		o.metrics.resolveDuration.WithLabelValues("readfile").Observe(time.Since(start).Seconds())
@@ -424,10 +453,16 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 	o.mu.RLock()
 	layers := make([]fs.FS, len(o.layers))
 	copy(layers, o.layers)
+	negCacheGen := o.negCacheGen.Load()
 	o.mu.RUnlock()
+	runNegCacheAfterLayerSnapshotHook()
 
 	startLayer := 0
+	negCacheHit := false
+	cachedFirstCandidateLayer := -1
 	if entry, ok := o.negCacheLookup(name); ok {
+		negCacheHit = true
+		cachedFirstCandidateLayer = entry.firstCandidateLayer
 		if entry.firstCandidateLayer < len(layers) {
 			startLayer = entry.firstCandidateLayer
 			if o.metrics != nil {
@@ -446,6 +481,9 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 			}
 			info, err := sfs.Stat(name)
 			if err == nil {
+				if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
+					o.negCacheStoreWithGeneration(name, negCacheEntry{firstCandidateLayer: i}, negCacheGen)
+				}
 				if o.metrics != nil {
 					o.metrics.resolveDuration.WithLabelValues("stat").Observe(time.Since(start).Seconds())
 					o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
@@ -469,6 +507,9 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 				info, statErr := f.Stat()
 				_ = f.Close()
 				if statErr == nil {
+					if i > 0 && (!negCacheHit || i != cachedFirstCandidateLayer) {
+						o.negCacheStoreWithGeneration(name, negCacheEntry{firstCandidateLayer: i}, negCacheGen)
+					}
 					if o.metrics != nil {
 						o.metrics.resolveDuration.WithLabelValues("stat").Observe(time.Since(start).Seconds())
 						o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
@@ -506,90 +547,186 @@ func (o *OverlayFS) OpenFile(name string) (fs.File, fs.FileInfo, error) {
 	return f, info, nil
 }
 
-// Exact LRU refreshes recency on every hit, so this path intentionally takes
-// the global cache lock. See #271 for sharded/approximate-LRU follow-up.
 func (o *OverlayFS) negCacheLookup(name string) (negCacheEntry, bool) {
-	o.negCacheMu.Lock()
-	defer o.negCacheMu.Unlock()
+	shard := o.negCacheShard(name)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
-	elem, ok := o.negCache[name]
+	if shard.m == nil {
+		return negCacheEntry{}, false
+	}
+	elem, ok := shard.m[name]
 	if !ok {
 		return negCacheEntry{}, false
 	}
-	o.negCacheLRU.MoveToFront(elem)
+	shard.lru.MoveToFront(elem)
 	return elem.Value.(negCacheListEntry).value, true
 }
 
 func (o *OverlayFS) negCacheStore(name string, entry negCacheEntry) {
+	o.negCacheStoreWithGeneration(name, entry, o.negCacheGen.Load())
+}
+
+func (o *OverlayFS) negCacheStoreWithGeneration(name string, entry negCacheEntry, gen uint64) {
 	if o.maxNegCacheEntries <= 0 {
 		return
 	}
-
-	o.negCacheMu.Lock()
-	if elem, ok := o.negCache[name]; ok {
-		elem.Value = negCacheListEntry{key: name, value: entry}
-		o.negCacheLRU.MoveToFront(elem)
-		size := int64(len(o.negCache))
-		o.negCacheMu.Unlock()
-		o.updateNegCacheSizeMetric(size)
+	// Fast fail before taking the shard lock. This drops stores from resolves
+	// that began before an invalidation changed the cache generation.
+	if o.negCacheGen.Load() != gen {
 		return
 	}
 
-	if len(o.negCache) >= o.maxNegCacheEntries {
-		oldest := o.negCacheLRU.Back()
+	shard := o.negCacheShard(name)
+	shard.mu.Lock()
+
+	// Re-check under the shard lock so an invalidation that waited on this
+	// shard cannot be followed by a stale store from the old generation.
+	if o.negCacheGen.Load() != gen {
+		shard.mu.Unlock()
+		return
+	}
+	o.ensureNegCacheShardLocked(shard)
+
+	if elem, ok := shard.m[name]; ok {
+		elem.Value = negCacheListEntry{key: name, value: entry}
+		shard.lru.MoveToFront(elem)
+		shard.mu.Unlock()
+		return
+	}
+
+	if shard.lru.Len() >= o.negCacheShardCapacity() {
+		oldest := shard.lru.Back()
 		if oldest != nil {
 			oldestEntry := oldest.Value.(negCacheListEntry)
-			o.removeNegCacheElement(oldestEntry.key, oldest)
+			o.removeNegCacheElementLocked(shard, oldestEntry.key, oldest)
 		}
 	}
 
-	elem := o.negCacheLRU.PushFront(negCacheListEntry{key: name, value: entry})
-	o.negCache[name] = elem
-	size := int64(len(o.negCache))
-	o.negCacheCount.Store(size)
-	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric(size)
+	elem := shard.lru.PushFront(negCacheListEntry{key: name, value: entry})
+	shard.m[name] = elem
+	o.negCacheSize.Add(1)
+	shard.mu.Unlock()
 }
 
-func (o *OverlayFS) removeNegCacheElement(key string, elem *list.Element) {
-	delete(o.negCache, key)
-	o.negCacheLRU.Remove(elem)
-	o.negCacheCount.Store(int64(len(o.negCache)))
+func (o *OverlayFS) removeNegCacheElementLocked(shard *negCacheShard, key string, elem *list.Element) {
+	delete(shard.m, key)
+	shard.lru.Remove(elem)
+	o.negCacheSize.Add(-1)
 }
 
-func (o *OverlayFS) updateNegCacheSizeMetric(size int64) {
-	if o.metrics != nil {
-		o.metrics.negCacheSize.Set(float64(size))
+func (o *OverlayFS) negCacheShard(name string) *negCacheShard {
+	return &o.negCacheShards[negCacheShardIndex(name)]
+}
+
+func (o *OverlayFS) ensureNegCacheShardLocked(shard *negCacheShard) {
+	if shard.m == nil {
+		shard.m = make(map[string]*list.Element)
+	}
+	if shard.lru == nil {
+		shard.lru = list.New()
+	}
+}
+
+func (o *OverlayFS) negCacheShardCapacity() int {
+	capacity := o.maxNegCacheEntries / negCacheShardCount
+	if o.maxNegCacheEntries%negCacheShardCount != 0 {
+		capacity++
+	}
+	if capacity < 1 {
+		capacity = 1
+	}
+	return capacity
+}
+
+func (o *OverlayFS) negCacheLen() int64 {
+	var total int64
+	for i := range o.negCacheShards {
+		shard := &o.negCacheShards[i]
+		shard.mu.Lock()
+		if shard.m != nil {
+			total += int64(len(shard.m))
+		}
+		shard.mu.Unlock()
+	}
+	return total
+}
+
+func (o *OverlayFS) lockAllNegCacheShards() {
+	for i := range o.negCacheShards {
+		o.negCacheShards[i].mu.Lock()
+	}
+}
+
+func (o *OverlayFS) unlockAllNegCacheShards() {
+	for i := len(o.negCacheShards) - 1; i >= 0; i-- {
+		o.negCacheShards[i].mu.Unlock()
+	}
+}
+
+func negCacheShardIndex(name string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= 16777619
+	}
+	return h % negCacheShardCount
+}
+
+// runNegCacheAfterLayerSnapshotHook is a no-op-in-production deterministic
+// test sync point used to pause a resolver after it snapshots layers+generation.
+func runNegCacheAfterLayerSnapshotHook() {
+	if hook := negCacheAfterLayerSnapshotHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
+
+// runNegCacheInvalidationLockedHook is a no-op-in-production deterministic
+// test sync point used after an invalidation owns every cache shard lock.
+func runNegCacheInvalidationLockedHook() {
+	if hook := negCacheInvalidationLockedHook.Load(); hook != nil {
+		(*hook)()
 	}
 }
 
 // InvalidateLayer clears negative cache entries for a specific layer.
 // Called when files within a layer change (e.g., file edit, new file).
 func (o *OverlayFS) InvalidateLayer(layerIndex int) {
-	o.negCacheMu.Lock()
-	for key, elem := range o.negCache {
-		entry := elem.Value.(negCacheListEntry)
-		if entry.value.firstCandidateLayer >= layerIndex {
-			o.removeNegCacheElement(key, elem)
+	o.lockAllNegCacheShards()
+	defer o.unlockAllNegCacheShards()
+	runNegCacheInvalidationLockedHook()
+
+	for i := range o.negCacheShards {
+		shard := &o.negCacheShards[i]
+		if shard.m != nil {
+			for key, elem := range shard.m {
+				entry := elem.Value.(negCacheListEntry)
+				if entry.value.firstCandidateLayer >= layerIndex {
+					o.removeNegCacheElementLocked(shard, key, elem)
+				}
+			}
 		}
 	}
-	size := int64(len(o.negCache))
-	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric(size)
+	o.negCacheGen.Add(1)
 }
 
 // InvalidateAll clears the entire negative cache.
 func (o *OverlayFS) InvalidateAll() {
-	o.negCacheMu.Lock()
-	o.negCache = make(map[string]*list.Element)
-	if o.negCacheLRU == nil {
-		o.negCacheLRU = list.New()
-	} else {
-		o.negCacheLRU.Init()
+	o.lockAllNegCacheShards()
+	defer o.unlockAllNegCacheShards()
+	runNegCacheInvalidationLockedHook()
+
+	for i := range o.negCacheShards {
+		shard := &o.negCacheShards[i]
+		shard.m = make(map[string]*list.Element)
+		if shard.lru == nil {
+			shard.lru = list.New()
+		} else {
+			shard.lru.Init()
+		}
 	}
-	o.negCacheCount.Store(0)
-	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric(0)
+	o.negCacheSize.Store(0)
+	o.negCacheGen.Add(1)
 }
 
 // ReplaceLayer atomically replaces a layer's backing fs.FS and clears
@@ -603,17 +740,24 @@ func (o *OverlayFS) ReplaceLayer(layerIndex int, newFS fs.FS) error {
 		return fmt.Errorf("overlayfs: layer index %d out of range [0, %d)", layerIndex, len(o.layers))
 	}
 	o.layers[layerIndex] = newFS
+
+	o.lockAllNegCacheShards()
+	defer o.unlockAllNegCacheShards()
+	runNegCacheInvalidationLockedHook()
+
 	// Clear neg-cache entries that reference this or higher layers
-	o.negCacheMu.Lock()
-	for key, elem := range o.negCache {
-		entry := elem.Value.(negCacheListEntry)
-		if entry.value.firstCandidateLayer >= layerIndex {
-			o.removeNegCacheElement(key, elem)
+	for i := range o.negCacheShards {
+		shard := &o.negCacheShards[i]
+		if shard.m != nil {
+			for key, elem := range shard.m {
+				entry := elem.Value.(negCacheListEntry)
+				if entry.value.firstCandidateLayer >= layerIndex {
+					o.removeNegCacheElementLocked(shard, key, elem)
+				}
+			}
 		}
 	}
-	size := int64(len(o.negCache))
-	o.negCacheMu.Unlock()
-	o.updateNegCacheSizeMetric(size)
+	o.negCacheGen.Add(1)
 	return nil
 }
 

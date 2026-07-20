@@ -4,6 +4,8 @@
 
 ### BlogFlow
 
+* [BUGFIX] overlayfs: guard negative-cache stores with an invalidation generation so concurrent layer invalidations cannot resurrect stale upper-layer misses. #272
+* [ENHANCEMENT] overlayfs: shard the negative-cache LRU to reduce hot-path contention under parallel cache hits. #271
 * [CHANGE] overlayfs: negative cache now uses true LRU eviction of the least-recently-used entry at capacity (previously admission-capped — stopped caching new misses once full). #245
 * [BUGFIX] overlayfs: reject files exceeding the 64 MiB read limit before fully reading them (the `fs.ReadFileFS` fast-path previously read the whole file before the size check — latent OOM on the content trust boundary); covers template loading. #234
 

@@ -13,11 +13,11 @@ type overlayMetrics struct {
 	layerHitTotal   *prometheus.CounterVec
 	missTotal       prometheus.Counter
 	negCacheHit     prometheus.Counter
-	negCacheSize    prometheus.Gauge
+	negCacheSize    prometheus.GaugeFunc
 	pathRejected    *prometheus.CounterVec
 }
 
-func newOverlayMetrics(reg prometheus.Registerer) (*overlayMetrics, error) {
+func newOverlayMetrics(reg prometheus.Registerer, negCacheSize func() float64) (*overlayMetrics, error) {
 	m := &overlayMetrics{
 		resolveDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -46,11 +46,12 @@ func newOverlayMetrics(reg prometheus.Registerer) (*overlayMetrics, error) {
 				Help: "Negative cache hits (avoided layer checks).",
 			},
 		),
-		negCacheSize: prometheus.NewGauge(
+		negCacheSize: prometheus.NewGaugeFunc(
 			prometheus.GaugeOpts{
 				Name: "blogflow_overlay_negcache_size",
 				Help: "Current number of entries in the negative cache.",
 			},
+			negCacheSize,
 		),
 		pathRejected: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -88,7 +89,9 @@ type Option func(*OverlayFS) error
 // Returns an error if metric registration fails (e.g., duplicate registration).
 func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *OverlayFS) error {
-		m, err := newOverlayMetrics(reg)
+		m, err := newOverlayMetrics(reg, func() float64 {
+			return float64(o.negCacheSize.Load())
+		})
 		if err != nil {
 			return err
 		}
