@@ -4,11 +4,12 @@
 // Deploys BlogFlow to Azure Container Apps with:
 //   - Serverless Container Apps Environment (Consumption plan)
 //   - Log Analytics workspace for container diagnostics
-//   - Azure Monitor workspace for Prometheus metrics (Phase 2)
-//   - ACA managed OpenTelemetry agent:
+//   - Azure Monitor workspace for Prometheus metrics
+//   - DCE/DCR pipeline for OTLP metrics ingestion
+//   - Self-managed OpenTelemetry Collector sidecar:
 //       • Traces → Application Insights
-//       • Metrics → NOT exported yet (see Phase 2 in SETUP.md)
-//   - Container App with system-assigned managed identity
+//       • Metrics → DCE/DCR → Azure Monitor workspace with Entra auth
+//   - Container App with user-assigned managed identity for the collector
 //
 // All account-specific values (subscription, resource group, connection
 // strings, credentials) are passed as parameters — never hardcoded.
@@ -39,6 +40,9 @@ param containerImage string = 'ghcr.io/khaines/blogflow:main'
 
 @description('GitHub username for GHCR image pulls')
 param ghcrUsername string = 'khaines'
+
+@description('Pinned OpenTelemetry Collector Contrib image reference')
+param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
 
 @description('Minimum replica count (0 = scale to zero)')
 @minValue(0)
@@ -85,20 +89,31 @@ module monitorWorkspace 'modules/monitor-workspace.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Module: Container Apps Environment + Log Analytics + OTel routing
+// Module: Data Collection Endpoint + Rule (OTLP metrics ingestion)
+// ---------------------------------------------------------------------------
+module dataCollection 'modules/data-collection.bicep' = {
+  name: 'data-collection'
+  params: {
+    location: location
+    environmentName: environmentName
+    monitorWorkspaceId: monitorWorkspace.outputs.workspaceId
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module: Container Apps Environment + Log Analytics
 // ---------------------------------------------------------------------------
 module environment 'modules/container-app-env.bicep' = {
   name: 'container-app-env'
   params: {
     location: location
     environmentName: environmentName
-    appInsightsConnectionString: appInsightsConnectionString
     logRetentionDays: logRetentionDays
   }
 }
 
 // ---------------------------------------------------------------------------
-// Module: Container App (BlogFlow — no sidecar)
+// Module: Container App (BlogFlow + OTel Collector sidecar)
 // ---------------------------------------------------------------------------
 module containerApp 'modules/container-app.bicep' = {
   name: 'container-app'
@@ -109,6 +124,12 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     ghcrUsername: ghcrUsername
     ghcrPassword: ghcrPassword
+    otelCollectorImage: otelCollectorImage
+    appInsightsConnectionString: appInsightsConnectionString
+    dataCollectionRuleName: dataCollection.outputs.dataCollectionRuleName
+    dataCollectionRuleImmutableId: dataCollection.outputs.dataCollectionRuleImmutableId
+    metricsIngestionEndpoint: dataCollection.outputs.metricsIngestionEndpoint
+    otelMetricsStreamName: dataCollection.outputs.otelMetricsStreamName
     scaleMinReplicas: scaleMinReplicas
     scaleMaxReplicas: scaleMaxReplicas
     customDomainName: customDomainName
@@ -134,3 +155,18 @@ output monitorWorkspaceId string = monitorWorkspace.outputs.workspaceId
 
 @description('Prometheus query endpoint (for Grafana / PromQL dashboards)')
 output prometheusQueryEndpoint string = monitorWorkspace.outputs.prometheusQueryEndpoint
+
+@description('Data Collection Rule resource ID for OTLP metrics ingestion')
+output dataCollectionRuleId string = dataCollection.outputs.dataCollectionRuleId
+
+@description('Data Collection Rule immutable ID for OTLP metrics ingestion')
+output dataCollectionRuleImmutableId string = dataCollection.outputs.dataCollectionRuleImmutableId
+
+@description('DCE metrics ingestion endpoint')
+output metricsIngestionEndpoint string = dataCollection.outputs.metricsIngestionEndpoint
+
+@description('Container App managed identity principal ID used by the OTel Collector')
+output containerAppManagedIdentityPrincipalId string = containerApp.outputs.principalId
+
+@description('Container App managed identity client ID used by the OTel Collector')
+output containerAppManagedIdentityClientId string = containerApp.outputs.clientId

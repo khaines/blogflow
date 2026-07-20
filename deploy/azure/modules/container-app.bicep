@@ -1,16 +1,15 @@
 // ============================================================================
-// Container App — BlogFlow (sidecar-free)
+// Container App — BlogFlow + self-managed OpenTelemetry Collector sidecar
 // ============================================================================
-// Runs the BlogFlow container. Telemetry is handled by the ACA managed
-// OpenTelemetry agent (configured on the environment):
-//   - Traces → Application Insights
-//   - Metrics → not exported via OTel (app still exposes /metrics on :8080)
+// Runs BlogFlow with an OpenTelemetry Collector sidecar. BlogFlow exports OTLP
+// to localhost; the collector exports:
+//   - Traces → Application Insights via the azuremonitor exporter
+//   - Metrics → DCE/DCR → Azure Monitor workspace via otlphttp + azure_auth
 //
-// The ACA managed OTel agent automatically injects OTEL_EXPORTER_OTLP_ENDPOINT
-// and other standard OTel env vars at runtime. BlogFlow's OTel SDK discovers
-// the agent automatically.
-//
-// Identity: System-assigned managed identity for Azure integration.
+// Identity: a user-assigned managed identity is attached to the Container App
+// and granted Monitoring Metrics Publisher on the DCR before the app revision is
+// created. The collector uses that identity to fetch Entra tokens for
+// https://monitor.azure.com/.default.
 // ============================================================================
 
 @description('Azure region')
@@ -32,6 +31,25 @@ param ghcrUsername string
 @secure()
 param ghcrPassword string
 
+@description('Application Insights connection string for trace export')
+@secure()
+param appInsightsConnectionString string
+
+@description('Data Collection Rule resource name for OTLP metrics ingestion')
+param dataCollectionRuleName string
+
+@description('Data Collection Rule immutable ID used in OTLP metrics ingestion URLs')
+param dataCollectionRuleImmutableId string
+
+@description('DCE metrics ingestion endpoint')
+param metricsIngestionEndpoint string
+
+@description('DCR stream name for Azure Monitor OTLP metrics ingestion')
+param otelMetricsStreamName string
+
+@description('Pinned OpenTelemetry Collector Contrib image reference')
+param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.148.0@sha256:8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
+
 @description('Minimum replica count')
 param scaleMinReplicas int = 0
 
@@ -44,6 +62,82 @@ param customDomainName string = ''
 @description('Managed certificate ID for custom domain TLS. Required when customDomainName is set.')
 param customDomainCertificateId string = ''
 
+var monitoringMetricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
+var otlpMetricsEndpoint = '${metricsIngestionEndpoint}/datacollectionRules/${dataCollectionRuleImmutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'
+var otelCollectorConfig = join([
+  'receivers:'
+  '  otlp:'
+  '    protocols:'
+  '      grpc:'
+  '        endpoint: localhost:4317'
+  '      http:'
+  '        endpoint: localhost:4318'
+  ''
+  'processors:'
+  '  memory_limiter:'
+  '    check_interval: 1s'
+  '    limit_mib: 384'
+  '    spike_limit_mib: 96'
+  '  batch:'
+  '    timeout: 10s'
+  '    send_batch_size: 256'
+  ''
+  'extensions:'
+  '  health_check:'
+  '    endpoint: 0.0.0.0:13133'
+  '  azure_auth:'
+  '    managed_identity:'
+  '      client_id: ${containerAppIdentity.properties.clientId}'
+  '    scopes:'
+  '      - https://monitor.azure.com/.default'
+  ''
+  'exporters:'
+  '  azuremonitor/traces: {}'
+  '  otlphttp/azuremonitor_metrics:'
+  '    metrics_endpoint: "${otlpMetricsEndpoint}"'
+  '    auth:'
+  '      authenticator: azure_auth'
+  '    retry_on_failure:'
+  '      enabled: true'
+  '      initial_interval: 5s'
+  '      max_interval: 30s'
+  '      max_elapsed_time: 10m'
+  ''
+  'service:'
+  '  extensions: [health_check, azure_auth]'
+  '  pipelines:'
+  '    traces:'
+  '      receivers: [otlp]'
+  '      processors: [memory_limiter, batch]'
+  '      exporters: [azuremonitor/traces]'
+  '    metrics:'
+  '      receivers: [otlp]'
+  '      processors: [memory_limiter, batch]'
+  '      exporters: [otlphttp/azuremonitor_metrics]'
+], '\n')
+
+// ---------------------------------------------------------------------------
+// Managed identity and DCR-scoped metrics publishing grant
+// ---------------------------------------------------------------------------
+resource containerAppIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${appName}-otel-mi'
+  location: location
+}
+
+resource metricsDataCollectionRule 'Microsoft.Insights/dataCollectionRules@2024-03-11' existing = {
+  name: dataCollectionRuleName
+}
+
+resource metricsPublisherRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(metricsDataCollectionRule.id, containerAppIdentity.id, monitoringMetricsPublisherRoleDefinitionId)
+  scope: metricsDataCollectionRule
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleDefinitionId)
+    principalId: containerAppIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Container App
 // ---------------------------------------------------------------------------
@@ -51,7 +145,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${containerAppIdentity.id}': {}
+    }
   }
   properties: {
     managedEnvironmentId: environmentId
@@ -83,9 +180,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
 
       // --- Secrets ---
-      // NOTE: 'appinsights-cs' is retained as a placeholder during the transition
-      // from sidecar to managed OTel agent. Active revisions still reference it.
-      // Remove after all old revisions using it have been deactivated.
       secrets: [
         {
           name: 'ghcr-password'
@@ -93,7 +187,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
         {
           name: 'appinsights-cs'
-          value: 'deprecated-see-env-level-config'
+          value: appInsightsConnectionString
         }
       ]
     }
@@ -124,16 +218,29 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '0.5Gi'
           }
           env: [
-            // The ACA managed OTel agent auto-injects OTEL_EXPORTER_OTLP_ENDPOINT.
-            // BlogFlow hardcodes OTEL_SERVICE_NAME='blogflow' in code (cmd/blogflow/main.go).
-            // We only set the trace exporter type so BlogFlow's OTel SDK initializes tracing.
-            // OTEL_METRICS_EXPORTER is intentionally UNSET (not "none") because BlogFlow's
-            // init code checks `os.Getenv != ""` — any non-empty value enables the metrics
-            // bridge. Leaving it unset skips metrics initialization entirely. See Phase 2
-            // in SETUP.md for future metrics export.
+            {
+              name: 'OTEL_SERVICE_NAME'
+              value: 'blogflow'
+            }
             {
               name: 'OTEL_TRACES_EXPORTER'
               value: 'otlp'
+            }
+            {
+              name: 'OTEL_METRICS_EXPORTER'
+              value: 'otlp'
+            }
+            {
+              name: 'OTEL_EXPORTER_OTLP_ENDPOINT'
+              value: 'http://localhost:4318'
+            }
+            {
+              name: 'OTEL_EXPORTER_OTLP_PROTOCOL'
+              value: 'http/protobuf'
+            }
+            {
+              name: 'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE'
+              value: 'cumulative'
             }
             {
               name: 'BLOGFLOW_SYNC_STRATEGY'
@@ -199,8 +306,39 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ]
         }
-        // OTel Collector sidecar REMOVED — the ACA managed OTel agent
-        // handles trace/metrics routing at the environment level.
+        // --- OpenTelemetry Collector sidecar ---
+        {
+          name: 'otel-collector'
+          image: otelCollectorImage
+          args: [
+            '--config=env:OTELCOL_CONFIG'
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            {
+              name: 'OTELCOL_CONFIG'
+              value: otelCollectorConfig
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              secretRef: 'appinsights-cs'
+            }
+          ]
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/'
+                port: 13133
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 15
+            }
+          ]
+        }
       ]
 
       // --- Scaling ---
@@ -210,6 +348,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
+  dependsOn: [
+    metricsPublisherRoleAssignment
+  ]
 }
 
 // ---------------------------------------------------------------------------
@@ -222,5 +363,8 @@ output fqdn string = containerApp.properties.configuration.ingress.fqdn
 @description('Container App resource name')
 output name string = containerApp.name
 
-@description('System-assigned managed identity principal ID')
-output principalId string = containerApp.identity.principalId
+@description('User-assigned managed identity principal ID used by the OTel Collector')
+output principalId string = containerAppIdentity.properties.principalId
+
+@description('User-assigned managed identity client ID used by the OTel Collector')
+output clientId string = containerAppIdentity.properties.clientId
