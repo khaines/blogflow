@@ -24,22 +24,22 @@
 
 ### 2\. Symlink path-traversal bypass from theme overlays accessing outside-layer files ✅ [✓] Closed
 
-**Resolved**: `internal/gitops/symlink_escape_test.go` covers symlink escape detection in overlay FS under path-traversal conditions, confirming tests exist that prevent symlinks from escaping layer boundaries.
+**Resolved**: `internal/overlayfs/symlink_escape_test.go` (`TestCheckSymlinkSafe_RejectsEscapeFromOverlay`, `TestCheckSymlinkSafe_RejectsRootSymlinkEscape`, `TestCheckSymlinkSafe_RejectsNestedChainEscape`, `TestOverlayFS_SymlinkOpen`) covers symlink escape detection in overlay FS under path-traversal conditions, confirming tests exist that prevent symlinks from escaping layer boundaries.
 
 ### 3\. Webhook IP allowlist enforcement gap ✅ [✓] Closed
 
-**Resolved**: `internal/config/config.go:97` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:101-105` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in configuration-system.md §2.4 (ARC2 fix).
+**Resolved**: `internal/config/config.go:103` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:111-112` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in configuration-system.md §2.4 (ARC2 fix).
 ### 4\. Config file size >1 MB rejection not proven ✅ [✓] Closed
 
-**Resolved**: `internal/config/loader.go:25` defines `const maxConfigFileSize = 1 << 20` (1 MB). `internal/config/loader.go:132-133` rejects files exceeding this limit with "config file exceeds 1 MB limit". Direct test at `internal/config/config_test.go:263-281` (`TestLoad_FileSizeLimit`) creates a 2 MB file and asserts the 1 MB error message.
+**Resolved**: `internal/config/loader.go:26` defines `const maxConfigFileSize = 1 << 20` (1 MB). `internal/config/loader.go:135-140` rejects files exceeding this limit with a 1 MB error. Direct test at `internal/config/config_test.go:263-281` (`TestLoad_FileSizeLimit`) creates a 2 MB file and asserts the 1 MB error message.
 
 ### 5\. Webhook secret must be ≥32 bytes enforced at startup ✅ [✓] Closed
 
-**Resolved**: `internal/gitops/webhook.go` enforces minimum secret length (32 bytes) in `NewWebhookStrategy`. `internal/gitops/webhook_secret_length_test.go` (`TestNewWebhookStrategy_SecretBoundary`) tests 31, 32, and 64 byte boundary cases. `internal/gitops/webhook_secret_logging_test.go` verifies secret length requirement.
+**Resolved**: `internal/gitops/webhook.go:55-60` enforces minimum secret length (32 bytes) in `NewWebhookStrategy`. `internal/gitops/sync_test.go` (`TestNewWebhookStrategy_SecretBoundary`) tests 31, 32, and 64 byte boundary cases.
 
 ### 6.`BLOGFLOW_GIT_TOKEN` env var — injection and logging leak prevention ✅ [✓] Closed
 
-**Resolved**: `internal/gitops/auth.go:38` stores `Token string` in `AuthConfig`. `internal/gitops/auth.go:64` redacts the token in `LogValue()` via `slog.String("token", "[REDACTED]")`. Integration test at `internal/gitops/auth_test.go:216-222` (`TestLoadAuthFromEnv_LogValueRedaction`) asserts the raw token value is absent from logged output and `[REDACTED]` is present.
+**Resolved**: `internal/gitops/auth.go:38` stores `Token string` in `AuthConfig`. `internal/gitops/auth.go:64` redacts the token in `LogValue()` via `slog.String("token", "[REDACTED]")`. Integration test at `internal/gitops/auth_test.go:213-222` (`TestAuthConfig_LogValueRedaction`) asserts the raw token value is absent from logged output and `[REDACTED]` is present.
 
 ---
 
@@ -58,8 +58,9 @@ The template engine currently doesn't fail fast if a `{{define "name"}}` block i
 ### 10\. Partial path resolution error message coverage
 When template includes call references a partial that doesn't exist the system should return a clear user-friendly parse-time error pointing to missing file location instead of generic "template not found" from html/template fallback handler on default layer only (which could mask content directory errors).
 
-### 11\. YAML anchor/alias rejection test for DOS prevention
-Config files using `&anchor` or `*` aliases in unquoted scalar value positions should be rejected with explicit error message; tests need to parse raw bytes and show that billion-laughs-style expansion attacks are explicitly blocked before struct fields even start allocating memory (defense-in-depth layer).
+### 11\. YAML anchor/alias rejection test for DOS prevention ✅ [✓] Closed
+
+**Resolved**: `internal/config/config_test.go:220-260` (`TestLoad_AnchorAlias`) verifies bare anchors and aliases are rejected with errors mentioning anchors/aliases, while a quoted glob containing `*` is accepted. This covers the defense-in-depth check before YAML aliases can allocate expanded structures.
 
 ### 12\. Hot-reload path through sync invalidating fewer layers 🔴 Open (no coverage)
 
@@ -69,23 +70,25 @@ No direct test validates that sync triggers (webhook/git-sync/hot-watch) invalid
 
 ## 🟢 Low Priority Nice-to-Have — Future Work for Defensive Coverage
 
-### 13\. Negative cache admission-cap policy verification ✅ [✓] Closed
+### 13\. Negative cache eviction policy verification ✅ [✓] Closed
 
-**Resolved**: `negcache_admission_test.go` covers admission-cap policy (at capacity, new misses skip caching) verifying bounded memory. No eviction of oldest entries — unbounded-growth prevented by load-or-store gate.
+**Resolved**: `internal/overlayfs/negcache_admission_test.go` covers the existing admission-cap policy, verifying bounded memory when the cache reaches capacity. The eviction wording is addressed by #245, which updates the behavior to true LRU eviction of the least-recently-used negative-cache entry.
 
 ### 14\. stat.Symlink path traversal detection tested ✅ [✓] Closed
 
-**Resolved**: `symlink_escape_test.go` covers symlink escape checks against actual symlinks pointing outside configured layer boundaries, addressing the security implications previously flagged.
+**Resolved**: `internal/overlayfs/symlink_escape_test.go` covers symlink escape checks against actual symlinks pointing outside configured layer boundaries, addressing the security implications previously flagged.
 
-### 15\. Max template file size limit enforcement. Templates exceeding ~64 MB threshold not tested for immediate rejection before memory allocation occurs, potentially leading to OOM under attack; verify early failure mode exists now and always runs during compile time even with embedded defaults baked in as fallback source of truth when user uploads oversized file via git pull or content sync strategy deployment pipeline stages allow such files to land on disk temporarily).
+### 15\. Overlay FS max read size limit enforcement
+
+The overlay filesystem has a distinct 64 MiB per-file read bound via `internal/overlayfs/overlayfs.go:669-680` (`maxReadSize`). This applies to files read through overlayfs, including templates and static assets, and is separate from the configuration loader's 1 MB `internal/config/loader.go:26` `maxConfigFileSize` limit for `site.yaml`. `internal/overlayfs/max_read_size_test.go` (`TestLargeFileRejection`) covers rejection for files larger than `maxReadSize`.
 
 ### 16\. Webhook secret logging redaction test ✅ [✓] Closed
 
-**Resolved**: `internal/config/webhook_log_redaction_test.go` (`TestWebhookConfig_LogValueRedaction`) directly exercises `WebhookConfig.LogValue()` — logs a `WebhookConfig` as an slog attribute and asserts `[REDACTED]` is present and the raw secret is absent. Mutation-verifiable: breaking `LogValue()` causes this test to fail. The hollow integration test in `webhook_secret_logging_test.go` was replaced by this direct LogValue exercise. The dead `loader.Load()` call in `webhook_secret_length_test.go` was also removed.
+**Resolved**: `internal/config/webhook_log_redaction_test.go` (`TestWebhookConfig_LogValueRedaction`) directly exercises `WebhookConfig.LogValue()` — logs a `WebhookConfig` as an slog attribute and asserts `[REDACTED]` is present and the raw secret is absent. Mutation-verifiable: breaking `LogValue()` causes this test to fail. Prior indirect coverage was replaced by this direct `LogValue()` exercise.
 
-### 17\. Environment variable override validation completeness 🔴 Open (no coverage)
+### 17\. Environment variable override validation completeness ✅ [✓] Closed
 
-**Status**: Tests for BLOGFLOW_* overrides exist but only validate successful type conversions — not negative cases like providing a non-integer string to a port field that silently falls back to YAML default without logging a warning (user should be alerted about the ignored/bad value before config load completes and returns invalid configuration state).
+**Resolved**: `internal/config/env_override_test.go` covers invalid override values (`TestEnvOverrideInvalidPort`, `TestEnvOverrideInvalidMetricsPort`, `TestEnvOverrideInvalidBool`) and successful server port override (`TestEnvOverrideValidServerPort`). `internal/config/config_test.go:584-595` (`TestLoad_EnvOverrideError`) also verifies invalid `BLOGFLOW_SERVER_PORT` values return an environment override error instead of silently falling back to YAML/default values.
 
 ### 18\. Cache reload performance regression detection 🔴 Open (no coverage)
 
