@@ -10,9 +10,9 @@
 
 | Priority | Count | Description |
 |----------|-------|-------------|
-| **Critical (🔴)** | 6 | Security-sensitive issues affecting CSP/headers path traversal rate limits secret handling config file size limit enforcement, webhook IP allowlist missing, git-token logging leak prevention. |
-| High priority 🟡) | 9 | Important gaps: theme partial override behavior validation + error paths for partial include resolution when templates aren't found (vs happy-path), template functions completeness tests like `readingTime` edge cases on zero/nil input sizes etc., symlink escape detection in overlay FS not proven tested under path-traversal conditions, concurrent reload during active request processing race condition verification needed. |
-| Low priority 🟢) | 3 | Nice-to-have defensive coverage: negative cache eviction policy for absent paths over max capacity limits (100K entries threshold), hot-reload performance regression detection when sync invalidates only changed layers not entire stack, file size ≥64MB enforcement in template assets. |
+| **Critical (🔴)** | 6 | Security-sensitive issues tracked for CSP/headers, path traversal, rate limits, secret handling, config file size limit enforcement, webhook IP allowlist, and git-token logging leak prevention. |
+| High priority 🟡) | 9 | Important gaps: theme partial override behavior validation + error paths for partial include resolution when templates aren't found (vs happy-path), template functions completeness tests like `readingTime` edge cases on zero/nil input sizes, and concurrent reload during active request processing race condition verification. |
+| Low priority 🟢) | 3 | Nice-to-have defensive coverage tracked for negative-cache eviction policy, hot-reload performance regression detection when sync invalidates only changed layers, and file-size enforcement in template/static assets. |
 
 ---
 
@@ -28,7 +28,7 @@
 
 ### 3\. Webhook IP allowlist enforcement gap ✅ [✓] Closed
 
-**Resolved**: `internal/config/config.go:103` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:111-112` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in configuration-system.md §2.4 (ARC2 fix).
+**Resolved**: `internal/config/config.go:103` adds `AllowedIPs []string yaml:"allowed_ips"` to WebhookConfig. Implementation in `internal/gitops/webhook.go:111-112` filters source IPs against `AllowedIPs` (returns HTTP 403 for non-listed IPs). Tests in `internal/gitops/webhook_ip_allowlist_test.go` cover allowed, blocked, and empty-allowlist defaults. Design doc updated in `docs/engineering/design/configuration-system.md` §2.4 (ARC2 fix).
 ### 4\. Config file size >1 MB rejection not proven ✅ [✓] Closed
 
 **Resolved**: `internal/config/loader.go:26` defines `const maxConfigFileSize = 1 << 20` (1 MB). `internal/config/loader.go:135-140` rejects files exceeding this limit with a 1 MB error. Direct test at `internal/config/config_test.go:263-281` (`TestLoad_FileSizeLimit`) creates a 2 MB file and asserts the 1 MB error message.
@@ -72,7 +72,7 @@ No direct test validates that sync triggers (webhook/git-sync/hot-watch) invalid
 
 ### 13\. Negative cache eviction policy verification ✅ [✓] Closed
 
-**Resolved**: `internal/overlayfs/negcache_admission_test.go` covers the existing admission-cap policy, verifying bounded memory when the cache reaches capacity. The eviction wording is addressed by #245, which updates the behavior to true LRU eviction of the least-recently-used negative-cache entry.
+**Resolved**: `internal/overlayfs/negcache_admission_test.go` covers the existing admission-cap policy, verifying bounded memory when the cache reaches capacity. The eviction wording is being addressed by #245 (true LRU eviction of the least-recently-used negative-cache entry), with implementation currently open in PR #263.
 
 ### 14\. stat.Symlink path traversal detection tested ✅ [✓] Closed
 
@@ -80,7 +80,7 @@ No direct test validates that sync triggers (webhook/git-sync/hot-watch) invalid
 
 ### 15\. Overlay FS max read size limit enforcement
 
-The overlay filesystem has a distinct 64 MiB per-file read bound via `internal/overlayfs/overlayfs.go:669-680` (`maxReadSize`). This applies to files read through overlayfs, including templates and static assets, and is separate from the configuration loader's 1 MB `internal/config/loader.go:26` `maxConfigFileSize` limit for `site.yaml`. `internal/overlayfs/max_read_size_test.go` (`TestLargeFileRejection`) covers rejection for files larger than `maxReadSize`.
+The overlay filesystem has a distinct 64 MiB per-file read bound via `internal/overlayfs/overlayfs.go:671` (`maxReadSize`). This applies to files read through overlayfs, including templates and static assets, and is separate from the configuration loader's 1 MB `internal/config/loader.go:26` `maxConfigFileSize` limit for `site.yaml`. `internal/overlayfs/max_read_size_test.go` (`TestLargeFileRejection`) covers rejection for files larger than `maxReadSize`.
 
 ### 16\. Webhook secret logging redaction test ✅ [✓] Closed
 
@@ -104,7 +104,7 @@ Each accepted issue must satisfy:
 # Acceptance Checklist (per-issue requirement) ✅
 
 - [ ] **Reproduction Steps**: Clear steps to reproduce behavior deviating from design spec  
-- [ ] **Expected Behavior per Spec Docline #XX** from `docs/engineering/config-system.md` etc. showing required test for scenario described here  
+- [ ] **Expected Behavior per Spec Docline #XX** from `docs/engineering/design/configuration-system.md` etc. showing required test for scenario described here  
 - [ ] **Unit Test Code** added covering edge case + happy path with assertion failures logged as errors or warnings appropriately based on severity level defined by design doc priority classification in each subsystem's testing guidelines (see CI patterns)  
 ```
 
@@ -114,18 +114,19 @@ Each accepted issue must satisfy:
 
 1. Design source: `docs/engineering/design/configuration-system.md` (§3.1-§7, §8 acceptance criteria mapping table lines 264+)
 2. Coverage checklist generated from scan of existing `*_test.go` files using file counts and coverage maps across subsystems  
-   - See CI workflow `.github/workflows/ci.yml` smoke tests for baseline HTTP endpoint checks currently passing under happy-path scenarios only but not error paths (like CSP header missing on 404 responses) or rate limit enforcement behaviors
-3. Theme dev guide `docs/theme-development.md` covers static asset serving rules (§7-8 sections) without explicit test coverage shown in existing test count  
-   - No unit/integration tests for CSS injection prevention, partial include error paths (when file missing vs present), CSP header presence on non-page responses like `/metrics prometheus scrape endpoint
-4. GitOps webhook security patterns require IP allowlist enforcement and secret validation minimum length checks at startup per config spec requirements but no such test exists  
-5. Overlay FS limits need verification for symlink escapes path traversal not currently covered in context overlayfs_test.go file line counts alone don't specify which assertions actually exist there; must read implementation code to confirm
+   - See CI workflow `.github/workflows/ci.yml` smoke tests for baseline HTTP endpoint checks. CSP header coverage for 404 and `/metrics` is now resolved by `internal/server/csp_coverage_test.go`; rate-limit edge-path coverage remains separate from those closed CSP checks.
+3. Theme dev guide `docs/theme-development.md` covers static asset serving rules (§7-8 sections). CSS injection prevention and partial include error-path tests remain useful follow-ups; CSP header presence on non-page responses is resolved by `internal/server/csp_coverage_test.go`.
+4. GitOps webhook security patterns for IP allowlist enforcement and secret validation minimum length checks are now covered by `internal/gitops/webhook_ip_allowlist_test.go` and `internal/gitops/sync_test.go` (`TestNewWebhookStrategy_SecretBoundary`).
+5. Overlay FS symlink-escape path traversal coverage is now resolved by `internal/overlayfs/symlink_escape_test.go`; `internal/overlayfs/max_read_size_test.go` covers the `maxReadSize` guard.
 
 ---
 
 ## Next Steps — Issue Creation Plan
 
+Historical note: these follow-up issues were subsequently filed, including #216 (CSP), #234 (template size), #235 (hot-reload), and #245 (negative cache); this section is retained for history.
+
 1\. Create all issues above using labels: `test-gap-critical` or priority/flag based severity levels from table (6 critical + 9 high-priority items with clear security implications get flagged for immediate fix by dev team next release); low/nice-to-have as future enhancements  
-2\. Add relevant test stubs per subsystem into existing package code structure matching spec scenarios listed above using coverage-mapped design docs requirements and CI patterns established in `.github/workflows/ci.yml` (lint→build→test steps already exist but not all scenarios within §3-§7 of config-system.md validated yet)  
+2\. Add relevant test stubs per subsystem into existing package code structure matching spec scenarios listed above using coverage-mapped design docs requirements and CI patterns established in `.github/workflows/ci.yml` (lint→build→test steps already exist but not all scenarios within §3-§7 of `docs/engineering/design/configuration-system.md` validated yet)  
 3\. Generate Mermaid diagrams showing content pipeline stages needing additional validation tests before deploying next version to production or staging environments; each diagram should show input validation layers vs unvalidated outputs where gaps remain unprotected
 
 ---
