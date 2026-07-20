@@ -15,18 +15,21 @@ param environmentName string
 @description('Azure Monitor workspace resource ID for Prometheus metrics')
 param monitorWorkspaceId string
 
+@description('Whether the Prometheus rule group and rule are enabled. Keep the resource deployed even when false so incremental deployments can disable prior alerts.')
+param enabled bool = true
+
 @description('Optional Azure Monitor action group resource ID. Empty creates an alert rule without notification actions.')
 param actionGroupId string = ''
 
-var noBlogflowMetricsExpression = 'absent_over_time({__name__=~"blogflow_.*"}[30m])'
+var noBlogflowMetricsExpression = 'absent_over_time({__name__=~"blogflow_.*",deployment_environment="${environmentName}"}[30m])'
 
 resource metricsIngestionAbsenceRuleGroup 'Microsoft.AlertsManagement/prometheusRuleGroups@2023-03-01' = {
   name: '${environmentName}-metrics-ingestion'
   location: location
   properties: {
     clusterName: ''
-    description: 'Detects when no blogflow_* metrics are ingested into the Azure Monitor workspace.'
-    enabled: true
+    description: 'Detects when no blogflow_* metrics are ingested into the Azure Monitor workspace for this environment.'
+    enabled: enabled
     interval: 'PT1M'
     scopes: [
       monitorWorkspaceId
@@ -34,17 +37,17 @@ resource metricsIngestionAbsenceRuleGroup 'Microsoft.AlertsManagement/prometheus
     rules: [
       {
         alert: 'BlogFlowMetricsIngestionAbsent'
-        enabled: true
+        enabled: enabled
         expression: noBlogflowMetricsExpression
-        for: '10m'
+        for: 'PT5M'
         severity: 2
         labels: {
           service: 'blogflow'
           signal: 'metrics'
         }
         annotations: {
-          summary: 'No blogflow_* metrics have been ingested for at least 30 minutes.'
-          description: 'The BlogFlow OTel metrics pipeline may be broken. Check Container App traffic, scale-to-zero settings, otel-collector logs, managed identity auth, and DCE/DCR configuration.'
+          summary: 'No blogflow_* metrics have been ingested for this environment for at least 30 minutes.'
+          description: 'The BlogFlow OTel metrics pipeline may be broken for ${environmentName}. Check Container App traffic, scale-to-zero settings, otel-collector logs, managed identity auth, and DCE/DCR configuration.'
         }
         actions: actionGroupId != '' ? [
           {

@@ -243,14 +243,18 @@ The collector image is assembled from two Bicep parameters instead of one free-f
 image string:
 
 - `otelCollectorImageRepository` — repository plus tag, default
-  `otel/opentelemetry-collector-contrib:0.148.0`
-- `otelCollectorImageDigest` — 64-character SHA-256 digest without the
-  `sha256:` prefix
+  `otel/opentelemetry-collector-contrib:0.148.0`; do not include `@` or an
+  embedded digest
+- `otelCollectorImageDigest` — 64-character lowercase-hex SHA-256 digest without
+  the `sha256:` prefix
 
 The deployed image is always rendered as
 `<repository>@sha256:<digest>`, so a tag-only collector override cannot be
-deployed accidentally. Update both parameters together when intentionally moving
-to a newer collector release.
+deployed accidentally. The Bicep template rejects an embedded digest in the repository parameter and
+requires the digest to match `^[0-9a-f]{64}$` before rendering the final image
+reference. `deploy/azure/validate-collector-image-pin.py` also runs in CI/deploy
+validation to catch bad checked-in defaults before deployment. Update both
+parameters together when intentionally moving to a newer collector release.
 
 ### Collector health probes and bind address
 
@@ -258,8 +262,16 @@ The `otel-collector` sidecar has Startup, Readiness, and Liveness probes against
 the collector `health_check` extension on port 13133. Startup gives the collector
 up to two minutes to initialize, Readiness gates the Container App revision until
 the sidecar health endpoint is responding, and Liveness restarts a wedged
-collector. This reduces the cold-start window where BlogFlow could emit metrics
-before the collector pipeline is available.
+collector. The Readiness probe intentionally has no `initialDelaySeconds` because
+the Startup probe gates it.
+
+The health endpoint confirms the collector service and configured extensions are
+running, but it does **not** wait for the `azure_auth` extension to acquire an
+Entra token or prove the DCE export path. Early 401/403s during managed-identity
+RBAC propagation can still occur after Readiness succeeds. That cold-start loss
+window is mitigated by the configured `batch` processor plus `otlphttp`
+`retry_on_failure` backoff (`initial_interval: 5s`, `max_interval: 30s`,
+`max_elapsed_time: 10m`), not by the probe itself.
 
 The collector `health_check` extension intentionally binds `0.0.0.0:13133` rather
 than `localhost:13133`. Azure Container Apps probes originate from the platform
@@ -320,13 +332,18 @@ for the DCE/DCR ingestion model and the Entra-authenticated collector pattern.
 
 Bicep deploys a Prometheus rule group named
 `<environmentName>-metrics-ingestion` by default. The alert
-`BlogFlowMetricsIngestionAbsent` evaluates this PromQL expression every minute:
+`BlogFlowMetricsIngestionAbsent` evaluates this per-environment PromQL expression every minute:
 
 ```promql
-absent_over_time({__name__=~"blogflow_.*"}[30m])
+absent_over_time({__name__=~"blogflow_.*",deployment_environment="<environmentName>"}[30m])
 ```
 
-If the expression remains active for 10 minutes, Azure Monitor raises a severity
+The app container sets `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>`,
+which is translated to the Prometheus label `deployment_environment`. This keeps
+shared Azure Monitor workspaces from masking one environment's broken pipeline
+with another environment's healthy `blogflow_*` series.
+
+If the expression remains active for `PT5M`, Azure Monitor raises a severity
 2 alert indicating no BlogFlow custom metrics have arrived for the previous 30
 minutes. This is intended to catch persistent collector authentication/export
 failures, including 401/403 responses that otherwise appear only in
@@ -334,14 +351,19 @@ failures, including 401/403 responses that otherwise appear only in
 
 Optional parameters:
 
-- `enableMetricsIngestionAbsenceAlert` — default `true`; set `false` if the app
-  intentionally scales to zero for long periods or metrics are not expected.
+- `enableMetricsIngestionAbsenceAlert` — default `true`; the deployed rule is
+  effectively enabled only when `scaleMinReplicas > 0`. Bicep always deploys the
+  rule group and passes the effective boolean to `properties.enabled`, so toggling
+  this parameter to `false` disables an existing alert during incremental deploys
+  instead of leaving a previously-created rule active.
 - `metricsIngestionAbsenceActionGroupId` — Azure Monitor action group resource
   ID for notifications. Leave empty to create the alert rule without notification
   actions, then attach actions later in Azure Monitor.
 
-If `scaleMinReplicas=0`, expect this alert to fire during sustained idle periods
-unless an external synthetic check keeps the app warm or the alert is disabled.
+If `scaleMinReplicas=0`, the rule group is created but disabled by default to
+avoid idle scale-to-zero false positives. To alert for a scale-to-zero app, keep
+`enableMetricsIngestionAbsenceAlert=true`, set `scaleMinReplicas > 0`, or add an
+external synthetic check that keeps metrics flowing before enabling the rule.
 
 ## Rollback: Disable DCE Metrics Export
 
@@ -425,7 +447,9 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
 - Metrics do NOT go to App Insights or Log Analytics (fixes the cost issue)
 - Traces go to App Insights → Log Analytics `AppTraces` table (acceptable cost)
 - Metrics go to Azure Monitor workspace through DCE/DCR OTLP ingestion
-- The app sets `OTEL_SERVICE_NAME=blogflow` so ingested series are attributable
+- The app sets `OTEL_SERVICE_NAME=blogflow` and
+  `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<environmentName>` so ingested
+  series are attributable and environment-scoped
 - The collector exposes `health_check` on port 13133 for Startup, Readiness,
   and Liveness probing and starts telemetry pipelines with `memory_limiter` to
   reduce OOM risk
@@ -435,5 +459,6 @@ Container Apps runtime ──console logs──▶ Log Analytics workspace (defa
   scope only; no static OTLP API keys are stored
 - The DCE defaults to public network access for compatibility; use
   `dcePublicNetworkAccess=Disabled` only with a working private ingestion path
-- A Prometheus rule group alerts when `blogflow_*` metrics disappear from the
-  Azure Monitor workspace
+- A Prometheus rule group alerts when environment-scoped `blogflow_*` metrics
+  disappear from the Azure Monitor workspace; it is disabled automatically when
+  `scaleMinReplicas=0` to avoid idle false positives

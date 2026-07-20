@@ -47,10 +47,13 @@ param metricsIngestionEndpoint string
 @description('DCR stream name for Azure Monitor OTLP metrics ingestion')
 param otelMetricsStreamName string
 
-@description('OpenTelemetry Collector Contrib image repository and tag. The digest is supplied separately so tag-only overrides are impossible.')
+@description('Deployment environment label value applied to OTEL_RESOURCE_ATTRIBUTES and alert scoping')
+param deploymentEnvironmentName string
+
+@description('OpenTelemetry Collector Contrib image repository and tag, without @ or digest. The template rejects embedded digests so tag-only overrides remain impossible.')
 param otelCollectorImageRepository string = 'otel/opentelemetry-collector-contrib:0.148.0'
 
-@description('OpenTelemetry Collector Contrib image SHA-256 digest, without the sha256: prefix.')
+@description('OpenTelemetry Collector Contrib image lowercase-hex SHA-256 digest, without the sha256: prefix. The template enforces ^[0-9a-f]{64}$ before rendering @sha256:<digest>.')
 @minLength(64)
 @maxLength(64)
 param otelCollectorImageDigest string = '8164eab2e6bca9c9b0837a8d2f118a6618489008a839db7f9d6510e66be3923c'
@@ -67,8 +70,13 @@ param customDomainName string = ''
 @description('Managed certificate ID for custom domain TLS. Required when customDomainName is set.')
 param customDomainCertificateId string = ''
 
+var otelCollectorDigestWithoutDigits = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(otelCollectorImageDigest, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', '')
+var otelCollectorDigestWithoutHex = replace(replace(replace(replace(replace(replace(otelCollectorDigestWithoutDigits, 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')
+var validatedOtelCollectorImageRepository = contains(otelCollectorImageRepository, '@') ? fail('otelCollectorImageRepository must not contain @ or an embedded digest. Set otelCollectorImageDigest separately.') : otelCollectorImageRepository
+var validatedOtelCollectorImageDigest = length(otelCollectorDigestWithoutHex) == 0 ? otelCollectorImageDigest : fail('otelCollectorImageDigest must be a 64-character lowercase hexadecimal SHA-256 digest without the sha256: prefix.')
+
 var monitoringMetricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
-var otelCollectorImage = '${otelCollectorImageRepository}@sha256:${otelCollectorImageDigest}'
+var otelCollectorImage = '${validatedOtelCollectorImageRepository}@sha256:${validatedOtelCollectorImageDigest}'
 var otlpMetricsEndpoint = '${metricsIngestionEndpoint}/datacollectionRules/${dataCollectionRuleImmutableId}/streams/${otelMetricsStreamName}/otlp/v1/metrics'
 var otelCollectorConfig = join([
   'receivers:'
@@ -231,6 +239,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'blogflow'
             }
             {
+              name: 'OTEL_RESOURCE_ATTRIBUTES'
+              value: 'deployment.environment=${deploymentEnvironmentName}'
+            }
+            {
               name: 'OTEL_TRACES_EXPORTER'
               value: 'otlp'
             }
@@ -351,7 +363,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 path: '/'
                 port: 13133
               }
-              initialDelaySeconds: 5
               periodSeconds: 5
               failureThreshold: 12
             }

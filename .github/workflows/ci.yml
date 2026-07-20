@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Validate Azure collector image pinning
+        run: python3 deploy/azure/validate-collector-image-pin.py
+
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
