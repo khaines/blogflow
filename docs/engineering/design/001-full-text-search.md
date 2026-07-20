@@ -65,7 +65,7 @@ graph TB
     SearchTemplate --> HTML["server-rendered HTML results"]
 ```
 
-The design recommends a **lightweight custom in-memory inverted index** over Bleve for the first implementation. Bleve is feature-rich and battle-tested, but it adds substantial dependency surface, binary-size pressure, and operational knobs that exceed BlogFlow's current need. A small custom index over title, tags, and body tokens fits the single-binary/distroless model, integrates directly with `content.Index`, and can provide deterministic ranking and excerpts with far less complexity.
+The design uses a **lightweight custom in-memory inverted index** for v1, not Bleve. Bleve is feature-rich and battle-tested, but it adds substantial dependency surface, binary-size pressure, and operational knobs that exceed BlogFlow's current need. A small custom index over title, tags, and body tokens fits the single-binary/distroless model, integrates directly with `content.Index`, and provides deterministic ranking and excerpts with far less complexity.
 
 ### 2.2 Component Boundaries & Responsibilities
 
@@ -119,7 +119,7 @@ sequenceDiagram
     participant Theme as theme.Engine
 
     Client->>Handler: GET /search?q=term while search disabled
-    Handler-->>Client: 404 Not Found or disabled page per final config decision
+    Handler-->>Client: 404 Not Found because route is not registered
 
     Client->>Handler: GET /search?q=<oversized>
     Handler->>Handler: reject before tokenization
@@ -129,23 +129,25 @@ sequenceDiagram
 
 ### 2.4 Data Model / Schema
 
-Proposed Go types are internal and in-memory only:
+Implementation Go types are internal and in-memory only:
 
 ```go
 type SearchConfig struct {
-    Enabled        bool `yaml:"enabled"`
-    MaxResults     int  `yaml:"max_results"`      // default 20
-    MaxQueryLength int  `yaml:"max_query_length"` // default 128 runes
-    MinQueryLength int  `yaml:"min_query_length"` // default 2 runes
-    ExcerptLength  int  `yaml:"excerpt_length"`   // default 180 runes
+    Enabled        bool `yaml:"enabled"`        // default false (opt-in)
+    MaxResults     int `yaml:"max_results"`      // default 20
+    MaxQueryLength int `yaml:"max_query_length"` // default 128 runes
+    MinQueryLength int `yaml:"min_query_length"` // default 2 runes
+    ExcerptLength  int `yaml:"excerpt_length"`   // default 180 runes
+    MaxDocs        int `yaml:"max_docs"`         // default 10,000 posts
+    MaxTokens      int `yaml:"max_tokens"`       // default 2,000,000 indexed token occurrences
 }
 
 type SearchIndex struct {
     docs      []SearchDoc
     postings  map[string][]Posting // token -> sorted posting list
     docFreq   map[string]int
-    maxDocs   int
-    maxTokens int
+    maxDocs   int // hard cap: default 10,000 posts
+    maxTokens int // hard cap: default 2,000,000 indexed token occurrences
 }
 
 type SearchDoc struct {
@@ -175,7 +177,7 @@ type SearchResult struct {
 }
 ```
 
-Index storage is bounded by configuration and content size. The first implementation should index posts only, not static pages, because issue #129 says “blog posts.” Indexing pages can be a follow-up if product requirements expand.
+Index storage is bounded by configuration and content size. V1 indexes **posts only**, not static pages. Pages are a documented follow-up outside this implementation spec. Default caps are `max_docs: 10000` and `max_tokens: 2000000`, targeting an approximate search-index heap budget of **≤64 MiB per replica** for typical Markdown corpora. Exact heap use depends on token distribution and Go runtime overhead, so implementation must expose index size metrics and stop indexing additional documents/tokens once caps are reached. Tokenization is Unicode-normalized whitespace tokenization for v1; CJK bigrams are deferred to a follow-up.
 
 ### 2.5 API Surface
 
@@ -187,8 +189,8 @@ Index storage is bounded by configuration and content size. The first implementa
 |-------|----------|
 | `q` | Trimmed Unicode string. Empty query renders the search form with no results and HTTP 200. |
 | `page` | Optional positive integer. Invalid values coerce to page 1. Out-of-range pages render the last available page, matching list handler behavior. |
-| Response | HTML page with query echo, result count, result list, excerpts, dates, scores, and pagination links. |
-| Disabled | If `search.enabled` is false, route should not be registered or should delegate to `NotFoundHandler`; choose one in implementation. |
+| Response | HTML page with query echo, result count, result list, excerpts, dates, pagination links, and relevance score available to templates/metadata for sorting or optional theme display. The default reader-visible body text does not show numeric scores. |
+| Disabled | If `search.enabled` is false, the route is not registered; `/search` returns the normal 404 and does not advertise disabled functionality. |
 | Invalid query | Queries below min length render a user-facing validation message. Oversized queries return HTTP 400 with an HTML error message. |
 | Errors | Search index unavailable or template render failure returns HTTP 500 without partial content. |
 | Rate limits | No custom per-route limiter in v1; rely on existing HTTP timeouts, query bounds, and bounded per-request work. |
@@ -217,9 +219,9 @@ type SearchResponse struct {
 
 #### Ranking approach
 
-Use BM25-lite or weighted term frequency:
+Use BM25-lite weighted term frequency:
 
-- Normalize and tokenize query terms the same way as indexed content.
+- Normalize and tokenize query terms with the same Unicode-normalized whitespace tokenizer used at index build time.
 - Score exact token matches with field boosts: title `3.0`, tag `2.0`, body `1.0`.
 - Apply inverse document frequency to avoid common terms dominating results.
 - Add a small recency tie-breaker only after relevance ties; date must not outrank clear text relevance.
@@ -231,12 +233,12 @@ Use BM25-lite or weighted term frequency:
 |------------|------|---------------|-------------------|
 | `internal/content.Scanner` | Internal package | In-process build-at-scan-time | If indexing fails due to internal invariant violation, fail the scan in strict mode; collect errors in best-effort mode. |
 | `internal/content.Index` | Internal data structure | Atomic pointer swap through handlers deps | Search sees either the old complete index or new complete index; never a partially rebuilt index. |
-| `internal/server` | Internal package | HTTP route registration and middleware | If search is disabled, route returns 404 or is not registered. |
+| `internal/server` | Internal package | HTTP route registration and middleware | If search is disabled, the route is not registered and `/search` returns the normal 404. |
 | `internal/theme` | Internal package | `html/template` rendering | Render errors return 500 without partial response. |
 | `internal/config` | Internal package | YAML and defaults | Invalid search config fails validation at startup/reload. |
 | Prometheus client | Library already present | In-process metrics | Metrics failure must not fail search responses. |
 | OpenTelemetry | Library already present | In-process spans | Tracing failure must not affect user-visible behavior. |
-| Bleve | External library candidate | Not recommended for v1 | If later selected, startup must fail clearly if index construction cannot initialize. |
+| Bleve | External library candidate | Not used in v1 | Excluded from the implementation to preserve minimal dependencies and binary size; reconsider only in a future design if advanced analyzers become required. |
 
 ### 2.7 Content Integrity & Isolation
 
@@ -252,7 +254,7 @@ The excerpt generator must work on plain text, not trusted HTML. Query terms and
 
 | # | Scenario | Precondition | Action | Expected Result |
 |---|----------|--------------|--------|-----------------|
-| 1 | Search title | Search enabled; post title contains “Go internals” | `GET /search?q=internals` | Matching post appears with title, date, excerpt, score, and link. |
+| 1 | Search title | Search enabled; post title contains “Go internals” | `GET /search?q=internals` | Matching post appears with title, date, excerpt, link, and template metadata score. |
 | 2 | Search tags | Search enabled; post has tag `architecture` | `GET /search?q=architecture` | Tagged post appears; tag field contributes to score. |
 | 3 | Search body | Search enabled; body contains “overlay filesystem” | `GET /search?q=overlay` | Matching post appears with excerpt around the body match. |
 | 4 | Ranked multi-field result | One post matches title and body; another only body | `GET /search?q=search` | Multi-field match ranks above body-only match. |
@@ -264,7 +266,7 @@ The excerpt generator must work on plain text, not trusted HTML. Query terms and
 
 | # | Scenario | Input / Condition | Expected Behaviour |
 |---|----------|-------------------|--------------------|
-| 1 | Search disabled | `search.enabled: false` | `/search` returns 404 or a disabled response per final route decision. |
+| 1 | Search disabled | `search.enabled: false` | `/search` returns the normal 404 because the route is not registered. |
 | 2 | Query below minimum length | `q=a` when min length is 2 | HTTP 200 or 400 with accessible validation message; no index scan. |
 | 3 | Query too long | Query exceeds `max_query_length` | HTTP 400 HTML response; tokenization is skipped. |
 | 4 | Stop-word/common term | Query token appears in most posts | Results remain bounded and sorted; request latency stays within target. |
@@ -287,7 +289,7 @@ The excerpt generator must work on plain text, not trusted HTML. Query terms and
 | Acceptance Criterion | Test Scenario(s) | Coverage |
 |----------------------|-------------------|----------|
 | Search by title, tags, and body content | §3.1 #1, #2, #3; §3.3 scanner integration | ✅ Covered |
-| Results show title, excerpt, date, relevance score | §3.1 #1; handler/template tests | ✅ Covered |
+| Results show title, excerpt, date, relevance score | §3.1 #1; handler/template tests verify score is available to templates/metadata, not shown as default reader-visible body text | ✅ Covered |
 | Handles Unicode content | §3.1 #5; tokenizer unit tests | ✅ Covered |
 | Configurable through `search.enabled: true` | §3.2 #1; config reload tests | ✅ Covered |
 | Accessible keyboard-navigable results | §3.1 #7; template accessibility tests | ✅ Covered |
@@ -299,7 +301,7 @@ The excerpt generator must work on plain text, not trusted HTML. Query terms and
 
 ### 4.1 Expected Load Profile
 
-Search is read-heavy and request-driven. Small blogs may see occasional queries; medium blogs may see bursts when readers navigate archives; high-traffic blogs may have sustained search traffic during content launches. Content updates are less frequent than reads, so the index should be rebuilt at scan time and served as an immutable snapshot between reloads.
+Search is read-heavy and request-driven. Small blogs may see occasional queries; medium blogs may see bursts when readers navigate archives; high-traffic blogs may have sustained search traffic during content launches. Content updates are less frequent than reads, so the index is rebuilt at scan time and served as an immutable snapshot between reloads.
 
 ### 4.2 Latency Targets
 
@@ -317,14 +319,14 @@ Search is read-heavy and request-driven. Small blogs may see occasional queries;
 
 ### 4.4 Scaling Strategy
 
-The component scales horizontally with BlogFlow replicas because each replica keeps its own in-memory index. The primary bottlenecks are memory for posting lists and CPU for scoring large candidate sets. Query work must be bounded by max query length, max tokens, max result window, and a cap on candidate documents scored per query if large-site testing shows a need.
+The component scales horizontally with BlogFlow replicas because each replica keeps its own in-memory index. The primary bottlenecks are memory for posting lists and CPU for scoring large candidate sets. Query work is bounded by max query length, `max_docs` (default 10,000), `max_tokens` (default 2,000,000 token occurrences), max result window, and candidate-scoring limits derived from those caps.
 
 ### 4.5 Resource Budgets
 
 | Resource | Budget per Replica | Notes |
 |----------|-------------------|-------|
 | CPU | ≤ 1 core for p95 target on 10,000 posts | Query scoring is CPU-bound and should avoid regex backtracking. |
-| Memory | Target ≤ 2–4× plain indexed text size, capped by config | Posting lists, doc metadata, and excerpts must be bounded. |
+| Memory | Target ≤64 MiB search-index heap for ~10,000 typical posts | Enforced with `max_docs: 10000` and `max_tokens: 2000000`; actual usage is measured via metrics. |
 | Storage | 0 Gi persistent storage for v1 | Index is rebuilt in memory; no on-disk index files. |
 
 ### 4.6 Performance Test Plan
@@ -421,15 +423,15 @@ graph LR
 | **T**ampering | ✅ | Content author can attempt to inject unsafe markup into excerpts. | Use sanitized/stripped plain text and `html/template` escaping. |
 | **R**epudiation | ✅ | Abuse may be hard to attribute if only aggregate metrics exist. | Existing request logs include request ID, path, remote/client IP; do not log full queries by default. |
 | **I**nformation Disclosure | ✅ | Search could reveal drafts or pages not linked publicly. | Build only from `content.Index.Posts`, which excludes drafts and invalid content. |
-| **D**enial of Service | ✅ | Long queries, common-term queries, or huge corpora can cause high CPU/memory. | Query length/token bounds, result limits, candidate caps if needed, memory budgets, no regex. |
+| **D**enial of Service | ✅ | Long queries, common-term queries, or huge corpora can cause high CPU/memory. | Query length/token bounds, result limits, `max_docs`/`max_tokens` caps, memory budgets, no regex. |
 | **E**levation of Privilege | ❌ | Search does not perform privileged actions. | Keep route read-only and avoid filesystem access from query input. |
 
 ### 6.4 Mitigations & Residual Risks
 
 - **XSS mitigation**: V1 excerpts are plain text only; all fields are escaped by templates. Residual risk is low if no future highlighter returns trusted HTML.
-- **DoS mitigation**: Bound query length, token count, results, and indexed corpus. Residual risk remains for very large sites until a memory budget is finalized.
+- **DoS mitigation**: Bound query length, token count, results, and indexed corpus with default caps of 10,000 posts and 2,000,000 indexed token occurrences, targeting ≤64 MiB search-index heap per replica. Residual risk remains for sites that need larger corpora and must tune caps intentionally.
 - **Disclosure mitigation**: Index only published posts from the existing scanner output. Residual risk is that public-but-obscure posts become easier to discover, which is inherent to search.
-- **Supply-chain mitigation**: Prefer custom index for v1 to avoid adding a large search dependency tree. If Bleve is chosen later, perform dependency review and binary-size measurement.
+- **Supply-chain mitigation**: Use the custom index for v1 to avoid adding a large search dependency tree. If a future design proposes Bleve or another search library, perform dependency review and binary-size measurement then.
 
 ---
 
@@ -450,12 +452,12 @@ Required structured fields: `request_id` for request logs, `trace_id` when traci
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `blogflow_search_queries_total` | Counter | `status` (`ok`, `invalid`, `disabled`, `error`) | Total search requests handled by the search component. |
+| `blogflow_search_queries_total` | Counter | `status` (`ok`, `invalid`, `error`) | Total search requests handled by the search component. Disabled requests hit normal 404 routing because `/search` is not registered. |
 | `blogflow_search_query_duration_seconds` | Histogram | `status` | End-to-end search handler latency, separate from global HTTP metrics. |
 | `blogflow_search_results_total` | Histogram | none | Distribution of result counts per successful query. |
 | `blogflow_search_zero_results_total` | Counter | none | Count of valid queries returning zero results. |
 | `blogflow_search_index_documents` | Gauge | none | Number of posts in the active search index. |
-| `blogflow_search_index_tokens` | Gauge | none | Number of unique tokens in the active search index. |
+| `blogflow_search_index_tokens` | Gauge | none | Number of indexed token occurrences in the active search index. |
 | `blogflow_search_index_rebuild_duration_seconds` | Histogram | `status` | Search index rebuild duration during content scans. |
 | `blogflow_search_index_memory_bytes` | Gauge | none | Estimated search index heap footprint if practical to compute. |
 
@@ -480,11 +482,11 @@ Create a `search.Query` span in the handler and a `search.IndexBuild` span durin
 
 ### 8.1 Rollout Strategy
 
-Implement behind `search.enabled`, recommended **default off for v1** until memory budget and large-site behavior are validated. The default theme can ship `templates/search.html` and a conditional search form so enabling search requires only configuration. For hosted deployments, canary by enabling search on one low-traffic site or replica group before broad rollout.
+Implement behind `search.enabled` with **default `false`** for v1. The default theme can ship `templates/search.html` and a conditional search form so enabling search requires only configuration. For hosted deployments, canary by enabling search on one low-traffic site or replica group before broad rollout.
 
 ### 8.2 Rollback Plan
 
-Rollback is configuration-first: set `search.enabled: false` and reload/redeploy. If the route is registered conditionally, `/search` disappears or returns 404 without changing content. If a code regression affects non-search paths, revert the release. Expected rollback time is one config reload/redeploy cycle; no data migration reversal is required because v1 stores no persistent index.
+Rollback is configuration-first: set `search.enabled: false` and reload/redeploy. Because the route is registered only when enabled, `/search` returns the normal 404 without changing content. If a code regression affects non-search paths, revert the release. Expected rollback time is one config reload/redeploy cycle; no data migration reversal is required because v1 stores no persistent index.
 
 Rollback triggers:
 
@@ -498,11 +500,11 @@ Rollback triggers:
 | Risk | Likelihood | Impact | Mitigation |
 |------|:----------:|:------:|------------|
 | Custom index ranking is too simple | Medium | Medium | Use field boosts + IDF; document ranking limitations; keep interface replaceable. |
-| Large sites consume too much memory | Medium | High | Default off, memory budget, index size metrics, max indexed posts/tokens tunables. |
-| Unicode tokenization misses languages without spaces | Medium | Medium | Normalize like `urlize`; consider CJK n-grams as an explicit follow-up decision. |
+| Large sites consume too much memory | Medium | High | Default off, ≤64 MiB target budget, index size metrics, `max_docs` and `max_tokens` caps. |
+| Unicode tokenization misses languages without spaces | Medium | Medium | V1 uses Unicode-normalized whitespace tokenization; CJK bigrams are explicitly deferred to a follow-up. |
 | Search route reduces cache/CDN effectiveness | Medium | Low | Keep static pages cacheable; search is dynamic and server-side by design. |
 | Excerpt generation introduces XSS | Low | High | Plain-text excerpts only; never return trusted HTML from search. |
-| Bleve later becomes necessary | Low | Medium | Keep `Searcher` interface so implementation can be swapped after dependency review. |
+| Advanced analyzer features become necessary | Low | Medium | Keep `Searcher` interface so a future design can evaluate Bleve or another library after dependency review. |
 
 ### 8.4 Dependencies & Sequencing
 
@@ -512,13 +514,13 @@ Rollback triggers:
 4. Add `SearchHandler`, route registration, page data, metrics, and tracing.
 5. Add default `templates/search.html`, header search form/partial, CSS, and theme override documentation.
 6. Add unit, integration, accessibility, and benchmark coverage.
-7. Enable in a canary environment, observe metrics, then decide the default behavior.
+7. Enable in a canary environment, observe metrics, and keep default `search.enabled: false` until a later design explicitly changes it.
 
 ### 8.5 Launch Checklist
 
 - [ ] All issue #129 acceptance criteria are implemented and tested.
 - [ ] Config defaults and validation are documented.
-- [ ] Search route is disabled safely when `search.enabled` is false.
+- [ ] Search route is not registered and returns normal 404 behavior when `search.enabled` is false.
 - [ ] Unit tests cover tokenizer, ranking, excerpts, bounds, and Unicode.
 - [ ] Integration tests cover handler, default template, reload, and disabled mode.
 - [ ] Benchmarks establish memory and latency for representative corpus sizes.
@@ -533,14 +535,14 @@ Rollback triggers:
 
 | # | Question | Status | Resolution |
 |---|----------|--------|------------|
-| 1 | Should v1 use Bleve or a custom in-memory inverted index? | 🟡 Open, recommendation made | Recommend custom index for minimal dependencies, smaller binary, and direct integration; choose Bleve only if advanced analyzers/ranking are mandatory. |
-| 2 | Should the search index be persistent or rebuilt in memory only? | 🟡 Open, recommendation made | Recommend in-memory-only for v1; persistence adds filesystem writes and distroless/read-only-root complexity. |
-| 3 | What memory budget and corpus size must v1 support? | 🟡 Open | Human decision needed: e.g., target 10,000 posts within a defined MiB budget. |
-| 4 | Should `search.enabled` default to false or true? | 🟡 Open, recommendation made | Recommend default off for v1, with embedded templates ready; revisit after benchmarks and UX validation. |
-| 5 | Should pages be searchable in addition to posts? | 🟡 Open | Issue says blog posts; pages should be excluded unless product expands scope. |
-| 6 | What Unicode strategy is required for CJK and languages without whitespace? | 🟡 Open | V1 can normalize/preserve Unicode tokens; decide whether to add CJK bigrams before implementation. |
-| 7 | Disabled behavior: unregister route, 404, or disabled page? | 🟡 Open | Prefer 404/unregistered to avoid advertising disabled functionality; confirm UX expectation. |
-| 8 | Should result scores be visible to readers or only available in templates/metadata? | 🟡 Open | Issue asks for relevance score; human/product should decide if visible text or data attribute is preferred. |
+| 1 | Should v1 use Bleve or a custom in-memory inverted index? | ✅ Decided | Use a custom in-memory inverted index for v1. Do not add Bleve; the custom index better fits BlogFlow's minimal dependency, smaller binary, and direct scan-time integration goals. |
+| 2 | Should the search index be persistent or rebuilt in memory only? | ✅ Decided | Use in-memory-only indexes rebuilt at content scan time. This avoids filesystem writes and preserves distroless/read-only-root compatibility. |
+| 3 | What memory budget and corpus size must v1 support? | ✅ Decided | Target ~10,000 posts within an approximate ≤64 MiB search-index heap budget per replica. Enforce `max_docs: 10000` and `max_tokens: 2000000` defaults and expose metrics for actual usage. |
+| 4 | Should `search.enabled` default to false or true? | ✅ Decided | Default `search.enabled` to `false`; search is opt-in for v1 while templates and docs make enablement straightforward. |
+| 5 | Should pages be searchable in addition to posts? | ✅ Decided | V1 indexes posts only. Static/content pages are a documented follow-up. |
+| 6 | What Unicode strategy is required for CJK and languages without whitespace? | ✅ Decided | V1 uses Unicode-normalized whitespace tokenization aligned with existing i18n handling. CJK bigrams are deferred to a follow-up. |
+| 7 | Disabled behavior: unregister route, 404, or disabled page? | ✅ Decided | When disabled, the search route is not registered; `/search` returns the normal 404 and does not advertise disabled functionality. |
+| 8 | Should result scores be visible to readers or only available in templates/metadata? | ✅ Decided | Relevance scores are available to templates/metadata for sorting or optional custom theme display, but the default reader-visible result body does not show numeric scores. |
 
 ---
 
