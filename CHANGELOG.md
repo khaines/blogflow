@@ -11,6 +11,7 @@
 
 ### Security
 
+* [BUGFIX] Go: bump the Go toolchain to 1.26.5, fixing 12 reachable Go standard-library vulnerabilities that `govulncheck` flagged on 1.26.1 — including three `html/template` XSS issues (GO-2026-4865/4980/4982), a `crypto/x509` name-constraint auth bypass (GO-2026-4866), and TLS 1.3 KeyUpdate / HTTP/2 infinite-loop DoS (GO-2026-4870, GO-2026-4918). #279
 * [ENHANCEMENT] Webhook: the IP allowlist (`allowed_ips`) matches CIDR ranges (`net.ParseCIDR` / `net.IPNet.Contains`), and `NewWebhookStrategy` requires an explicit `IPResolver` so the built-in X-Forwarded-For fallback is no longer used in production. #237
 * [ENHANCEMENT] Webhook: additional security hardening — the HMAC signature is verified before event/branch filtering, IPv6-robust bare-IP allowlist matching (`net.IP.Equal` instead of exact-string comparison), and fail-closed client-IP resolution. #252
 * [CHANGE] Webhook: branch-mismatch response changed from `200 OK` ("accepted (no action)") to `202 Accepted` with an `X-Blogflow-Branch-Skipped` header. External consumers checking for a 200 status code on branch-skip responses must be updated. #237
