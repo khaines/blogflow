@@ -21,6 +21,7 @@
 
 ### Configuration
 
+* [CHANGE] Config: `server.metrics_port` (`BLOGFLOW_SERVER_METRICS_PORT`) is renamed to `server.ops_port` (`BLOGFLOW_SERVER_OPS_PORT`) to reflect its dual role (metrics + health/readiness when `private_health` is set). `metrics_port` remains a backward-compatible alias that logs a deprecation warning at startup and is **scheduled for removal in v1.0.0**; setting both `ops_port` and `metrics_port` to different values is a validation error. The internal ops-listener API was renamed to match (`Server.StartOps`/`Server.OpsServer`, `opsServer` field — `internal` package, no external impact). #284 #286
 * [ENHANCEMENT] config: BLOGFLOW_SYNC_WEBHOOK_ALLOWED_IPS env var now overrides sync.webhook.allowed_ips (comma-separated). #249
 * [CHANGE] Webhook: the IP allowlist is now configured via `allowed_ips` (`[]string`, CIDR-aware). The earlier `ip_allowlist: true` boolean that shipped in the embedded default config (`defaults/config/defaults.yaml`) was removed; with strict config parsing (`KnownFields(true)`), a `site.yaml` that still sets `ip_allowlist` will fail to load and must be migrated to `allowed_ips`. #237
 

@@ -7,7 +7,11 @@ metadata:
 data:
   site.yaml: |
     {{- $config := deepCopy .Values.siteConfig -}}
-    {{- if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) -}}
+    {{- if and .Values.service.opsPort (gt (int .Values.service.opsPort) 0) -}}
+      {{- $_ := unset $config.server "metrics_port" -}}
+      {{- $_ := set $config.server "ops_port" (int .Values.service.opsPort) -}}
+    {{- else if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) -}}
+      {{- $_ := unset $config.server "ops_port" -}}
       {{- $_ := set $config.server "metrics_port" (int .Values.service.metricsPort) -}}
     {{- end }}
     {{- $config | toYaml | nindent 4 }}

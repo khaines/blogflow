@@ -280,7 +280,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// Shutdown shuts down both the main and metrics servers.
+		// Shutdown shuts down both the main and ops servers.
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("shutdown error", "error", err)
 		}
@@ -294,19 +294,19 @@ func main() {
 		errCh <- srv.Start()
 	}()
 
-	// Start metrics server on dedicated port (no-op when MetricsPort == 0).
-	metricsErrCh := make(chan error, 1)
+	// Start ops server on its dedicated port (no-op when no ops port is configured).
+	opsErrCh := make(chan error, 1)
 	go func() {
-		metricsErrCh <- srv.StartMetrics()
+		opsErrCh <- srv.StartOps()
 	}()
 
-	// metricsStartCh mirrors metricsErrCh only when a separate metrics
+	// opsStartCh mirrors opsErrCh only when a separate ops
 	// port is configured.  A nil channel is never selected, so the
-	// readiness select below naturally ignores it when MetricsPort == 0
-	// (where StartMetrics returns nil immediately).
-	var metricsStartCh <-chan error
-	if cfg.Server.MetricsPort > 0 {
-		metricsStartCh = metricsErrCh
+	// readiness select below naturally ignores it when no ops port is set
+	// (where StartOps returns nil immediately).
+	var opsStartCh <-chan error
+	if cfg.Server.EffectiveOpsPort() > 0 {
+		opsStartCh = opsErrCh
 	}
 
 	// Wait for listener to bind or an immediate failure
@@ -314,8 +314,8 @@ func main() {
 	case err := <-errCh:
 		logger.Error("server failed to start", "error", err)
 		os.Exit(1)
-	case err := <-metricsStartCh:
-		logger.Error("metrics server failed to start", "error", err)
+	case err := <-opsStartCh:
+		logger.Error("ops server failed to start", "error", err)
 		os.Exit(1)
 	case <-srv.Ready():
 		srv.SetReady(true)
@@ -326,10 +326,10 @@ func main() {
 	}
 
 	// Wait for both servers to finish (shutdown or error).
-	// Using a select ensures that a metrics-server failure (e.g. port
+	// Using a select ensures that an ops-server failure (e.g. port
 	// conflict) is detected immediately rather than going unnoticed until
 	// the main server shuts down.
-	for errCh != nil || metricsErrCh != nil {
+	for errCh != nil || opsErrCh != nil {
 		select {
 		case err := <-errCh:
 			errCh = nil
@@ -337,10 +337,10 @@ func main() {
 				logger.Error("server error", "error", err)
 				os.Exit(1)
 			}
-		case err := <-metricsErrCh:
-			metricsErrCh = nil
+		case err := <-opsErrCh:
+			opsErrCh = nil
 			if err != nil {
-				logger.Error("metrics server error", "error", err)
+				logger.Error("ops server error", "error", err)
 				os.Exit(1)
 			}
 		}

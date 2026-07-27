@@ -121,18 +121,18 @@ func TestCSPOnSeparateMetricsPort(t *testing.T) {
 	}
 }
 
-// TestCSPViaMiddlewareOnMetricsServer verifies that the dedicated metrics
+// TestCSPViaMiddlewareOnOpsServer verifies that the dedicated ops
 // port also carries security headers (CSP, X-Frame-Options, etc.) via the
 // same middleware chain as the main server.
-func TestCSPViaMiddlewareOnMetricsServer(t *testing.T) {
+func TestCSPViaMiddlewareOnOpsServer(t *testing.T) {
 	t.Parallel()
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 9090
 	s := New(cfg, nil)
 
-	ms := s.MetricsServer()
+	ms := s.OpsServer()
 	if ms == nil {
-		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+		t.Fatal("OpsServer() should not be nil when MetricsPort > 0")
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

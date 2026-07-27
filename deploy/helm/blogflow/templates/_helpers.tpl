@@ -78,3 +78,17 @@ Validate sync configuration at render time.
   {{- fail "sync.strategy is 'sidecar' but sync.sidecar.repo is not set" }}
 {{- end }}
 {{- end }}
+
+{{/*
+Effective ops/observability port: prefer service.opsPort, fall back to the
+deprecated service.metricsPort alias. Returns 0 when neither is set.
+*/}}
+{{- define "blogflow.opsPort" -}}
+{{- if and .Values.service.opsPort (gt (int .Values.service.opsPort) 0) -}}
+{{- int .Values.service.opsPort -}}
+{{- else if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) -}}
+{{- int .Values.service.metricsPort -}}
+{{- else -}}
+0
+{{- end -}}
+{{- end -}}

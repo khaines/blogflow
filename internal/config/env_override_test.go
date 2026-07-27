@@ -34,6 +34,34 @@ func TestEnvOverrideInvalidMetricsPort(t *testing.T) {
 	}
 }
 
+func TestEnvOverrideOpsPort(t *testing.T) {
+	t.Setenv("BLOGFLOW_SERVER_OPS_PORT", "9091")
+	fsys := fstest.MapFS{}
+	loader := NewLoader(fsys)
+	cfg, err := loader.Load()
+	if err != nil {
+		t.Fatalf("unexpected error for valid ops port: %v", err)
+	}
+	if cfg.Server.OpsPort != 9091 {
+		t.Errorf("server.ops_port = %d, want 9091", cfg.Server.OpsPort)
+	}
+	if cfg.Server.EffectiveOpsPort() != 9091 {
+		t.Errorf("EffectiveOpsPort() = %d, want 9091", cfg.Server.EffectiveOpsPort())
+	}
+}
+
+func TestEnvOverrideInvalidOpsPort(t *testing.T) {
+	t.Setenv("BLOGFLOW_SERVER_OPS_PORT", "invalid")
+	fsys := fstest.MapFS{}
+	loader := NewLoader(fsys)
+	_, err := loader.Load()
+	if err == nil {
+		t.Error("expected error for invalid ops port, got nil")
+	} else {
+		t.Logf("got expected error: %v", err)
+	}
+}
+
 func TestEnvOverrideValidServerPort(t *testing.T) {
 	t.Setenv("BLOGFLOW_SERVER_PORT", "9090")
 	fsys := fstest.MapFS{}

@@ -19,10 +19,15 @@ const (
 // It honors the server's runtime configuration so the built-in Docker
 // HEALTHCHECK keeps working when health & readiness are moved to the internal
 // ops port via private_health: with BLOGFLOW_SERVER_PRIVATE_HEALTH enabled,
-// /healthz is served only on BLOGFLOW_SERVER_METRICS_PORT. Otherwise it follows
+// /healthz is served only on the ops port (BLOGFLOW_SERVER_OPS_PORT, or the
+// deprecated BLOGFLOW_SERVER_METRICS_PORT alias). Otherwise it follows
 // BLOGFLOW_SERVER_PORT, falling back to the compiled-in default.
 func healthcheckDefaultPort() int {
 	if private, _ := strconv.ParseBool(os.Getenv("BLOGFLOW_SERVER_PRIVATE_HEALTH")); private {
+		// Prefer the canonical ops port; fall back to the deprecated metrics_port alias.
+		if n, err := strconv.Atoi(os.Getenv("BLOGFLOW_SERVER_OPS_PORT")); err == nil && n > 0 {
+			return n
+		}
 		if n, err := strconv.Atoi(os.Getenv("BLOGFLOW_SERVER_METRICS_PORT")); err == nil && n > 0 {
 			return n
 		}

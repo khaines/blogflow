@@ -308,7 +308,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             // management keeps working while the public internet cannot reach
             // or flood /healthz and /readyz.
             {
-              name: 'BLOGFLOW_SERVER_METRICS_PORT'
+              name: 'BLOGFLOW_SERVER_OPS_PORT'
               value: '8081'
             }
             {

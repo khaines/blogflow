@@ -765,11 +765,11 @@ func TestMetricsOnSeparatePort(t *testing.T) {
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.RegisterRoutes(testRouteOptions())
 
-	if s.MetricsServer() == nil {
-		t.Fatal("MetricsServer() should not be nil when MetricsPort > 0")
+	if s.OpsServer() == nil {
+		t.Fatal("OpsServer() should not be nil when MetricsPort > 0")
 	}
 
-	// Start the metrics server on a random port
+	// Start the ops server on a random port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -777,7 +777,7 @@ func TestMetricsOnSeparatePort(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- s.metricsServer.Serve(ln)
+		errCh <- s.opsServer.Serve(ln)
 	}()
 
 	// Make a request through the main server first so blogflow_http_requests_total
@@ -806,14 +806,14 @@ func TestMetricsOnSeparatePort(t *testing.T) {
 		t.Error("/metrics body missing expected BlogFlow metric blogflow_http_requests_total")
 	}
 
-	// Shut down metrics server
+	// Shut down ops server
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := s.metricsServer.Shutdown(ctx); err != nil {
-		t.Fatalf("metrics server shutdown error: %v", err)
+	if err := s.opsServer.Shutdown(ctx); err != nil {
+		t.Fatalf("ops server shutdown error: %v", err)
 	}
 	if err := <-errCh; err != nil && err != http.ErrServerClosed {
-		t.Fatalf("metrics server returned unexpected error: %v", err)
+		t.Fatalf("ops server returned unexpected error: %v", err)
 	}
 }
 
@@ -824,7 +824,7 @@ func TestHealthzOnMetricsPort(t *testing.T) {
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.RegisterRoutes(testRouteOptions())
 
-	// Start metrics server on a random port
+	// Start ops server on a random port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -832,7 +832,7 @@ func TestHealthzOnMetricsPort(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- s.metricsServer.Serve(ln)
+		errCh <- s.opsServer.Serve(ln)
 	}()
 
 	// /healthz should be available on the metrics port
@@ -863,11 +863,11 @@ func TestHealthzOnMetricsPort(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := s.metricsServer.Shutdown(ctx); err != nil {
-		t.Fatalf("metrics server shutdown error: %v", err)
+	if err := s.opsServer.Shutdown(ctx); err != nil {
+		t.Fatalf("ops server shutdown error: %v", err)
 	}
 	if err := <-errCh; err != nil && err != http.ErrServerClosed {
-		t.Fatalf("metrics server returned unexpected error: %v", err)
+		t.Fatalf("ops server returned unexpected error: %v", err)
 	}
 }
 
@@ -939,7 +939,7 @@ func TestPrivateHealth(t *testing.T) {
 	for _, c := range checks {
 		req := httptest.NewRequest(http.MethodGet, c.path, nil)
 		rec := httptest.NewRecorder()
-		s.metricsServer.Handler.ServeHTTP(rec, req)
+		s.opsServer.Handler.ServeHTTP(rec, req)
 		if rec.Code != c.want {
 			t.Errorf("ops %s: status = %d, want %d", c.path, rec.Code, c.want)
 		}
@@ -975,7 +975,7 @@ func TestReadyzOnMetricsPort(t *testing.T) {
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodGet, c.path, nil)
 		rec := httptest.NewRecorder()
-		s.metricsServer.Handler.ServeHTTP(rec, req)
+		s.opsServer.Handler.ServeHTTP(rec, req)
 		if rec.Code != c.want {
 			t.Errorf("metrics %s: status = %d, want %d", c.path, rec.Code, c.want)
 		}
@@ -990,25 +990,59 @@ func TestReadyzOnMetricsPort(t *testing.T) {
 	}
 }
 
-func TestMetricsServer_NilWhenPortZero(t *testing.T) {
+func TestHealthzOnOpsPort(t *testing.T) {
 	cfg := defaultTestConfig()
-	cfg.Server.MetricsPort = 0
+	cfg.Server.OpsPort = 19095 // canonical ops port, no metrics_port alias
 
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+	s.SetReady(true)
 
-	if s.MetricsServer() != nil {
-		t.Error("MetricsServer() should be nil when MetricsPort is 0")
+	if s.opsServer == nil {
+		t.Fatal("expected ops listener to be configured when ops_port is set")
+	}
+	if got := s.opsServer.Addr; got != ":19095" {
+		t.Errorf("ops listener Addr = %q, want %q", got, ":19095")
+	}
+
+	// The ops listener serves metrics + health + readiness.
+	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		s.opsServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("ops %s: status = %d, want %d", p, rec.Code, http.StatusOK)
+		}
+	}
+
+	// When a separate ops port is configured, /metrics is not on the main mux.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("main /metrics: status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
-func TestStartMetrics_NilWhenPortZero(t *testing.T) {
+func TestOpsServer_NilWhenPortZero(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 0
 
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	// StartMetrics should return nil immediately when no metrics server
-	if err := s.StartMetrics(); err != nil {
-		t.Errorf("StartMetrics() = %v, want nil", err)
+	if s.OpsServer() != nil {
+		t.Error("OpsServer() should be nil when MetricsPort is 0")
+	}
+}
+
+func TestStartOps_NilWhenPortZero(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 0
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	// StartOps should return nil immediately when no ops server
+	if err := s.StartOps(); err != nil {
+		t.Errorf("StartOps() = %v, want nil", err)
 	}
 }

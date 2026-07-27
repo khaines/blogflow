@@ -11,8 +11,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
-    {{- if and .Values.service.metricsPort (gt (int .Values.service.metricsPort) 0) }}
-    - port: {{ .Values.service.metricsPort }}
+    {{- $opsPort := int (include "blogflow.opsPort" .) }}
+    {{- if gt $opsPort 0 }}
+    {{- /* Named "metrics" for backward compatibility with existing ServiceMonitor
+           selectors; the number comes from service.opsPort (or the deprecated
+           service.metricsPort alias). */}}
+    - port: {{ $opsPort }}
       targetPort: metrics
       protocol: TCP
       name: metrics

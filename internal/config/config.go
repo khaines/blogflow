@@ -63,13 +63,23 @@ type ThemeConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port        int `yaml:"port"`
+	Port int `yaml:"port"`
+	// OpsPort is the internal ops/observability listener. When > 0 it serves
+	// /metrics, /healthz, /readyz and /readyz/content on a dedicated port,
+	// separate from the public content port. Env: BLOGFLOW_SERVER_OPS_PORT.
+	OpsPort int `yaml:"ops_port"`
+	// MetricsPort is the deprecated alias for OpsPort, retained for backward
+	// compatibility. Prefer OpsPort/ops_port. When OpsPort is unset and
+	// MetricsPort is set, MetricsPort is used and a deprecation warning is
+	// logged at load time. Scheduled for removal in v1.0.0.
+	// Env: BLOGFLOW_SERVER_METRICS_PORT (deprecated).
 	MetricsPort int `yaml:"metrics_port"`
 	// PrivateHealth, when true, removes the /healthz, /readyz and
 	// /readyz/content endpoints from the public listener and serves them only
-	// on the internal MetricsPort listener. Requires MetricsPort > 0. Use this
-	// so orchestrator probes (which reach the container port directly) keep
-	// working while the public internet cannot reach or flood these endpoints.
+	// on the internal ops-port listener. Requires the ops port (OpsPort, or the
+	// deprecated MetricsPort alias) to be set. Use this so orchestrator probes
+	// (which reach the container port directly) keep working while the public
+	// internet cannot reach or flood these endpoints.
 	PrivateHealth     bool          `yaml:"private_health"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
 	WriteTimeout      time.Duration `yaml:"write_timeout"`
@@ -77,6 +87,17 @@ type ServerConfig struct {
 	TLSTerminated     bool          `yaml:"tls_terminated"`
 	HSTSMaxAge        int           `yaml:"hsts_max_age"`
 	TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs"`
+}
+
+// EffectiveOpsPort returns the resolved internal ops/observability port,
+// preferring OpsPort and falling back to the deprecated MetricsPort alias.
+// A return value of 0 means no dedicated ops port is configured (ops
+// endpoints are served on the main port).
+func (s ServerConfig) EffectiveOpsPort() int {
+	if s.OpsPort != 0 {
+		return s.OpsPort
+	}
+	return s.MetricsPort
 }
 
 // CacheConfig holds rendered content cache settings.
