@@ -189,7 +189,7 @@ func (l *Loader) Load() (*Config, error) {
 	// unset). If ops_port is set, metrics_port is either redundant (same value)
 	// or a conflict caught by Validate — no deprecation nudge is needed.
 	if cfg.Server.MetricsPort != 0 && cfg.Server.OpsPort == 0 {
-		l.logger.Warn("server.metrics_port is deprecated; use server.ops_port (env BLOGFLOW_SERVER_OPS_PORT). The metrics_port alias will be removed in a future release.",
+		l.logger.Warn("server.metrics_port is deprecated; use server.ops_port (env BLOGFLOW_SERVER_OPS_PORT). The metrics_port alias is scheduled for removal in v1.0.0.",
 			"metrics_port", cfg.Server.MetricsPort,
 		)
 	}

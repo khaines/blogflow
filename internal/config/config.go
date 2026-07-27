@@ -71,7 +71,8 @@ type ServerConfig struct {
 	// MetricsPort is the deprecated alias for OpsPort, retained for backward
 	// compatibility. Prefer OpsPort/ops_port. When OpsPort is unset and
 	// MetricsPort is set, MetricsPort is used and a deprecation warning is
-	// logged at load time. Env: BLOGFLOW_SERVER_METRICS_PORT (deprecated).
+	// logged at load time. Scheduled for removal in v1.0.0.
+	// Env: BLOGFLOW_SERVER_METRICS_PORT (deprecated).
 	MetricsPort int `yaml:"metrics_port"`
 	// PrivateHealth, when true, removes the /healthz, /readyz and
 	// /readyz/content endpoints from the public listener and serves them only

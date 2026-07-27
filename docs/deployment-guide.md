@@ -951,6 +951,8 @@ readinessProbe:
 When `server.ops_port` is configured, the health and readiness endpoints (`/healthz`, `/readyz`, `/readyz/content`) are served on **both** the main port and the ops port, and `/metrics` moves to the ops port only.
 
 > `server.metrics_port` (`BLOGFLOW_SERVER_METRICS_PORT`) is a **deprecated alias** for `ops_port`, retained for backward compatibility — it still works but logs a deprecation warning at startup. Prefer `ops_port` / `BLOGFLOW_SERVER_OPS_PORT`. Setting both to different values is a validation error.
+>
+> **Migration & timeline:** `metrics_port` is deprecated and **scheduled for removal in v1.0.0**. Before upgrading to v1.0.0, rename `metrics_port` → `ops_port` (env `BLOGFLOW_SERVER_METRICS_PORT` → `BLOGFLOW_SERVER_OPS_PORT`; Helm `service.metricsPort` → `service.opsPort`). Because config parsing is strict (`KnownFields(true)`), a `site.yaml` that still contains `metrics_port` after the alias is removed will fail to load.
 
 | Port | `/healthz` | `/readyz` | `/readyz/content` | `/metrics` |
 |------|-----------|-----------|-------------------|------------|

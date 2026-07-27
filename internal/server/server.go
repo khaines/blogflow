@@ -30,7 +30,7 @@ type ContentChecker interface {
 // Server is the BlogFlow HTTP server.
 type Server struct {
 	httpServer     *http.Server
-	metricsServer  *http.Server // ops/observability listener; nil when no ops port is configured
+	opsServer      *http.Server // ops/observability listener; nil when no ops port is configured
 	mux            *http.ServeMux
 	config         *config.Config
 	logger         *slog.Logger
@@ -73,14 +73,14 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 	}
 
 	if opsPort := cfg.Server.EffectiveOpsPort(); opsPort > 0 {
-		metricsMux := http.NewServeMux()
-		metricsMux.Handle("GET /metrics", MetricsHandler())
-		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
-		metricsMux.HandleFunc("GET /readyz", s.readyHandler)
-		metricsMux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
-		s.metricsServer = &http.Server{
+		opsMux := http.NewServeMux()
+		opsMux.Handle("GET /metrics", MetricsHandler())
+		opsMux.HandleFunc("GET /healthz", s.healthHandler)
+		opsMux.HandleFunc("GET /readyz", s.readyHandler)
+		opsMux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
+		s.opsServer = &http.Server{
 			Addr:              fmt.Sprintf(":%d", opsPort),
-			Handler:           s.middleware(metricsMux),
+			Handler:           s.middleware(opsMux),
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      cfg.Server.WriteTimeout,
@@ -151,7 +151,7 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	s.mux.HandleFunc("GET /sitemap.xml", opts.SitemapHandler)
 
 	// Health checks. When PrivateHealth is set these are served only on the
-	// internal metrics/ops port (see New) and are removed from the public
+	// internal ops port (see New) and are removed from the public
 	// listener so they cannot be reached or flooded from the internet.
 	if !s.config.Server.PrivateHealth {
 		s.mux.HandleFunc("GET /healthz", s.healthHandler)
@@ -218,19 +218,19 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // Shutdown gracefully stops the server with the given context deadline.
-// If a separate metrics server is running, both servers are shut down
+// If a separate ops server is running, both servers are shut down
 // concurrently so that one cannot consume the other's timeout budget.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("server shutting down")
 
-	var metricsErr error
+	var opsErr error
 	var wg sync.WaitGroup
-	if s.metricsServer != nil {
+	if s.opsServer != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.metricsServer.Shutdown(ctx); err != nil {
-				metricsErr = fmt.Errorf("metrics server: %w", err)
+			if err := s.opsServer.Shutdown(ctx); err != nil {
+				opsErr = fmt.Errorf("ops server: %w", err)
 			}
 		}()
 	}
@@ -240,32 +240,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		mainErr = fmt.Errorf("main server: %w", err)
 	}
 	wg.Wait()
-	return errors.Join(mainErr, metricsErr)
+	return errors.Join(mainErr, opsErr)
 }
 
-// StartMetrics starts the metrics server on its dedicated port.
-// Returns nil immediately if no separate metrics port is configured.
-// Blocks until the metrics server stops.
-func (s *Server) StartMetrics() error {
-	if s.metricsServer == nil {
+// StartOps starts the ops server on its dedicated port.
+// Returns nil immediately if no separate ops port is configured.
+// Blocks until the ops server stops.
+func (s *Server) StartOps() error {
+	if s.opsServer == nil {
 		return nil
 	}
-	addr := s.metricsServer.Addr
+	addr := s.opsServer.Addr
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("metrics server: %w", err)
+		return fmt.Errorf("ops server: %w", err)
 	}
-	s.logger.Info("metrics server listening", "addr", ln.Addr().String())
-	if err := s.metricsServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("metrics server: %w", err)
+	s.logger.Info("ops server listening", "addr", ln.Addr().String())
+	if err := s.opsServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("ops server: %w", err)
 	}
 	return nil
 }
 
-// MetricsServer returns the dedicated metrics *http.Server, or nil
-// if metrics are served on the main port.
-func (s *Server) MetricsServer() *http.Server {
-	return s.metricsServer
+// OpsServer returns the dedicated ops *http.Server, or nil
+// if ops endpoints are served on the main port.
+func (s *Server) OpsServer() *http.Server {
+	return s.opsServer
 }
 
 // IPResolver returns the server's ClientIPResolver, which resolves the
