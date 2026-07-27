@@ -178,7 +178,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       activeRevisionsMode: 'Multiple'
 
-      // --- Ingress: external HTTPS on port 8080 ---
+      // --- Ingress: external HTTPS on port 8080 (public content only; health
+      //     & readiness are served on internal ops port 8081, not exposed) ---
       ingress: {
         external: true
         targetPort: 8080
@@ -301,13 +302,26 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'BLOGFLOW_SITE_DESCRIPTION'
               value: 'Documentation for BlogFlow — the anti-WordPress blog engine'
             }
+            // Serve health & readiness on an internal ops port (8081) that is
+            // NOT exposed via ingress, and remove them from the public port
+            // (8080). Container Apps probes reach 8081 directly, so lifecycle
+            // management keeps working while the public internet cannot reach
+            // or flood /healthz and /readyz.
+            {
+              name: 'BLOGFLOW_SERVER_METRICS_PORT'
+              value: '8081'
+            }
+            {
+              name: 'BLOGFLOW_SERVER_PRIVATE_HEALTH'
+              value: 'true'
+            }
           ]
           probes: [
             {
               type: 'Liveness'
               httpGet: {
                 path: '/healthz'
-                port: 8080
+                port: 8081
               }
               initialDelaySeconds: 10
               periodSeconds: 15
@@ -316,7 +330,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               type: 'Readiness'
               httpGet: {
                 path: '/readyz?strict=true'
-                port: 8080
+                port: 8081
               }
               initialDelaySeconds: 5
               periodSeconds: 5
@@ -326,7 +340,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               type: 'Startup'
               httpGet: {
                 path: '/readyz?strict=true'
-                port: 8080
+                port: 8081
               }
               periodSeconds: 2
               failureThreshold: 60

@@ -32,6 +32,33 @@ func newTestHealthServer(t *testing.T, status int) net.Listener {
 	return ln
 }
 
+func TestHealthcheckDefaultPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		private string
+		metrics string
+		port    string
+		want    int
+	}{
+		{"defaults", "", "", "", defaultPort},
+		{"private health uses metrics port", "true", "8081", "", 8081},
+		{"private health without metrics port falls back to server port", "true", "", "9000", 9000},
+		{"private health without any port falls back to default", "true", "", "", defaultPort},
+		{"custom server port", "", "", "9090", 9090},
+		{"private false ignores metrics port", "false", "8081", "", defaultPort},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BLOGFLOW_SERVER_PRIVATE_HEALTH", tt.private)
+			t.Setenv("BLOGFLOW_SERVER_METRICS_PORT", tt.metrics)
+			t.Setenv("BLOGFLOW_SERVER_PORT", tt.port)
+			if got := healthcheckDefaultPort(); got != tt.want {
+				t.Errorf("healthcheckDefaultPort() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunHealthcheck_Healthy(t *testing.T) {
 	ln := newTestHealthServer(t, http.StatusOK)
 	defer ln.Close() //nolint:errcheck

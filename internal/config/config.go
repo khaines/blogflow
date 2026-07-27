@@ -63,8 +63,14 @@ type ThemeConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port              int           `yaml:"port"`
-	MetricsPort       int           `yaml:"metrics_port"`
+	Port        int `yaml:"port"`
+	MetricsPort int `yaml:"metrics_port"`
+	// PrivateHealth, when true, removes the /healthz, /readyz and
+	// /readyz/content endpoints from the public listener and serves them only
+	// on the internal MetricsPort listener. Requires MetricsPort > 0. Use this
+	// so orchestrator probes (which reach the container port directly) keep
+	// working while the public internet cannot reach or flood these endpoints.
+	PrivateHealth     bool          `yaml:"private_health"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
 	WriteTimeout      time.Duration `yaml:"write_timeout"`
 	IdleTimeout       time.Duration `yaml:"idle_timeout"`

@@ -163,9 +163,13 @@ on main (i.e., after a new container image is pushed to GHCR).
 After the first deploy, generate a little traffic so BlogFlow emits metrics:
 
 ```bash
-curl -fsS https://<container-app-fqdn>/healthz
-curl -fsS https://<container-app-fqdn>/readyz
+curl -fsS https://<container-app-fqdn>/
 ```
+
+> Note: `/healthz` and `/readyz` are **not** reachable on the public FQDN in this
+> deployment — `private_health` is enabled and they are served only on the
+> internal ops port `8081`, which the Container Apps probes reach directly. Use
+> `/` (or any content path) to generate public traffic.
 
 Confirm metrics are **not** going to Log Analytics / Application Insights:
 
@@ -353,7 +357,7 @@ count by (deployment_environment) (blogflow_http_requests_total)
 ```
 
 Generate a request first if the app is scaled to zero or idle, for example
-`curl -fsS https://<container-app-fqdn>/healthz`, then run the query. Otherwise
+`curl -fsS https://<container-app-fqdn>/`, then run the query. Otherwise
 an idle deployment with no recent `blogflow_http_requests_total` samples can
 return empty even when the label promotion is configured correctly. For older
 samples, use a wider range query in Azure Monitor. The result should include the
