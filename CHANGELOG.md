@@ -16,6 +16,7 @@
 * [ENHANCEMENT] Webhook: additional security hardening — the HMAC signature is verified before event/branch filtering, IPv6-robust bare-IP allowlist matching (`net.IP.Equal` instead of exact-string comparison), and fail-closed client-IP resolution. #252
 * [CHANGE] Webhook: branch-mismatch response changed from `200 OK` ("accepted (no action)") to `202 Accepted` with an `X-Blogflow-Branch-Skipped` header. External consumers checking for a 200 status code on branch-skip responses must be updated. #237
 * [ENHANCEMENT] Config: oversized `site.yaml` is now read with a bounded reader (`io.LimitReader`), rejecting files over the 1 MB limit before parsing to prevent memory exhaustion. #250
+* [ENHANCEMENT] Server: add `server.private_health` (env `BLOGFLOW_SERVER_PRIVATE_HEALTH`) to serve `/healthz`, `/readyz` and `/readyz/content` on the internal metrics/ops port only, removing them from the public listener — a guard returns a cheap 404 for those paths before tracing/logging runs, so they cannot be reached or flooded from the internet while orchestrator probes (which hit the container port directly) keep working. The Azure Container Apps deployment enables it and repoints the liveness/readiness/startup probes to the internal ops port (8081). #283
 
 ### Configuration
 
