@@ -948,7 +948,7 @@ readinessProbe:
 
 ### Metrics / Ops Port
 
-When `server.metrics_port` is configured, the health and readiness endpoints (`/healthz`, `/readyz`, `/readyz/content`) are served on **both** the main port and the metrics port, and `/metrics` moves to the metrics port only.
+When `server.metrics_port` is configured, the health and readiness endpoints (`/healthz`, `/readyz`, `/readyz/content`) are served on **both** the main port and the metrics port, and `/metrics` moves to the metrics port only. (As of #283 `/readyz` and `/readyz/content` are also on the metrics port — previously only `/healthz` was.)
 
 | Port | `/healthz` | `/readyz` | `/readyz/content` | `/metrics` |
 |------|-----------|-----------|-------------------|------------|
@@ -978,7 +978,7 @@ livenessProbe:
     port: 8081
 ```
 
-> With `private_health` enabled, the Docker `HEALTHCHECK` must target the ops port: `["/app", "healthcheck", "--port", "8081"]`.
+> With `private_health` enabled, the built-in `healthcheck` subcommand automatically targets the ops port (it reads `BLOGFLOW_SERVER_PRIVATE_HEALTH` and `BLOGFLOW_SERVER_METRICS_PORT`), so the Docker `HEALTHCHECK` keeps working with no override needed. Pass `--port` to target a specific port explicitly.
 >
 > **Residual note:** moving the endpoints off the public port (and cheap-404ing floods) removes per-request tracing/logging cost, but volumetric floods still open TCP connections and count toward the platform's HTTP autoscaler. For full volumetric protection, front the app with a WAF/rate limiter (e.g. Azure Front Door) or a custom scale rule.
 

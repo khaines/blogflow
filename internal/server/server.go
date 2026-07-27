@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -274,28 +275,38 @@ func (s *Server) IPResolver() *ClientIPResolver {
 	return s.ipResolver
 }
 
-// middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.
 // publicHealthGuard intercepts health and readiness paths on the public
 // listener when PrivateHealth is enabled, returning a minimal 404 before any
 // tracing, logging or other middleware runs. This keeps floods to these paths
 // cheap (no span or access-log line per request) and ensures readiness state
 // is never exposed publicly. Orchestrator probes must target the internal
 // MetricsPort listener instead. When PrivateHealth is disabled it is a no-op.
+//
+// The request path is normalized with path.Clean so slash variants such as
+// "/healthz/" or "//healthz" are intercepted cheaply rather than falling
+// through to the middleware chain.
 func (s *Server) publicHealthGuard(next http.Handler) http.Handler {
 	if !s.config.Server.PrivateHealth {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
+		switch path.Clean(r.URL.Path) {
 		case "/healthz", "/readyz", "/readyz/content":
+			// Match the server's normal 404 shape (text body + nosniff) so the
+			// response can't be used to fingerprint that private_health is on,
+			// while staying cheap enough to shrug off floods.
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintln(w, "not found")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
+// middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.
 func (s *Server) middleware(next http.Handler) http.Handler {
 	// Order: request-ID (outermost) → otelhttp → logging → recovery → security headers → metrics → handler
 	return s.requestIDMiddleware(

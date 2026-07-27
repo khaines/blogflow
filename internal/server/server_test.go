@@ -880,13 +880,44 @@ func TestPrivateHealth(t *testing.T) {
 	s.RegisterRoutes(testRouteOptions())
 	s.SetReady(true)
 
-	// Health & readiness must NOT be reachable on the public listener.
-	for _, path := range []string{"/healthz", "/readyz", "/readyz/content"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
+	// Health & readiness must NOT be reachable on the public listener — including
+	// slash and query-string variants and non-GET methods — and each blocked
+	// response carries Cache-Control: no-store and nosniff.
+	blocked := []struct {
+		method string
+		target string
+	}{
+		{http.MethodGet, "/healthz"},
+		{http.MethodGet, "/readyz"},
+		{http.MethodGet, "/readyz/content"},
+		{http.MethodGet, "/healthz/"},           // trailing slash
+		{http.MethodGet, "/readyz?strict=true"}, // query string
+		{http.MethodHead, "/healthz"},           // non-GET method
+	}
+	for _, b := range blocked {
+		req := httptest.NewRequest(b.method, b.target, nil)
 		rec := httptest.NewRecorder()
 		s.httpServer.Handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
-			t.Errorf("public %s: status = %d, want %d", path, rec.Code, http.StatusNotFound)
+			t.Errorf("public %s %s: status = %d, want %d", b.method, b.target, rec.Code, http.StatusNotFound)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("public %s %s: Cache-Control = %q, want %q", b.method, b.target, got, "no-store")
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("public %s %s: X-Content-Type-Options = %q, want %q", b.method, b.target, got, "nosniff")
+		}
+	}
+
+	// Doubled-slash variant must also be intercepted. Set Path directly because
+	// httptest.NewRequest parses a "//..." target as a scheme-relative URL.
+	{
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.URL.Path = "//healthz"
+		rec := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("public //healthz: status = %d, want %d", rec.Code, http.StatusNotFound)
 		}
 	}
 
@@ -914,6 +945,42 @@ func TestPrivateHealth(t *testing.T) {
 	s.httpServer.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("public /: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestReadyzOnMetricsPort(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 19094 // PrivateHealth stays false — default behavior
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+	s.SetReady(true)
+
+	// /readyz and /readyz/content are served on the ops/metrics listener even
+	// when private_health is off (matches the deployment-guide port matrix).
+	cases := []struct {
+		path string
+		want int
+	}{
+		{"/healthz", http.StatusOK},
+		{"/readyz", http.StatusOK},
+		{"/readyz/content", http.StatusServiceUnavailable}, // no content checker configured
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		rec := httptest.NewRecorder()
+		s.metricsServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("metrics %s: status = %d, want %d", c.path, rec.Code, c.want)
+		}
+	}
+
+	// With private_health off, they also remain on the public listener.
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("public /readyz: status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 

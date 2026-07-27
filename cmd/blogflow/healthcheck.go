@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -14,13 +15,31 @@ const (
 	defaultPort        = 8080
 )
 
+// healthcheckDefaultPort returns the port to probe when --port is not supplied.
+// It honors the server's runtime configuration so the built-in Docker
+// HEALTHCHECK keeps working when health & readiness are moved to the internal
+// ops port via private_health: with BLOGFLOW_SERVER_PRIVATE_HEALTH enabled,
+// /healthz is served only on BLOGFLOW_SERVER_METRICS_PORT. Otherwise it follows
+// BLOGFLOW_SERVER_PORT, falling back to the compiled-in default.
+func healthcheckDefaultPort() int {
+	if private, _ := strconv.ParseBool(os.Getenv("BLOGFLOW_SERVER_PRIVATE_HEALTH")); private {
+		if n, err := strconv.Atoi(os.Getenv("BLOGFLOW_SERVER_METRICS_PORT")); err == nil && n > 0 {
+			return n
+		}
+	}
+	if n, err := strconv.Atoi(os.Getenv("BLOGFLOW_SERVER_PORT")); err == nil && n > 0 {
+		return n
+	}
+	return defaultPort
+}
+
 // runHealthcheck performs an HTTP GET against the local /healthz endpoint
 // and exits 0 on success (HTTP 200) or 1 on any failure. This allows
 // distroless containers (no curl/wget) to use the binary itself as a
 // Docker HEALTHCHECK or Kubernetes liveness probe command.
 func runHealthcheck(args []string) int {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-	port := fs.Int("port", defaultPort, "port to probe")
+	port := fs.Int("port", healthcheckDefaultPort(), "port to probe")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 		return 1
