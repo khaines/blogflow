@@ -990,6 +990,40 @@ func TestReadyzOnMetricsPort(t *testing.T) {
 	}
 }
 
+func TestHealthzOnOpsPort(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.OpsPort = 19095 // canonical ops port, no metrics_port alias
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+	s.SetReady(true)
+
+	if s.metricsServer == nil {
+		t.Fatal("expected ops listener to be configured when ops_port is set")
+	}
+	if got := s.metricsServer.Addr; got != ":19095" {
+		t.Errorf("ops listener Addr = %q, want %q", got, ":19095")
+	}
+
+	// The ops listener serves metrics + health + readiness.
+	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		s.metricsServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("ops %s: status = %d, want %d", p, rec.Code, http.StatusOK)
+		}
+	}
+
+	// When a separate ops port is configured, /metrics is not on the main mux.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("main /metrics: status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestMetricsServer_NilWhenPortZero(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 0

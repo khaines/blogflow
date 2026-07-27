@@ -30,7 +30,7 @@ type ContentChecker interface {
 // Server is the BlogFlow HTTP server.
 type Server struct {
 	httpServer     *http.Server
-	metricsServer  *http.Server // nil when MetricsPort == 0
+	metricsServer  *http.Server // ops/observability listener; nil when no ops port is configured
 	mux            *http.ServeMux
 	config         *config.Config
 	logger         *slog.Logger
@@ -72,14 +72,14 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		IdleTimeout:       cfg.Server.IdleTimeout,
 	}
 
-	if cfg.Server.MetricsPort > 0 {
+	if cfg.Server.EffectiveOpsPort() > 0 {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("GET /metrics", MetricsHandler())
 		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
 		metricsMux.HandleFunc("GET /readyz", s.readyHandler)
 		metricsMux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 		s.metricsServer = &http.Server{
-			Addr:              fmt.Sprintf(":%d", cfg.Server.MetricsPort),
+			Addr:              fmt.Sprintf(":%d", cfg.Server.EffectiveOpsPort()),
 			Handler:           s.middleware(metricsMux),
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			ReadHeaderTimeout: 5 * time.Second,
@@ -159,8 +159,8 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 		s.mux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 	}
 
-	// Prometheus metrics: on main mux only when no separate metrics port is configured
-	if s.config.Server.MetricsPort == 0 {
+	// Prometheus metrics: on main mux only when no separate ops port is configured
+	if s.config.Server.EffectiveOpsPort() == 0 {
 		s.mux.Handle("GET /metrics", MetricsHandler())
 	}
 
@@ -280,7 +280,7 @@ func (s *Server) IPResolver() *ClientIPResolver {
 // tracing, logging or other middleware runs. This keeps floods to these paths
 // cheap (no span or access-log line per request) and ensures readiness state
 // is never exposed publicly. Orchestrator probes must target the internal
-// MetricsPort listener instead. When PrivateHealth is disabled it is a no-op.
+// ops-port listener instead. When PrivateHealth is disabled it is a no-op.
 //
 // The request path is normalized with path.Clean so slash variants such as
 // "/healthz/" or "//healthz" are intercepted cheaply rather than falling

@@ -153,3 +153,39 @@ func TestLoad_NilLoggerDoesNotPanic(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 }
+
+func TestLoad_LogsMetricsPortDeprecation(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	fsys := fstest.MapFS{
+		"site.yaml": &fstest.MapFile{Data: []byte("server:\n  metrics_port: 9090\n")},
+	}
+	loader := NewLoader(fsys, WithLogger(logger))
+	if _, err := loader.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "metrics_port is deprecated") {
+		t.Errorf("expected metrics_port deprecation warning, got:\n%s", out)
+	}
+}
+
+func TestLoad_NoDeprecationWarningForOpsPort(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	fsys := fstest.MapFS{
+		"site.yaml": &fstest.MapFile{Data: []byte("server:\n  ops_port: 8081\n")},
+	}
+	loader := NewLoader(fsys, WithLogger(logger))
+	if _, err := loader.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "metrics_port is deprecated") {
+		t.Errorf("did not expect deprecation warning when using ops_port, got:\n%s", out)
+	}
+}

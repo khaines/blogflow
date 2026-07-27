@@ -1091,6 +1091,121 @@ func TestValidate_PrivateHealth_Valid(t *testing.T) {
 	}
 }
 
+func TestEffectiveOpsPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		ops     int
+		metrics int
+		want    int
+	}{
+		{"neither set", 0, 0, 0},
+		{"ops only", 8081, 0, 8081},
+		{"metrics alias only", 0, 9090, 9090},
+		{"ops takes precedence over metrics alias", 8081, 9090, 8081},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ServerConfig{OpsPort: tt.ops, MetricsPort: tt.metrics}
+			if got := s.EffectiveOpsPort(); got != tt.want {
+				t.Errorf("EffectiveOpsPort() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidate_OpsPort_Valid(t *testing.T) {
+	cfg := Default()
+	cfg.Server.OpsPort = 8081
+	if err := Validate(cfg); err != nil {
+		t.Errorf("unexpected validation error for valid ops_port: %v", err)
+	}
+}
+
+func TestValidate_OpsPort_OutOfRange(t *testing.T) {
+	cfg := Default()
+	cfg.Server.OpsPort = 70000
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for out-of-range ops_port")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "server.ops_port" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected server.ops_port field error")
+	}
+}
+
+func TestValidate_OpsPort_SameAsPort(t *testing.T) {
+	cfg := Default()
+	cfg.Server.OpsPort = cfg.Server.Port
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error when ops_port == port")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "server.ops_port" && strings.Contains(fe.Message, "different") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected server.ops_port field error about being different from port")
+	}
+}
+
+func TestValidate_OpsPort_ConflictsWithMetricsAlias(t *testing.T) {
+	cfg := Default()
+	cfg.Server.OpsPort = 8081
+	cfg.Server.MetricsPort = 9090 // different value — ambiguous
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error when ops_port and metrics_port conflict")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "server.metrics_port" && strings.Contains(fe.Message, "conflicts") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected server.metrics_port conflict error")
+	}
+}
+
+func TestValidate_OpsPort_EqualToMetricsAlias_OK(t *testing.T) {
+	cfg := Default()
+	cfg.Server.OpsPort = 8081
+	cfg.Server.MetricsPort = 8081 // same value — not a conflict
+	if err := Validate(cfg); err != nil {
+		t.Errorf("unexpected validation error when ops_port == metrics_port: %v", err)
+	}
+}
+
+func TestValidate_PrivateHealth_Valid_WithOpsPort(t *testing.T) {
+	cfg := Default()
+	cfg.Server.PrivateHealth = true
+	cfg.Server.OpsPort = 8081
+	if err := Validate(cfg); err != nil {
+		t.Errorf("unexpected validation error for private_health with ops_port: %v", err)
+	}
+}
+
 func TestValidate_Homepage(t *testing.T) {
 	tests := []struct {
 		name    string

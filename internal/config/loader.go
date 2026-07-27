@@ -185,6 +185,12 @@ func (l *Loader) Load() (*Config, error) {
 		)
 	}
 
+	if cfg.Server.MetricsPort != 0 {
+		l.logger.Warn("server.metrics_port is deprecated; use server.ops_port (env BLOGFLOW_SERVER_OPS_PORT). The metrics_port alias will be removed in a future release.",
+			"metrics_port", cfg.Server.MetricsPort,
+		)
+	}
+
 	if err := Validate(cfg); err != nil {
 		l.logger.Warn("config validation failed", "error", err)
 		return nil, err
@@ -429,6 +435,14 @@ var envMap = map[string]func(*Config, string, *slog.Logger) error{
 		c.Server.HSTSMaxAge = n
 		return nil
 	},
+	"BLOGFLOW_SERVER_OPS_PORT": func(c *Config, v string, _ *slog.Logger) error {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_OPS_PORT as int: %w", err)
+		}
+		c.Server.OpsPort = n
+		return nil
+	},
 	"BLOGFLOW_SERVER_METRICS_PORT": func(c *Config, v string, _ *slog.Logger) error {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -514,32 +528,47 @@ func Validate(cfg *Config) error {
 		})
 	}
 
-	// Server.MetricsPort: 0 = disabled (metrics on main port); 1-65535 = separate listener
-	if cfg.Server.MetricsPort != 0 {
-		if cfg.Server.MetricsPort < 1 || cfg.Server.MetricsPort > 65535 {
+	// Server.OpsPort (with the deprecated server.metrics_port alias):
+	// 0 = disabled (ops endpoints on main port); 1-65535 = separate listener.
+	opsPort := cfg.Server.EffectiveOpsPort()
+	opsField := "server.ops_port"
+	if cfg.Server.OpsPort == 0 && cfg.Server.MetricsPort != 0 {
+		opsField = "server.metrics_port"
+	}
+	if opsPort != 0 {
+		if opsPort < 1 || opsPort > 65535 {
 			errs = append(errs, FieldError{
-				Field:   "server.metrics_port",
-				Value:   cfg.Server.MetricsPort,
+				Field:   opsField,
+				Value:   opsPort,
 				Message: "must be between 1 and 65535",
 			})
 		}
-		if cfg.Server.MetricsPort == cfg.Server.Port {
+		if opsPort == cfg.Server.Port {
 			errs = append(errs, FieldError{
-				Field:   "server.metrics_port",
-				Value:   cfg.Server.MetricsPort,
+				Field:   opsField,
+				Value:   opsPort,
 				Message: "must be different from server.port",
 			})
 		}
 	}
+	// Reject setting both the canonical ops_port and the deprecated alias to
+	// conflicting values — the configuration would be ambiguous.
+	if cfg.Server.OpsPort != 0 && cfg.Server.MetricsPort != 0 && cfg.Server.OpsPort != cfg.Server.MetricsPort {
+		errs = append(errs, FieldError{
+			Field:   "server.metrics_port",
+			Value:   cfg.Server.MetricsPort,
+			Message: "conflicts with server.ops_port; set only one (metrics_port is a deprecated alias for ops_port)",
+		})
+	}
 
-	// Server.PrivateHealth requires a separate metrics/ops port: health and
-	// readiness are removed from the public port, so they must have somewhere
-	// (the internal MetricsPort listener) for orchestrator probes to reach them.
-	if cfg.Server.PrivateHealth && cfg.Server.MetricsPort == 0 {
+	// Server.PrivateHealth requires a separate ops port: health and readiness
+	// are removed from the public port, so they must have somewhere (the ops
+	// listener) for orchestrator probes to reach them.
+	if cfg.Server.PrivateHealth && opsPort == 0 {
 		errs = append(errs, FieldError{
 			Field:   "server.private_health",
 			Value:   cfg.Server.PrivateHealth,
-			Message: "requires server.metrics_port to be set (health & readiness are moved off the public port)",
+			Message: "requires server.ops_port (or the deprecated server.metrics_port) to be set (health & readiness are moved off the public port)",
 		})
 	}
 

@@ -294,18 +294,18 @@ func main() {
 		errCh <- srv.Start()
 	}()
 
-	// Start metrics server on dedicated port (no-op when MetricsPort == 0).
+	// Start ops server on its dedicated port (no-op when no ops port is configured).
 	metricsErrCh := make(chan error, 1)
 	go func() {
 		metricsErrCh <- srv.StartMetrics()
 	}()
 
-	// metricsStartCh mirrors metricsErrCh only when a separate metrics
+	// metricsStartCh mirrors metricsErrCh only when a separate ops
 	// port is configured.  A nil channel is never selected, so the
-	// readiness select below naturally ignores it when MetricsPort == 0
+	// readiness select below naturally ignores it when no ops port is set
 	// (where StartMetrics returns nil immediately).
 	var metricsStartCh <-chan error
-	if cfg.Server.MetricsPort > 0 {
+	if cfg.Server.EffectiveOpsPort() > 0 {
 		metricsStartCh = metricsErrCh
 	}
 

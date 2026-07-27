@@ -53,16 +53,19 @@ theme:
 # ---------------------------------------------------------------------------
 server:
   port: 8080                  # Listen port (1–65535). Override: BLOGFLOW_SERVER_PORT
-  # metrics_port: 9090        # Dedicated metrics/ops port (1–65535, must differ from port).
-                              # When set, /metrics is served on this port only — the
-                              # main port has no /metrics endpoint.  /healthz, /readyz and
-                              # /readyz/content are also served here (in addition to the
-                              # main port, unless private_health is enabled below).
-                              # Set to 0 (default) to serve metrics on the main port.
+  # ops_port: 9090            # Dedicated ops/observability port (1–65535, must differ from port).
+                              # When set, /metrics, /healthz, /readyz and /readyz/content are
+                              # served here; /metrics is removed from the main port. Health &
+                              # readiness stay on the main port too, unless private_health is
+                              # enabled below.
+                              # Set to 0 (default) to serve everything on the main port.
+                              # Override: BLOGFLOW_SERVER_OPS_PORT
+  # metrics_port: 9090        # DEPRECATED alias for ops_port (backward compatibility only).
+                              # Prefer ops_port; setting this logs a deprecation warning.
                               # Override: BLOGFLOW_SERVER_METRICS_PORT
   # private_health: false     # When true, /healthz, /readyz and /readyz/content are
-                              # removed from the public port and served ONLY on
-                              # metrics_port (which must be set). Orchestrator probes
+                              # removed from the public port and served ONLY on the
+                              # ops_port (which must be set). Orchestrator probes
                               # (Kubernetes, Azure Container Apps) reach that port
                               # directly, so liveness/readiness keep working while the
                               # public internet cannot reach or flood these endpoints.

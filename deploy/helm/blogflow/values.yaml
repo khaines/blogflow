@@ -101,7 +101,9 @@ service:
   type: ClusterIP
   # -- Service port
   port: 8080
-  # -- Dedicated metrics port (0 = disabled, metrics served on main port)
+  # -- Dedicated ops/observability port (0 = disabled, ops endpoints served on main port)
+  opsPort: 0
+  # -- DEPRECATED alias for opsPort (kept for backward compatibility; prefer opsPort)
   metricsPort: 0
 
 ingress:

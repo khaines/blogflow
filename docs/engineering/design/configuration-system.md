@@ -242,7 +242,9 @@ type ThemeConfig struct {
 
 type ServerConfig struct {
     Port              int           `yaml:"port"               validate:"required,min=1,max=65535"`
-    MetricsPort       int           `yaml:"metrics_port"       validate:"omitempty,min=0,max=65535"`   // 0 = disabled (metrics on main port); 1-65535 = separate listener
+    OpsPort           int           `yaml:"ops_port"           validate:"omitempty,min=0,max=65535"`   // 0 = disabled (ops endpoints on main port); 1-65535 = separate ops listener
+    MetricsPort       int           `yaml:"metrics_port"       validate:"omitempty,min=0,max=65535"`   // DEPRECATED alias for ops_port (backward compatibility)
+    PrivateHealth     bool          `yaml:"private_health"     validate:"omitempty"`                   // serve health/readiness only on the ops port
     ReadTimeout       time.Duration `yaml:"read_timeout"       validate:"required,min=1s,max=60s"`
     WriteTimeout      time.Duration `yaml:"write_timeout"      validate:"required,min=1s,max=300s"`
     IdleTimeout       time.Duration `yaml:"idle_timeout"       validate:"required,min=1s,max=600s"`
@@ -500,7 +502,8 @@ Environment variables use a `BLOGFLOW_` prefix with underscore-separated paths f
 | `server.idle_timeout` | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | `BLOGFLOW_SERVER_IDLE_TIMEOUT=120s` |
 | `server.tls_terminated` | `BLOGFLOW_SERVER_TLS_TERMINATED` | `BLOGFLOW_SERVER_TLS_TERMINATED=true` |
 | `server.hsts_max_age` | `BLOGFLOW_SERVER_HSTS_MAX_AGE` | `BLOGFLOW_SERVER_HSTS_MAX_AGE=31536000` |
-| `server.metrics_port` | `BLOGFLOW_SERVER_METRICS_PORT` | `BLOGFLOW_SERVER_METRICS_PORT=9091` |
+| `server.ops_port` | `BLOGFLOW_SERVER_OPS_PORT` | `BLOGFLOW_SERVER_OPS_PORT=9091` |
+| `server.metrics_port` (deprecated alias) | `BLOGFLOW_SERVER_METRICS_PORT` | `BLOGFLOW_SERVER_METRICS_PORT=9091` |
 | `cache.enabled` | `BLOGFLOW_CACHE_ENABLED` | `BLOGFLOW_CACHE_ENABLED=false` |
 | `sync.strategy` | `BLOGFLOW_SYNC_STRATEGY` | `BLOGFLOW_SYNC_STRATEGY=webhook` |
 | `sync.repo` | `BLOGFLOW_SYNC_REPO` | `BLOGFLOW_SYNC_REPO="git@github.com:org/content.git"` |
