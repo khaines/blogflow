@@ -292,9 +292,11 @@ func (s *Server) publicHealthGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch path.Clean(r.URL.Path) {
 		case "/healthz", "/readyz", "/readyz/content":
-			// Match the server's normal 404 shape (text body + nosniff) so the
-			// response can't be used to fingerprint that private_health is on,
-			// while staying cheap enough to shrug off floods.
+			// Plain-text 404 with nosniff + no-store: cheap enough to shrug off
+			// floods, and close enough to a normal not-found that the 200-vs-404
+			// difference alone doesn't leak readiness state. (Not a byte-identical
+			// match of the standard 404, which also carries the full security
+			// header set applied by later middleware.)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")

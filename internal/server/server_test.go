@@ -919,6 +919,12 @@ func TestPrivateHealth(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("public //healthz: status = %d, want %d", rec.Code, http.StatusNotFound)
 		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("public //healthz: Cache-Control = %q, want %q", got, "no-store")
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("public //healthz: X-Content-Type-Options = %q, want %q", got, "nosniff")
+		}
 	}
 
 	// They must be served on the internal ops (metrics) listener.

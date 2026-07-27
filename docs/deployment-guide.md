@@ -978,7 +978,7 @@ livenessProbe:
     port: 8081
 ```
 
-> With `private_health` enabled, the built-in `healthcheck` subcommand automatically targets the ops port (it reads `BLOGFLOW_SERVER_PRIVATE_HEALTH` and `BLOGFLOW_SERVER_METRICS_PORT`), so the Docker `HEALTHCHECK` keeps working with no override needed. Pass `--port` to target a specific port explicitly.
+> With `private_health` enabled **via environment variables** (`BLOGFLOW_SERVER_PRIVATE_HEALTH` + `BLOGFLOW_SERVER_METRICS_PORT`), the built-in `healthcheck` subcommand automatically targets the ops port, so the Docker `HEALTHCHECK` keeps working with no override. The healthcheck process does **not** read `site.yaml`, so if you configure `private_health`/`metrics_port` through the config file instead, pass the ops port explicitly: `["/app", "healthcheck", "--port", "8081"]`.
 >
 > **Residual note:** moving the endpoints off the public port (and cheap-404ing floods) removes per-request tracing/logging cost, but volumetric floods still open TCP connections and count toward the platform's HTTP autoscaler. For full volumetric protection, front the app with a WAF/rate limiter (e.g. Azure Front Door) or a custom scale rule.
 
