@@ -64,7 +64,7 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:           s.middleware(mux),
+		Handler:           s.publicHealthGuard(s.middleware(mux)),
 		ReadTimeout:       cfg.Server.ReadTimeout,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      cfg.Server.WriteTimeout,
@@ -75,6 +75,8 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("GET /metrics", MetricsHandler())
 		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
+		metricsMux.HandleFunc("GET /readyz", s.readyHandler)
+		metricsMux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 		s.metricsServer = &http.Server{
 			Addr:              fmt.Sprintf(":%d", cfg.Server.MetricsPort),
 			Handler:           s.middleware(metricsMux),
@@ -147,10 +149,14 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 	// Sitemap
 	s.mux.HandleFunc("GET /sitemap.xml", opts.SitemapHandler)
 
-	// Health checks
-	s.mux.HandleFunc("GET /healthz", s.healthHandler)
-	s.mux.HandleFunc("GET /readyz", s.readyHandler)
-	s.mux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
+	// Health checks. When PrivateHealth is set these are served only on the
+	// internal metrics/ops port (see New) and are removed from the public
+	// listener so they cannot be reached or flooded from the internet.
+	if !s.config.Server.PrivateHealth {
+		s.mux.HandleFunc("GET /healthz", s.healthHandler)
+		s.mux.HandleFunc("GET /readyz", s.readyHandler)
+		s.mux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
+	}
 
 	// Prometheus metrics: on main mux only when no separate metrics port is configured
 	if s.config.Server.MetricsPort == 0 {
@@ -269,6 +275,27 @@ func (s *Server) IPResolver() *ClientIPResolver {
 }
 
 // middleware chains standard middleware: request-ID, logging, security headers, recovery, metrics, otelhttp.
+// publicHealthGuard intercepts health and readiness paths on the public
+// listener when PrivateHealth is enabled, returning a minimal 404 before any
+// tracing, logging or other middleware runs. This keeps floods to these paths
+// cheap (no span or access-log line per request) and ensures readiness state
+// is never exposed publicly. Orchestrator probes must target the internal
+// MetricsPort listener instead. When PrivateHealth is disabled it is a no-op.
+func (s *Server) publicHealthGuard(next http.Handler) http.Handler {
+	if !s.config.Server.PrivateHealth {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz", "/readyz", "/readyz/content":
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	// Order: request-ID (outermost) → otelhttp → logging → recovery → security headers → metrics → handler
 	return s.requestIDMiddleware(

@@ -53,12 +53,20 @@ theme:
 # ---------------------------------------------------------------------------
 server:
   port: 8080                  # Listen port (1–65535). Override: BLOGFLOW_SERVER_PORT
-  # metrics_port: 9090        # Dedicated metrics port (1–65535, must differ from port).
+  # metrics_port: 9090        # Dedicated metrics/ops port (1–65535, must differ from port).
                               # When set, /metrics is served on this port only — the
-                              # main port has no /metrics endpoint.  /healthz remains
-                              # available on both ports.
+                              # main port has no /metrics endpoint.  /healthz, /readyz and
+                              # /readyz/content are also served here (in addition to the
+                              # main port, unless private_health is enabled below).
                               # Set to 0 (default) to serve metrics on the main port.
                               # Override: BLOGFLOW_SERVER_METRICS_PORT
+  # private_health: false     # When true, /healthz, /readyz and /readyz/content are
+                              # removed from the public port and served ONLY on
+                              # metrics_port (which must be set). Orchestrator probes
+                              # (Kubernetes, Azure Container Apps) reach that port
+                              # directly, so liveness/readiness keep working while the
+                              # public internet cannot reach or flood these endpoints.
+                              # Override: BLOGFLOW_SERVER_PRIVATE_HEALTH
   read_timeout: "5s"          # Max time to read request (Go duration)
   write_timeout: "10s"        # Max time to write response
   idle_timeout: "120s"        # Max time for idle keep-alive connections

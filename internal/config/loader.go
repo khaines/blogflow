@@ -437,6 +437,14 @@ var envMap = map[string]func(*Config, string, *slog.Logger) error{
 		c.Server.MetricsPort = n
 		return nil
 	},
+	"BLOGFLOW_SERVER_PRIVATE_HEALTH": func(c *Config, v string, _ *slog.Logger) error {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("cannot parse env var BLOGFLOW_SERVER_PRIVATE_HEALTH as bool: %w", err)
+		}
+		c.Server.PrivateHealth = b
+		return nil
+	},
 	"BLOGFLOW_SITE_HOMEPAGE": func(c *Config, v string, _ *slog.Logger) error {
 		c.Site.Homepage = v
 		return nil
@@ -522,6 +530,17 @@ func Validate(cfg *Config) error {
 				Message: "must be different from server.port",
 			})
 		}
+	}
+
+	// Server.PrivateHealth requires a separate metrics/ops port: health and
+	// readiness are removed from the public port, so they must have somewhere
+	// (the internal MetricsPort listener) for orchestrator probes to reach them.
+	if cfg.Server.PrivateHealth && cfg.Server.MetricsPort == 0 {
+		errs = append(errs, FieldError{
+			Field:   "server.private_health",
+			Value:   cfg.Server.PrivateHealth,
+			Message: "requires server.metrics_port to be set (health & readiness are moved off the public port)",
+		})
 	}
 
 	// Server timeouts: must be > 0

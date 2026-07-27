@@ -871,6 +871,52 @@ func TestHealthzOnMetricsPort(t *testing.T) {
 	}
 }
 
+func TestPrivateHealth(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Server.MetricsPort = 19093
+	cfg.Server.PrivateHealth = true
+
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.RegisterRoutes(testRouteOptions())
+	s.SetReady(true)
+
+	// Health & readiness must NOT be reachable on the public listener.
+	for _, path := range []string{"/healthz", "/readyz", "/readyz/content"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		s.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("public %s: status = %d, want %d", path, rec.Code, http.StatusNotFound)
+		}
+	}
+
+	// They must be served on the internal ops (metrics) listener.
+	checks := []struct {
+		path string
+		want int
+	}{
+		{"/healthz", http.StatusOK},
+		{"/readyz", http.StatusOK},
+		{"/readyz/content", http.StatusServiceUnavailable}, // no content checker configured
+	}
+	for _, c := range checks {
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		rec := httptest.NewRecorder()
+		s.metricsServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("ops %s: status = %d, want %d", c.path, rec.Code, c.want)
+		}
+	}
+
+	// Public content routes must still work.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	s.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("public /: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
 func TestMetricsServer_NilWhenPortZero(t *testing.T) {
 	cfg := defaultTestConfig()
 	cfg.Server.MetricsPort = 0

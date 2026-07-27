@@ -1056,6 +1056,41 @@ func TestValidate_MetricsPort_OutOfRange(t *testing.T) {
 	}
 }
 
+func TestValidate_PrivateHealth_RequiresMetricsPort(t *testing.T) {
+	cfg := Default()
+	cfg.Server.PrivateHealth = true
+	cfg.Server.MetricsPort = 0
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error when private_health is set without metrics_port")
+	}
+	cfgErr, ok := err.(*ConfigError)
+	if !ok {
+		t.Fatalf("expected *ConfigError, got %T", err)
+	}
+	found := false
+	for _, fe := range cfgErr.Errors {
+		if fe.Field == "server.private_health" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected server.private_health field error requiring metrics_port")
+	}
+}
+
+func TestValidate_PrivateHealth_Valid(t *testing.T) {
+	cfg := Default()
+	cfg.Server.PrivateHealth = true
+	cfg.Server.MetricsPort = 8081
+
+	if err := Validate(cfg); err != nil {
+		t.Errorf("unexpected validation error for private_health with metrics_port: %v", err)
+	}
+}
+
 func TestValidate_Homepage(t *testing.T) {
 	tests := []struct {
 		name    string

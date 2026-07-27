@@ -946,14 +946,41 @@ readinessProbe:
   failureThreshold: 12  # allow 60s for initial clone
 ```
 
-### Metrics Port
+### Metrics / Ops Port
 
-When `server.metrics_port` is configured, `/healthz` is available on **both** the main port and the metrics port. `/readyz` and `/readyz/content` are only on the main port.
+When `server.metrics_port` is configured, the health and readiness endpoints (`/healthz`, `/readyz`, `/readyz/content`) are served on **both** the main port and the metrics port, and `/metrics` moves to the metrics port only.
 
-| Port | `/healthz` | `/readyz` | `/metrics` |
-|------|-----------|-----------|------------|
-| Main (8080) | ✅ | ✅ | ❌ (when metrics_port set) |
-| Metrics (9090) | ✅ | ❌ | ✅ |
+| Port | `/healthz` | `/readyz` | `/readyz/content` | `/metrics` |
+|------|-----------|-----------|-------------------|------------|
+| Main (8080) | ✅ | ✅ | ✅ | ❌ (when metrics_port set) |
+| Metrics/ops (9090) | ✅ | ✅ | ✅ | ✅ |
+
+### Private Health — isolate probes from public traffic
+
+Set `server.private_health: true` (requires `server.metrics_port`) to **remove** `/healthz`, `/readyz` and `/readyz/content` from the public port and serve them **only** on the internal metrics/ops port. On the public port these paths return a cheap `404` *before* any tracing or access logging runs, so floods to them cost almost nothing.
+
+This protects against denial-of-service floods and readiness-state probing on the public listener while keeping lifecycle management intact: Kubernetes and Azure Container Apps execute probes against the container port **directly** — that traffic never traverses public ingress — so simply point your probes at the ops port.
+
+| Port | `/healthz` | `/readyz` | `/readyz/content` | `/metrics` |
+|------|-----------|-----------|-------------------|------------|
+| Main (8080) | ❌ 404 | ❌ 404 | ❌ 404 | ❌ |
+| Metrics/ops (8081) | ✅ | ✅ | ✅ | ✅ |
+
+```yaml
+# Probes target the internal ops port, not the public ingress port
+readinessProbe:
+  httpGet:
+    path: /readyz?strict=true
+    port: 8081
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8081
+```
+
+> With `private_health` enabled, the Docker `HEALTHCHECK` must target the ops port: `["/app", "healthcheck", "--port", "8081"]`.
+>
+> **Residual note:** moving the endpoints off the public port (and cheap-404ing floods) removes per-request tracing/logging cost, but volumetric floods still open TCP connections and count toward the platform's HTTP autoscaler. For full volumetric protection, front the app with a WAF/rate limiter (e.g. Azure Front Door) or a custom scale rule.
 
 ---
 
