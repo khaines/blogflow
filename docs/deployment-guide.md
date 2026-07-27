@@ -998,7 +998,7 @@ Prometheus metrics are always available. No extra configuration is needed.
 
 | Feature | Details |
 |---------|---------|
-| Endpoint | `/metrics` on the main port, or on a dedicated `metrics_port` |
+| Endpoint | `/metrics` on the main port, or on a dedicated `ops_port` |
 | RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
 | Content analytics | Views per content item: `blogflow_content_views_total{type, slug}` |
 | Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
@@ -1010,8 +1010,10 @@ To move metrics off the main port:
 ```yaml
 server:
   port: 8080
-  metrics_port: 9090   # /metrics served here only
+  ops_port: 9090   # /metrics (and health/readiness) served here
 ```
+
+> `metrics_port` remains a deprecated alias for `ops_port`.
 
 #### Content analytics
 

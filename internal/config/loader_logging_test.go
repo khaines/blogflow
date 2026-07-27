@@ -189,3 +189,40 @@ func TestLoad_NoDeprecationWarningForOpsPort(t *testing.T) {
 		t.Errorf("did not expect deprecation warning when using ops_port, got:\n%s", out)
 	}
 }
+
+func TestLoad_LogsMetricsPortDeprecation_FromEnv(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	t.Setenv("BLOGFLOW_SERVER_METRICS_PORT", "9090")
+	fsys := fstest.MapFS{}
+	loader := NewLoader(fsys, WithLogger(logger))
+	if _, err := loader.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "metrics_port is deprecated") {
+		t.Errorf("expected metrics_port deprecation warning from env, got:\n%s", out)
+	}
+}
+
+func TestLoad_NoDeprecationWarningWhenOpsPortAlsoSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	// Same value for both — a valid belt-and-suspenders migration state; the
+	// user is already on the canonical ops_port, so no deprecation nudge.
+	fsys := fstest.MapFS{
+		"site.yaml": &fstest.MapFile{Data: []byte("server:\n  ops_port: 8081\n  metrics_port: 8081\n")},
+	}
+	loader := NewLoader(fsys, WithLogger(logger))
+	if _, err := loader.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "metrics_port is deprecated") {
+		t.Errorf("did not expect deprecation warning when ops_port is set, got:\n%s", out)
+	}
+}

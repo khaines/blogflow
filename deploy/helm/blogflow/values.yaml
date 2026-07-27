@@ -74,7 +74,9 @@ siteConfig:
     name: default
   server:
     port: 8080
-    # -- Dedicated metrics port (0 = serve metrics on main port)
+    # -- Dedicated ops/observability port (0 = serve on main port)
+    # ops_port: 9090
+    # -- metrics_port is a deprecated alias for ops_port
     # metrics_port: 9090
     read_timeout: 5s
     write_timeout: 10s
@@ -103,7 +105,9 @@ service:
   port: 8080
   # -- Dedicated ops/observability port (0 = disabled, ops endpoints served on main port)
   opsPort: 0
-  # -- DEPRECATED alias for opsPort (kept for backward compatibility; prefer opsPort)
+  # -- DEPRECATED alias for opsPort (kept for backward compatibility; prefer opsPort).
+  # -- If both opsPort and metricsPort are non-zero, opsPort takes precedence and
+  # -- metricsPort is ignored here (the raw BlogFlow config instead rejects the conflict).
   metricsPort: 0
 
 ingress:

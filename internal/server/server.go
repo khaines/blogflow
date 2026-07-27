@@ -72,14 +72,14 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 		IdleTimeout:       cfg.Server.IdleTimeout,
 	}
 
-	if cfg.Server.EffectiveOpsPort() > 0 {
+	if opsPort := cfg.Server.EffectiveOpsPort(); opsPort > 0 {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("GET /metrics", MetricsHandler())
 		metricsMux.HandleFunc("GET /healthz", s.healthHandler)
 		metricsMux.HandleFunc("GET /readyz", s.readyHandler)
 		metricsMux.HandleFunc("GET /readyz/content", s.contentReadyHandler)
 		s.metricsServer = &http.Server{
-			Addr:              fmt.Sprintf(":%d", cfg.Server.EffectiveOpsPort()),
+			Addr:              fmt.Sprintf(":%d", opsPort),
 			Handler:           s.middleware(metricsMux),
 			ReadTimeout:       cfg.Server.ReadTimeout,
 			ReadHeaderTimeout: 5 * time.Second,
