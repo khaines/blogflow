@@ -21,6 +21,7 @@ type Config struct {
 	Cache   CacheConfig   `yaml:"cache"`
 	Sync    SyncConfig    `yaml:"sync"`
 	Feed    FeedConfig    `yaml:"feed"`
+	Search  SearchConfig  `yaml:"search"`
 }
 
 // SiteConfig holds site identity settings.
@@ -152,6 +153,26 @@ type FeedConfig struct {
 	Items   int    `yaml:"items"`
 }
 
+// SearchConfig holds full-text search settings.
+//
+// Enabled is evaluated when the HTTP router is built (startup/restart). A
+// runtime config reload that flips Enabled logs a warning and does not
+// register or unregister the /search route until the process restarts. The
+// remaining tunables reload together with content in a single snapshot
+// generation. All rune-length limits are counted after Unicode NFC
+// normalization and lower-casing.
+type SearchConfig struct {
+	Enabled        bool  `yaml:"enabled"`          // opt-in; startup/router-build only. Default false.
+	MaxResults     int   `yaml:"max_results"`      // per-page result window. Default 20.
+	MaxQueryLength int   `yaml:"max_query_length"` // max normalized query runes. Default 128.
+	MinQueryLength int   `yaml:"min_query_length"` // min normalized query runes. Default 2.
+	MaxQueryTerms  int   `yaml:"max_query_terms"`  // max unique normalized query terms. Default 32.
+	ExcerptLength  int   `yaml:"excerpt_length"`   // excerpt display runes. Default 200.
+	MaxDocs        int   `yaml:"max_docs"`         // max indexed posts. Default 10000.
+	MaxTokens      int   `yaml:"max_tokens"`       // max posting occurrences. Default 2000000.
+	MaxIndexBytes  int64 `yaml:"max_index_bytes"`  // logical index byte budget. Default 67108864 (64 MiB).
+}
+
 // Default returns a Config with sensible defaults.
 // This is what the binary uses when no external config is provided.
 func Default() *Config {
@@ -203,6 +224,17 @@ func Default() *Config {
 			Enabled: true,
 			Type:    "atom",
 			Items:   20,
+		},
+		Search: SearchConfig{
+			Enabled:        false,
+			MaxResults:     20,
+			MaxQueryLength: 128,
+			MinQueryLength: 2,
+			MaxQueryTerms:  32,
+			ExcerptLength:  200,
+			MaxDocs:        10000,
+			MaxTokens:      2000000,
+			MaxIndexBytes:  67108864, // 64 MiB
 		},
 	}
 }

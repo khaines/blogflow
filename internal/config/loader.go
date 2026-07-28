@@ -874,6 +874,80 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	// Search cap/tunable validation runs regardless of search.enabled. Unlike
+	// feed/webhook settings (which are inert when disabled), search tunables are
+	// consumed by the content reloader's index rebuild whenever the /search
+	// route was registered at startup — search enablement is restart-scoped, so
+	// a runtime reload keeps rebuilding with these caps. Validating them always
+	// ensures an invalid runtime edit fails validation (retaining the last-good
+	// config) instead of feeding unbounded/degenerate caps into the rebuild.
+	{
+		if cfg.Search.MaxResults < 1 || cfg.Search.MaxResults > 100 {
+			errs = append(errs, FieldError{
+				Field:   "search.max_results",
+				Value:   cfg.Search.MaxResults,
+				Message: "must be between 1 and 100",
+			})
+		}
+		if cfg.Search.MinQueryLength < 1 || cfg.Search.MinQueryLength > 16 {
+			errs = append(errs, FieldError{
+				Field:   "search.min_query_length",
+				Value:   cfg.Search.MinQueryLength,
+				Message: "must be between 1 and 16",
+			})
+		}
+		if cfg.Search.MaxQueryLength < 8 || cfg.Search.MaxQueryLength > 1024 {
+			errs = append(errs, FieldError{
+				Field:   "search.max_query_length",
+				Value:   cfg.Search.MaxQueryLength,
+				Message: "must be between 8 and 1024",
+			})
+		}
+		if cfg.Search.MaxQueryLength < cfg.Search.MinQueryLength {
+			errs = append(errs, FieldError{
+				Field:   "search.max_query_length",
+				Value:   cfg.Search.MaxQueryLength,
+				Message: "must be >= search.min_query_length",
+			})
+		}
+		if cfg.Search.MaxQueryTerms < 1 || cfg.Search.MaxQueryTerms > 128 {
+			errs = append(errs, FieldError{
+				Field:   "search.max_query_terms",
+				Value:   cfg.Search.MaxQueryTerms,
+				Message: "must be between 1 and 128",
+			})
+		}
+		if cfg.Search.ExcerptLength < 50 || cfg.Search.ExcerptLength > 1000 {
+			errs = append(errs, FieldError{
+				Field:   "search.excerpt_length",
+				Value:   cfg.Search.ExcerptLength,
+				Message: "must be between 50 and 1000",
+			})
+		}
+		if cfg.Search.MaxDocs < 1 || cfg.Search.MaxDocs > 1000000 {
+			errs = append(errs, FieldError{
+				Field:   "search.max_docs",
+				Value:   cfg.Search.MaxDocs,
+				Message: "must be between 1 and 1000000",
+			})
+		}
+		if cfg.Search.MaxTokens < 1 {
+			errs = append(errs, FieldError{
+				Field:   "search.max_tokens",
+				Value:   cfg.Search.MaxTokens,
+				Message: "must be >= 1",
+			})
+		}
+		const minSearchIndexBytes int64 = 1 << 20 // 1 MiB
+		if cfg.Search.MaxIndexBytes < minSearchIndexBytes {
+			errs = append(errs, FieldError{
+				Field:   "search.max_index_bytes",
+				Value:   cfg.Search.MaxIndexBytes,
+				Message: "must be >= 1048576 (1 MiB)",
+			})
+		}
+	}
+
 	if len(errs) > 0 {
 		return &ConfigError{Errors: errs}
 	}

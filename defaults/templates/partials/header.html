@@ -2,6 +2,15 @@
 <header class="site-header" role="banner">
     <nav class="site-nav" aria-label="Main navigation">
         <a href="/" class="site-title">{{.Site.Title}}</a>
+        {{with .Search}}{{if .Enabled}}
+        <form class="site-search" role="search" action="/search" method="get">
+            <label for="site-search-input" class="visually-hidden">Search posts</label>
+            <input type="search" id="site-search-input" name="q" class="site-search-input"
+                   placeholder="Search…" autocomplete="off">
+            <button type="submit" class="site-search-submit">Search</button>
+        </form>
+        {{end}}{{end}}
     </nav>
 </header>
 {{end}}
+

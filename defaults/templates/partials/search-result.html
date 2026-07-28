@@ -1,0 +1,20 @@
+{{/*
+  Search result item. Dot is a search.SearchResult.
+  Override by placing templates/partials/search-result.html in a custom theme.
+  The relevance score is available as {{.Score}} for custom themes but is
+  intentionally not shown in the default reader-visible result body.
+*/}}
+{{define "search-result"}}
+<article class="search-result-item">
+    <h2 class="search-result-title"><a href="{{.URL}}">{{.Title}}</a></h2>
+    <div class="post-meta">
+        <time datetime="{{.Date.Format "2006-01-02"}}">{{.Date.Format "January 2, 2006"}}</time>
+    </div>
+    {{if .Excerpt}}<p class="search-result-excerpt">{{.Excerpt}}</p>{{end}}
+    {{if .Tags}}
+    <div class="post-tags" role="list" aria-label="Tags">
+        {{range .Tags}}<a href="/tags/{{.}}" class="tag" role="listitem">{{.}}</a>{{end}}
+    </div>
+    {{end}}
+</article>
+{{end}}

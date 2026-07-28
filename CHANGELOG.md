@@ -4,6 +4,7 @@
 
 ### BlogFlow
 
+* [FEATURE] search: optional server-rendered full-text search (no JavaScript). Enable with `search.enabled: true`; adds `GET /search?q=&page=` with a Unicode-normalized tokenizer, a bounded in-memory inverted index (`max_docs`/`max_tokens`/`max_index_bytes` caps), deterministic weighted TF-IDF ranking, plain-text excerpts, accessible default-theme templates (`search.html` + `search-result`/`search-pagination` partials, conditional header search box), and `blogflow_search_*` metrics. Content and search publish atomically in one snapshot generation. #280
 * [BUGFIX] overlayfs: guard negative-cache stores with an invalidation generation so concurrent layer invalidations cannot resurrect stale upper-layer misses. #272
 * [ENHANCEMENT] overlayfs: shard the negative-cache LRU to reduce hot-path contention under parallel cache hits. #271
 * [CHANGE] overlayfs: negative cache now uses true LRU eviction of the least-recently-used entry at capacity (previously admission-capped — stopped caching new misses once full). #245

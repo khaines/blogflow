@@ -1,0 +1,15 @@
+{{/*
+  Search results pagination. Dot is a handlers.SearchData.
+  Override by placing templates/partials/search-pagination.html in a custom theme.
+  On a page beyond the last, the previous link targets the true last page so
+  readers can navigate back to real results.
+*/}}
+{{define "search-pagination"}}
+{{if or .HasPrev .HasNext}}
+<nav class="pagination search-pagination" aria-label="Search results pages">
+    {{if .HasPrev}}<a href="{{.PrevURL}}" class="pagination-prev" rel="prev">&larr; Previous</a>{{end}}
+    <span class="pagination-status">Page {{.Page}} of {{.TotalPages}}</span>
+    {{if .HasNext}}<a href="{{.NextURL}}" class="pagination-next" rel="next">Next &rarr;</a>{{end}}
+</nav>
+{{end}}
+{{end}}

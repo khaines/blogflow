@@ -50,3 +50,17 @@ feed:
   enabled: true
   type: "atom"
   items: 20
+
+# Full-text search (opt-in, server-rendered, no JavaScript required).
+# Disabled by default. `enabled` takes effect only at startup/router build;
+# toggling it at runtime requires a restart. Other tunables reload with content.
+search:
+  enabled: false
+  max_results: 20          # results per page
+  min_query_length: 2      # minimum normalized query runes
+  max_query_length: 128    # maximum normalized query runes
+  max_query_terms: 32      # maximum unique normalized query terms
+  excerpt_length: 200      # excerpt display runes
+  max_docs: 10000          # maximum indexed posts
+  max_tokens: 2000000      # maximum posting occurrences
+  max_index_bytes: 67108864 # logical index budget in bytes (64 MiB)

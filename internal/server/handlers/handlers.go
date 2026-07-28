@@ -15,23 +15,46 @@ import (
 
 	"github.com/khaines/blogflow/internal/config"
 	"github.com/khaines/blogflow/internal/content"
+	"github.com/khaines/blogflow/internal/search"
 	"github.com/khaines/blogflow/internal/theme"
 )
 
+// SiteSnapshot bundles the content index and its optional search index for a
+// single reload generation. Content and search are published together via one
+// atomic pointer store so a request never observes a search index built from a
+// different content generation than the one it re-derives excerpts from.
+//
+// Search is nil when search is disabled (not built) or when this generation's
+// search build failed while the content build succeeded (the handler then
+// returns 503 until a later successful build swaps in a non-nil Search).
+type SiteSnapshot struct {
+	Generation uint64
+	Content    *content.Index
+	Search     *search.SearchIndex
+}
+
 // Deps holds shared dependencies for all handlers.
-// Both the content index and config are stored as atomic pointers so that
-// background reloaders can swap them without racing with HTTP handlers.
+// The config is stored as an atomic pointer, and the content+search snapshot is
+// stored as a single atomic pointer, so background reloaders can swap them
+// without racing with HTTP handlers.
 type Deps struct {
 	config atomic.Pointer[config.Config]
-	index  atomic.Pointer[content.Index]
+	snap   atomic.Pointer[SiteSnapshot]
+	gen    atomic.Uint64
 	Theme  *theme.Engine
 
 	// Overlay is the layered filesystem (content → theme → defaults).
 	// Used by HomeHandler to serve static HTML files.
 	Overlay fs.FS
 
+	// searchEnabled is the router-build value of search.enabled. It is fixed
+	// for the process lifetime (toggling requires a restart/router rebuild) and
+	// is surfaced to templates as PageData.Search.Enabled so global search
+	// affordances cannot diverge from whether the /search route is registered.
+	searchEnabled bool
+
 	// staticHTML caches the rendered static homepage content.
-	// Cleared on content sync (SetIndex).
+	// Cleared on content sync (SetSnapshot/SetIndex).
 	staticHTML atomic.Pointer[[]byte]
 }
 
@@ -39,7 +62,7 @@ type Deps struct {
 func NewDeps(cfg *config.Config, idx *content.Index, themeEngine *theme.Engine) *Deps {
 	d := &Deps{Theme: themeEngine}
 	d.config.Store(cfg)
-	d.index.Store(idx)
+	d.snap.Store(&SiteSnapshot{Generation: 0, Content: idx})
 	return d
 }
 
@@ -53,21 +76,57 @@ func (d *Deps) SetConfig(cfg *config.Config) {
 	d.staticHTML.Store(nil) // invalidate; homepage path may have changed
 }
 
-// LoadIndex returns the current content index. Safe for concurrent use.
-func (d *Deps) LoadIndex() *content.Index { return d.index.Load() }
+// NextGeneration returns the next monotonic snapshot generation. Reloaders call
+// it before building a search index so the search index and the snapshot share
+// one generation number.
+func (d *Deps) NextGeneration() uint64 { return d.gen.Add(1) }
 
-// SetIndex atomically replaces the content index and clears cached
-// static homepage content so the next request re-reads from the overlay FS.
-func (d *Deps) SetIndex(idx *content.Index) {
-	d.index.Store(idx)
+// SetSearchEnabled records the router-build value of search.enabled. Call once
+// during wiring, before serving traffic.
+func (d *Deps) SetSearchEnabled(v bool) { d.searchEnabled = v }
+
+// SearchEnabled reports whether the /search route is registered.
+func (d *Deps) SearchEnabled() bool { return d.searchEnabled }
+
+// LoadSnapshot returns the current content+search snapshot. Safe for concurrent
+// use; the returned snapshot and the maps/slices inside it are immutable.
+func (d *Deps) LoadSnapshot() *SiteSnapshot { return d.snap.Load() }
+
+// LoadIndex returns the current content index. Safe for concurrent use.
+func (d *Deps) LoadIndex() *content.Index {
+	if s := d.snap.Load(); s != nil {
+		return s.Content
+	}
+	return nil
+}
+
+// LoadSearch returns the current search index, or nil when search is disabled
+// or this generation's search build failed.
+func (d *Deps) LoadSearch() *search.SearchIndex {
+	if s := d.snap.Load(); s != nil {
+		return s.Search
+	}
+	return nil
+}
+
+// SetSnapshot atomically publishes a new content+search generation and clears
+// the cached static homepage.
+func (d *Deps) SetSnapshot(gen uint64, idx *content.Index, si *search.SearchIndex) {
+	d.snap.Store(&SiteSnapshot{Generation: gen, Content: idx, Search: si})
 	d.staticHTML.Store(nil) // invalidate static homepage cache
+}
+
+// SetIndex atomically replaces the content index with a new generation that has
+// no search index. Retained for callers that do not build search (e.g. tests).
+func (d *Deps) SetIndex(idx *content.Index) {
+	d.SetSnapshot(d.NextGeneration(), idx, nil)
 }
 
 // PostCount returns the number of posts in the current index.
 // Implements server.ContentChecker.
 func (d *Deps) PostCount() int {
-	if idx := d.index.Load(); idx != nil {
-		return len(idx.Posts)
+	if s := d.snap.Load(); s != nil && s.Content != nil {
+		return len(s.Content.Posts)
 	}
 	return 0
 }
@@ -82,6 +141,27 @@ type PageData struct {
 	Tag        string          // current tag filter
 	Title      string          // page title override
 	Pagination *Pagination
+	Search     *SearchData // search affordance state + search page results
+}
+
+// SearchData carries search state to templates. On every page it exposes
+// Enabled so the header/nav can render or omit a global search form. On the
+// search page it additionally carries the query, results, pagination, and any
+// validation message.
+type SearchData struct {
+	Enabled    bool                  // /search route registered at router build
+	Executed   bool                  // a query was run (vs. the landing form)
+	Query      string                // echoed, escaped by html/template
+	Results    []search.SearchResult // current page of hits
+	Total      int
+	Page       int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	PrevURL    string
+	NextURL    string
+	Error      string // accessible validation/unavailable message
+	Truncated  bool   // index was truncated by caps
 }
 
 // Pagination holds paging metadata for list views.
@@ -136,7 +216,7 @@ func HomeHandler(deps *Deps) http.HandlerFunc {
 			Title: page.Title,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/page.html", data, http.StatusOK)
 	}
 }
 
@@ -203,7 +283,7 @@ func PostsListHandler(deps *Deps) http.HandlerFunc {
 			Pagination: pag,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -246,7 +326,7 @@ func ListHandler(deps *Deps) http.HandlerFunc {
 			Pagination: pag,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -273,7 +353,7 @@ func PostHandler(deps *Deps) http.HandlerFunc {
 			Title: post.Title,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/post.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/post.html", data, http.StatusOK)
 	}
 }
 
@@ -300,7 +380,7 @@ func PageHandler(deps *Deps) http.HandlerFunc {
 			Title: page.Title,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/page.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/page.html", data, http.StatusOK)
 	}
 }
 
@@ -335,7 +415,7 @@ func TagHandler(deps *Deps) http.HandlerFunc {
 			Pagination: pag,
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/list.html", data, http.StatusOK)
+		renderTemplate(w, r, deps, "templates/list.html", data, http.StatusOK)
 	}
 }
 
@@ -349,7 +429,7 @@ func NotFoundHandler(deps *Deps) http.HandlerFunc {
 			Title: "Page Not Found",
 		}
 
-		renderTemplate(w, r, deps.Theme, "templates/404.html", data, http.StatusNotFound)
+		renderTemplate(w, r, deps, "templates/404.html", data, http.StatusNotFound)
 	}
 }
 
@@ -453,8 +533,13 @@ func setPageURLs(pag *Pagination, urlFunc func(int) string) {
 
 // renderTemplate renders the named template into a buffer, then writes
 // the response. If rendering fails the client receives a 500 error
-// without any partial content.
-func renderTemplate(w http.ResponseWriter, r *http.Request, engine *theme.Engine, name string, data *PageData, statusCode int) {
+// without any partial content. It injects the global search affordance
+// state (PageData.Search.Enabled) when a handler has not already set it.
+func renderTemplate(w http.ResponseWriter, r *http.Request, deps *Deps, name string, data *PageData, statusCode int) {
+	if data.Search == nil {
+		data.Search = &SearchData{Enabled: deps.searchEnabled}
+	}
+	engine := deps.Theme
 	var buf bytes.Buffer
 	if err := engine.Render(r.Context(), &buf, name, data); err != nil {
 		if r.Context().Err() != nil {

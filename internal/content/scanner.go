@@ -28,6 +28,15 @@ type Post struct {
 	Path        string        // original .md file path relative to content root
 }
 
+// PlainText returns the canonical plain-text representation of the post's
+// rendered HTML body: HTML tags stripped and entities unescaped, using the
+// same state-machine extractor that produces post summaries. This is the
+// single source of truth for body text consumed by full-text search
+// tokenization and excerpt generation.
+func (p *Post) PlainText() string {
+	return stripHTML(string(p.Content))
+}
+
 // Index is the in-memory content index, built by scanning the content directory.
 type Index struct {
 	Posts      []*Post            // sorted by date descending

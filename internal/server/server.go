@@ -101,6 +101,7 @@ type RouteOptions struct {
 	TagHandler       http.HandlerFunc
 	FeedHandler      http.HandlerFunc
 	SitemapHandler   http.HandlerFunc
+	SearchHandler    http.HandlerFunc
 	WebhookHandler   http.HandlerFunc
 	StaticFS         fs.FS
 }
@@ -149,6 +150,17 @@ func (s *Server) RegisterRoutes(opts RouteOptions) {
 
 	// Sitemap
 	s.mux.HandleFunc("GET /sitemap.xml", opts.SitemapHandler)
+
+	// Full-text search: registered only when enabled at router-build time.
+	// When disabled, /search is not registered and returns the normal 404,
+	// and templates omit global search affordances. Toggling search.enabled
+	// requires a restart/router rebuild to take effect.
+	if s.config.Search.Enabled {
+		if opts.SearchHandler == nil {
+			panic("server: RegisterRoutes requires SearchHandler when search is enabled")
+		}
+		s.mux.HandleFunc("GET /search", opts.SearchHandler)
+	}
 
 	// Health checks. When PrivateHealth is set these are served only on the
 	// internal ops port (see New) and are removed from the public
@@ -329,9 +341,16 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
+		// Log path with the query string, except for /search: reader-entered
+		// search terms must not be persisted in access logs at INFO level
+		// (full-text-search design §5.3 / §7.1).
+		loggedPath := r.URL.RequestURI()
+		if r.URL.Path == "/search" {
+			loggedPath = r.URL.Path
+		}
 		s.logger.Info("request",
 			"method", r.Method,
-			"path", r.URL.RequestURI(),
+			"path", loggedPath,
 			"status", wrapped.statusCode,
 			"duration", time.Since(start),
 			"remote", r.RemoteAddr,

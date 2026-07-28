@@ -190,6 +190,15 @@ func main() {
 	// 7. Build handler dependencies
 	deps := handlers.NewDeps(cfg, idx, themeEngine)
 	deps.Overlay = contentOverlay
+	deps.SetSearchEnabled(cfg.Search.Enabled)
+
+	// Build the initial search index (when enabled) and publish the
+	// content+search snapshot atomically. Disabled search leaves the gen-0
+	// content-only snapshot from NewDeps in place.
+	if cfg.Search.Enabled {
+		publishContentSnapshot(context.Background(), deps, idx, true, cfg.Search, logger)
+		logger.Info("search enabled", "route", "GET /search")
+	}
 
 	// Wire config reload → handlers: when config changes, update deps atomically
 	cfgLoader.OnChange(func(newCfg *config.Config) {
@@ -244,6 +253,9 @@ func main() {
 		FeedHandler:      feedHandler.ServeHTTP,
 		SitemapHandler:   sitemapHandler.ServeHTTP,
 		StaticFS:         staticFS,
+	}
+	if cfg.Search.Enabled {
+		routeOpts.SearchHandler = handlers.SearchHandler(deps)
 	}
 	if ws, ok := syncStrategy.(*gitops.WebhookStrategy); ok {
 		routeOpts.WebhookHandler = ws.Handler()

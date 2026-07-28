@@ -218,6 +218,7 @@ Every template receives a `PageData` struct as its root context (`.`):
 | `.Tag`       | `string`          | `list.html` (tag)    | Current tag filter (empty on homepage). |
 | `.Title`     | `string`          | All templates        | Page title override.                 |
 | `.Pagination`| `*Pagination`     | `list.html`          | Pagination metadata.                 |
+| `.Search`    | `*SearchData`     | All templates        | Search affordance state (always set); results on `search.html`. |
 
 ### Post (and Page)
 
@@ -271,6 +272,33 @@ Posts and pages share the same structure:
 | `.Pagination.PrevPage`      | `int`  | Previous page number.               |
 | `.Pagination.NextPage`      | `int`  | Next page number.                   |
 
+### SearchData
+
+`.Search` is set on **every** page so the header/nav can render or omit a
+global search box based on `.Search.Enabled`. On `search.html` it also carries
+the query, results, and pagination. Search is opt-in — enable it with
+`search.enabled: true` in `site.yaml` (takes effect at startup; toggling
+requires a restart).
+
+| Field                 | Type                  | Description                                                        |
+|-----------------------|-----------------------|-------------------------------------------------------------------|
+| `.Search.Enabled`     | `bool`                | Whether the `/search` route is registered. Guard header UI with this. |
+| `.Search.Executed`    | `bool`                | Whether a query was run (vs. the empty landing form).             |
+| `.Search.Query`       | `string`              | The user's query, echoed (auto-escaped).                         |
+| `.Search.Results`     | `[]SearchResult`      | Current page of hits.                                             |
+| `.Search.Total`       | `int`                 | Total matching posts.                                            |
+| `.Search.Page`        | `int`                 | Current page number.                                            |
+| `.Search.TotalPages`  | `int`                 | Total result pages.                                             |
+| `.Search.HasPrev` / `.HasNext` | `bool`       | Whether prev/next result pages exist.                           |
+| `.Search.PrevURL` / `.NextURL` | `string`     | URLs for prev/next result pages.                                |
+| `.Search.Error`       | `string`              | Accessible validation/unavailable message (empty when none).     |
+| `.Search.Truncated`   | `bool`                | Whether the index was capped (results may be incomplete).        |
+
+Each `SearchResult` exposes `.Title`, `.URL`, `.Slug`, `.Date` (`time.Time`),
+`.Excerpt`, `.Tags`, and `.Score`. The relevance `.Score` is available for
+custom themes (e.g. to sort or display), but the default theme intentionally
+does **not** show numeric scores in the reader-visible result body.
+
 ---
 
 ## 5. Partial Templates
@@ -293,6 +321,8 @@ BlogFlow ships these partials in the embedded defaults:
 | `partials/footer.html`     | `partials/footer.html`       | Site footer with copyright and attribution.           |
 | `post-meta`                | `partials/post-meta.html`    | Post metadata: date, reading time, tag links.         |
 | `pagination`               | `partials/pagination.html`   | Previous / next page navigation with aria labels.     |
+| `search-result`            | `partials/search-result.html`| A single search hit (title, date, excerpt, tags).     |
+| `search-pagination`        | `partials/search-pagination.html` | Search results prev/next navigation.             |
 
 > **Naming convention**: The `{{define}}` name must match exactly what
 > `{{template}}` uses. The default header and footer use full-path names
@@ -535,3 +565,58 @@ the `base.html` meta tag alone has no effect.
 > ⚠️ `frame-ancestors` **cannot** be set via a `<meta>` tag — the browser spec
 > forbids it. This directive is only effective in the HTTP header, which
 > BlogFlow already sets.
+
+---
+
+## 9. Full-Text Search
+
+BlogFlow ships an optional, server-rendered full-text search that requires **no
+client-side JavaScript**. It is disabled by default.
+
+### Enabling search
+
+Add to `site.yaml`:
+
+```yaml
+search:
+  enabled: true          # opt-in; evaluated at startup (restart to toggle)
+  max_results: 20        # results per page
+  min_query_length: 2    # minimum normalized query runes
+  max_query_length: 128  # maximum normalized query runes
+  max_query_terms: 32    # maximum unique normalized query terms
+  excerpt_length: 200    # excerpt display runes
+  max_docs: 10000        # index admission caps (memory safety)
+  max_tokens: 2000000
+  max_index_bytes: 67108864  # 64 MiB logical budget
+```
+
+When enabled, BlogFlow registers `GET /search?q=...&page=N` and the default
+theme renders a global search box in the header. When disabled, the route is
+not registered (requests 404) and no search affordance is emitted anywhere.
+`enabled` is evaluated when the router is built — changing it requires a
+restart; other tunables reload with content.
+
+### Templates and override points
+
+| File                                  | Purpose                                        |
+|---------------------------------------|------------------------------------------------|
+| `templates/search.html`               | The search page (form, results region, states).|
+| `templates/partials/search-result.html` | One result item (`{{define "search-result"}}`). |
+| `templates/partials/search-pagination.html` | Results prev/next nav (`{{define "search-pagination"}}`). |
+
+Override any of these through the overlay filesystem exactly like other
+templates (Section 6). If a custom theme omits a search partial, the embedded
+default is used, so you can override just the page or just a partial.
+
+Within `search.html`, the search-specific data lives under `.Search` (see the
+**SearchData** table in Section 4). The `search-result` partial receives a
+single `SearchResult` as its dot; the `search-pagination` partial receives the
+`.Search` value.
+
+### Accessibility contract
+
+The default search UI is keyboard-navigable and screen-reader friendly: the
+form uses `role="search"`, the query input has an associated label, the result
+count is exposed via `role="status"`, the no-results state is explicit, and
+pagination uses real `<a>` links inside a labelled `<nav>`. Preserve these
+semantics when overriding the templates.
