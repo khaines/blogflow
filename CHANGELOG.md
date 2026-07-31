@@ -2,6 +2,8 @@
 
 ## main / unreleased
 
+## 0.5.0 / 2026-07-30
+
 ### BlogFlow
 
 * [FEATURE] search: optional server-rendered full-text search (no JavaScript). Enable with `search.enabled: true`; adds `GET /search?q=&page=` with a Unicode-normalized tokenizer, a bounded in-memory inverted index (`max_docs`/`max_tokens`/`max_index_bytes` caps), deterministic weighted TF-IDF ranking, plain-text excerpts, accessible default-theme templates (`search.html` + `search-result`/`search-pagination` partials, conditional header search box), and `blogflow_search_*` metrics. Content and search publish atomically in one snapshot generation. #280
@@ -29,6 +31,10 @@
 ### Testing
 
 * [ENHANCEMENT] Add test coverage for gap-analysis items #217–#235: CSP headers on non-HTML responses, symlink-escape detection, IP allowlist (bare IP + CIDR), webhook secret-length bounds, environment-override validation, and overlay-FS behaviors. #237
+
+### Dependencies
+
+* [BUGFIX] Deps: bump `google.golang.org/grpc` from `v1.81.1` to `v1.83.0` to resolve `GHSA-hrxh-6v49-42gf` and unblock the Publish Trivy gate. #287
 
 ## 0.4.1 / 2026-05-18
 
