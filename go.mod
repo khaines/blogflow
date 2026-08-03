@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/go-git/go-git/v5 v5.19.1
+	github.com/go-git/go-git/v5 v5.19.2
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/yuin/goldmark v1.8.4
