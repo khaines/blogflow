@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 # Runtime stage — distroless, rootless, no shell
 # gcr.io/distroless/static-debian12:nonroot
-FROM gcr.io/distroless/static-debian12@sha256:a9fcaedd4c9b59e12dd65d954f0b5044f19b0647a8a3712e77205df9e7b102cd AS runtime
+FROM gcr.io/distroless/static-debian12@sha256:6447365a6337c3732f412d1b74357b30a633831955b2bc45552b0086be907687 AS runtime
 COPY --from=build /app /app
 USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=3s CMD ["/app", "healthcheck"]
