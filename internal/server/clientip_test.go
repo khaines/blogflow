@@ -79,7 +79,7 @@ func TestClientIP_TrustedProxy_XFFPreferredOverXRealIP(t *testing.T) {
 	}
 }
 
-func TestClientIP_TrustedProxy_AllXFFTrusted_FallsToXRealIP(t *testing.T) {
+func TestClientIP_TrustedProxy_AllXFFTrusted_ReturnsLeftmost(t *testing.T) {
 	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8", "172.16.0.0/12"})
 	if err != nil {
 		t.Fatal(err)
@@ -90,9 +90,11 @@ func TestClientIP_TrustedProxy_AllXFFTrusted_FallsToXRealIP(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "10.0.0.2, 172.16.0.5")
 	req.Header.Set("X-Real-IP", "203.0.113.77")
 
+	// X-Real-IP is ignored whenever X-Forwarded-For is present, so a
+	// client-supplied X-Real-IP cannot override the proxy chain.
 	got := resolver.ClientIP(req)
-	if got != "203.0.113.77" {
-		t.Errorf("ClientIP = %q, want %q (all XFF trusted, should fall to X-Real-IP)", got, "203.0.113.77")
+	if got != "10.0.0.2" {
+		t.Errorf("ClientIP = %q, want %q (all XFF trusted, should return left-most hop)", got, "10.0.0.2")
 	}
 }
 
@@ -174,5 +176,67 @@ func TestExtractIP(t *testing.T) {
 				t.Errorf("extractIP(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClientIP_TrustedProxy_MultipleXFFHeaderLines(t *testing.T) {
+	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Client sends its own XFF line; the proxy adds a separate line with the
+	// real client address instead of appending to the existing one.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Add("X-Forwarded-For", "6.6.6.6")
+	req.Header.Add("X-Forwarded-For", "203.0.113.9")
+
+	if got := resolver.ClientIP(req); got != "203.0.113.9" {
+		t.Errorf("ClientIP = %q, want %q (must use right-most untrusted across all lines)", got, "203.0.113.9")
+	}
+}
+
+func TestClientIP_TrustedProxy_RejectsNonIPValues(t *testing.T) {
+	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{"xff garbage", "X-Forwarded-For", "not-an-ip"},
+		{"xff garbage after trusted", "X-Forwarded-For", "not-an-ip, 10.0.0.9"},
+		{"x-real-ip garbage", "X-Real-IP", "not-an-ip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = "10.0.0.5:1234"
+			req.Header.Set(tt.header, tt.value)
+			got := resolver.ClientIP(req)
+			if got == "not-an-ip" {
+				t.Fatalf("ClientIP returned unvalidated header value %q", got)
+			}
+		})
+	}
+}
+
+func TestClientIP_TrustedProxy_XRealIPIgnoredWhenXFFPresent(t *testing.T) {
+	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "10.0.0.2")
+	req.Header.Set("X-Real-IP", "6.6.6.6")
+
+	if got := resolver.ClientIP(req); got == "6.6.6.6" {
+		t.Errorf("ClientIP = %q; client-supplied X-Real-IP must not override XFF", got)
 	}
 }

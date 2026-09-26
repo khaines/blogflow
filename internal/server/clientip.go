@@ -41,30 +41,43 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 
 // ClientIP returns the best-effort real client IP for the request.
 //
-// If RemoteAddr is from a trusted proxy CIDR, X-Forwarded-For (right-most
-// untrusted entry) or X-Real-IP is used. Otherwise RemoteAddr is returned.
+// If RemoteAddr is from a trusted proxy CIDR, the X-Forwarded-For chain is
+// walked from the right and the first untrusted entry is returned. All
+// X-Forwarded-For header lines are considered together, because some proxies
+// append a new header line instead of extending the existing one; reading
+// only the first line would return a value the client supplied. X-Real-IP is
+// consulted only when no X-Forwarded-For header is present. Values that are
+// not valid IP addresses are ignored. Otherwise RemoteAddr is returned.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	remoteIP := extractIP(r.RemoteAddr)
 	if !c.isTrusted(remoteIP) {
 		return remoteIP
 	}
 
-	// Prefer X-Forwarded-For: walk from right to left, skip trusted proxies.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
+	if xffLines := r.Header.Values("X-Forwarded-For"); len(xffLines) > 0 {
+		ips := strings.Split(strings.Join(xffLines, ","), ",")
+		leftmost := ""
 		for i := len(ips) - 1; i >= 0; i-- {
 			ip := strings.TrimSpace(ips[i])
-			if ip == "" {
-				continue
+			if net.ParseIP(ip) == nil {
+				// An unparsable hop means the chain cannot be trusted
+				// beyond this point; stop rather than skip over it.
+				break
 			}
 			if !c.isTrusted(ip) {
 				return ip
 			}
+			leftmost = ip
 		}
-		// All entries are trusted — fall through to X-Real-IP / RemoteAddr.
+		// Every parseable entry is a trusted proxy: the left-most one
+		// reached is the closest thing to the originating client.
+		if leftmost != "" {
+			return leftmost
+		}
+		return remoteIP
 	}
 
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(realIP) != nil {
 		return realIP
 	}
 
