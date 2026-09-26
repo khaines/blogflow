@@ -2,6 +2,8 @@
 
 ## main / unreleased
 
+* [CHANGE] Go: move to Go 1.27 (`go 1.27.1` in go.mod, Go 1.27 in CI and the `golang:1.27-bookworm` build image). #297
+
 ## 0.5.0 / 2026-07-30
 
 ### BlogFlow
