@@ -108,6 +108,7 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
 		span.SetAttributes(attribute.String("gitops.operation", "pull"))
 		changed, pullErr := p.pull(ctx, repoURL, branch, destPath)
+		pullErr = redactError(pullErr)
 		if pullErr != nil {
 			span.SetStatus(codes.Error, pullErr.Error())
 			span.RecordError(pullErr)
@@ -116,7 +117,7 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 	}
 
 	span.SetAttributes(attribute.String("gitops.operation", "clone"))
-	cloneErr := p.clone(ctx, repoURL, branch, destPath)
+	cloneErr := redactError(p.clone(ctx, repoURL, branch, destPath))
 	if cloneErr != nil {
 		span.SetStatus(codes.Error, cloneErr.Error())
 		span.RecordError(cloneErr)
@@ -146,19 +147,41 @@ func validateSparseDirs(dirs []string) ([]string, error) {
 }
 
 // SanitizeURL strips embedded credentials from a URL for safe logging.
+// Strings that do not parse as URLs are passed through redactCredentials so a
+// malformed URL (e.g. an unescaped "%" in a token) never leaks verbatim.
 func SanitizeURL(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return redactCredentials(raw)
+	}
+	if u.User == nil {
 		return raw
 	}
 	u.User = nil
 	return u.String()
 }
 
+// resolveRemote returns the URL and auth to hand to go-git. Credentials
+// embedded in an http(s) URL are moved into BasicAuth so go-git never sees
+// them in the URL. Explicitly configured auth (BLOGFLOW_GIT_TOKEN, SSH key)
+// takes precedence over embedded credentials.
+func (p *Puller) resolveRemote(repoURL string) (string, transport.AuthMethod) {
+	cleanURL, urlAuth := splitHTTPCredentials(repoURL)
+	if urlAuth != nil && p.auth != nil {
+		p.logger.Warn("ignoring credentials embedded in repo URL; explicit git auth is configured",
+			"url", cleanURL)
+	}
+	if p.auth != nil || urlAuth == nil {
+		return cleanURL, p.auth
+	}
+	return cleanURL, urlAuth
+}
+
 func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (retErr error) {
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.clone")
 	defer func() {
+		retErr = redactError(retErr)
 		if retErr != nil {
 			span.SetStatus(codes.Error, retErr.Error())
 			span.RecordError(retErr)
@@ -171,9 +194,10 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (r
 
 	sparse := len(p.SparseDirs) > 0
 
+	cloneURL, auth := p.resolveRemote(repoURL)
 	opts := &git.CloneOptions{
-		URL:           repoURL,
-		Auth:          p.auth,
+		URL:           cloneURL,
+		Auth:          auth,
 		ReferenceName: plumbing.NewBranchReferenceName(branch),
 		SingleBranch:  true,
 		Depth:         p.depth,
@@ -208,6 +232,7 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.pull")
 	defer func() {
+		retErr = redactError(retErr)
 		if retErr != nil {
 			span.SetStatus(codes.Error, retErr.Error())
 			span.RecordError(retErr)
@@ -228,10 +253,17 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		return false, fmt.Errorf("gitops: head %s: %w", destPath, err)
 	}
 
+	// Clones made by older versions may have credentials persisted in the
+	// origin URL; scrub them so go-git never echoes them back in errors.
+	_, auth := p.resolveRemote(repoURL)
+	if err := scrubRemoteCredentials(repo); err != nil {
+		return false, fmt.Errorf("gitops: scrub remote credentials %s: %w", destPath, err)
+	}
+
 	// Use FetchContext + hard reset instead of PullContext so we can set
 	// Tags: NoTags — PullOptions does not expose a Tags field.
 	fetchErr := repo.FetchContext(ctx, &git.FetchOptions{
-		Auth:  p.auth,
+		Auth:  auth,
 		Depth: p.depth,
 		Tags:  git.NoTags,
 		Force: true,
@@ -247,7 +279,7 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		// Shallow clone + fetch is a known go-git limitation.
 		// Fall back to delete and re-clone.
 		p.logger.Warn("pull failed, falling back to re-clone",
-			"dest", destPath, "error", fetchErr)
+			"dest", destPath, "error", redactError(fetchErr))
 		if removeErr := os.RemoveAll(destPath); removeErr != nil {
 			return false, fmt.Errorf("gitops: failed to clear for re-clone %s: %w", destPath, removeErr)
 		}
