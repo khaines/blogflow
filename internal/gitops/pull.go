@@ -259,7 +259,8 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 
 	// Resolve the remote tracking ref and hard-reset the worktree.
 	remoteRef, err := repo.Reference(
-		plumbing.NewRemoteReferenceName("origin", branch), true)
+		plumbing.NewRemoteReferenceName("origin", branch), true,
+	)
 	if err != nil {
 		return false, fmt.Errorf("gitops: resolve remote ref %s: %w", destPath, err)
 	}
