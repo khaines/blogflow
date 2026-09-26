@@ -15,7 +15,7 @@ pull request you agree that your contribution is licensed under the same terms.
 
 | Tool            | Version   | Purpose                     |
 | --------------- | --------- | --------------------------- |
-| **Go**          | 1.26+     | Build and test              |
+| **Go**          | 1.27+     | Build and test              |
 | **Docker**      | 24+       | Container builds and smoke tests |
 | **golangci-lint** | v2      | Static analysis             |
 | **gofumpt**     | latest    | Code formatting             |
