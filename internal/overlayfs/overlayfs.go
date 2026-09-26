@@ -855,9 +855,17 @@ func readAll(f fs.File) ([]byte, error) {
 
 // checkSymlinkSafe verifies the opened path hasn't escaped the layer root
 // via symlink. This is defense-in-depth for platforms without openat2/RESOLVE_BENEATH.
+//
+// It also refuses any path that is, or resolves to, something inside a .git
+// directory. Content layers are git clones, and .git/config can hold the
+// remote URL; a symlink committed to the content repo (e.g.
+// static/x -> ../.git/config) must not be able to publish it.
 func checkSymlinkSafe(root, name string) error {
 	if root == "" {
 		return nil // non-disk layer, skip check
+	}
+	if hasGitComponent(name) {
+		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	}
 	fullPath := filepath.Join(root, filepath.FromSlash(name))
 	resolved, err := filepath.EvalSymlinks(fullPath)
@@ -872,7 +880,21 @@ func checkSymlinkSafe(root, name string) error {
 	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) && resolved != root {
 		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
+	if rel, relErr := filepath.Rel(root, resolved); relErr == nil && hasGitComponent(filepath.ToSlash(rel)) {
+		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
 	return nil
+}
+
+// hasGitComponent reports whether any element of the slash-separated path is
+// ".git" (case-insensitive, for case-insensitive filesystems).
+func hasGitComponent(name string) bool {
+	for _, elem := range strings.Split(name, "/") {
+		if strings.EqualFold(elem, ".git") {
+			return true
+		}
+	}
+	return false
 }
 
 // goVersionAtLeast checks if the runtime Go version is at least major.minor.
