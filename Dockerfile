@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
