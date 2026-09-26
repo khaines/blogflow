@@ -420,3 +420,52 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 		t.Fatalf("different XFF IP: expected 200, got %d", rec3.Code)
 	}
 }
+
+// Unsigned or badly signed requests from the same client IP as the real
+// sender (e.g. everyone behind one ingress) must not exhaust the budget for
+// signature-verified deliveries.
+func TestWebhookHandler_UnauthenticatedCannotStarveVerified(t *testing.T) {
+	secret := []byte("test-secret-min-32-bytes-long!!!!")
+	called := 0
+	reloader := func() error { called++; return nil }
+
+	ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+		Path:         "/api/webhook",
+		Secret:       string(secret),
+		BranchFilter: "main",
+		RateLimit:    2,
+	}, reloader, webhookLogger(), testResWL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := ws.Handler()
+	payload := []byte(`{"ref":"refs/heads/main"}`)
+
+	send := func(sig string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		req.RemoteAddr = "10.0.0.1:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Attacker burns through and past the failure budget.
+	for i := 0; i < 5; i++ {
+		send("sha256=deadbeef")
+		send("")
+	}
+	if code := send("sha256=deadbeef"); code != http.StatusTooManyRequests {
+		t.Fatalf("attacker after budget: expected 429, got %d", code)
+	}
+
+	// A genuine delivery from the same IP is still accepted.
+	if code := send(signPayload(secret, payload)); code != http.StatusOK {
+		t.Fatalf("verified delivery after junk: expected 200, got %d", code)
+	}
+	if called != 1 {
+		t.Fatalf("expected 1 reload, got %d", called)
+	}
+}

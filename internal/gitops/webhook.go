@@ -72,8 +72,7 @@ func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logg
 	}
 	w.ipResolver = resolver
 
-	rl := newRateLimiter(cfg.RateLimit)
-	w.handler = w.buildHandler(rl)
+	w.handler = w.buildHandler(newWebhookLimits(cfg.RateLimit))
 
 	return w, nil
 }
@@ -97,7 +96,25 @@ func (w *WebhookStrategy) Stop(ctx context.Context) error {
 // Name returns the strategy name.
 func (w *WebhookStrategy) Name() string { return "webhook" }
 
-func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
+// webhookLimits keeps separate per-client-IP budgets for failed
+// authentication and for verified deliveries.
+//
+// Charging unauthenticated requests against the same bucket as genuine
+// deliveries let anyone who shares an IP with the sender (e.g. every caller
+// behind an ingress when trusted_proxy_cidrs is unset) starve real webhook
+// deliveries with junk POSTs. Now failed signatures only consume the
+// failures budget, and the verified budget can only be consumed by callers
+// that hold the secret.
+type webhookLimits struct {
+	failures *rateLimiter // charged on missing or invalid signature
+	verified *rateLimiter // charged on signature-verified delivery
+}
+
+func newWebhookLimits(limit int) webhookLimits {
+	return webhookLimits{failures: newRateLimiter(limit), verified: newRateLimiter(limit)}
+}
+
+func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
@@ -116,11 +133,20 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			}
 		}
 
-		// Rate-limit by remote IP (after allowlist validation).
-		if rl != nil && !rl.allow(ip) {
-			w.logger.Warn("rate limited", "ip", ip)
-			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
-			return
+		// authFailed charges a failed-auth attempt to the client IP. Within
+		// budget it logs and returns 401; beyond it, it returns 429 without
+		// logging so junk traffic cannot flood the logs. Failed attempts never
+		// block a correctly signed delivery: the signature is always checked,
+		// so callers sharing an IP with the real sender cannot starve it.
+		// The body is capped by MaxBytesReader, so verifying costs no more
+		// than receiving it.
+		authFailed := func(reason, msg string) {
+			if limits.failures != nil && !limits.failures.allow(ip) {
+				http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			w.logger.Warn(reason, "ip", ip)
+			http.Error(rw, msg, http.StatusUnauthorized)
 		}
 
 		// Limit request body size.
@@ -147,14 +173,18 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		// to prevent unauthenticated callers from probing allowed event types.
 		sigHeader := r.Header.Get("X-Hub-Signature-256")
 		if sigHeader == "" {
-			w.logger.Warn("missing signature header")
-			http.Error(rw, "missing signature", http.StatusUnauthorized)
+			authFailed("missing signature header", "missing signature")
 			return
 		}
 
 		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
-			w.logger.Warn("invalid signature")
-			http.Error(rw, "invalid signature", http.StatusUnauthorized)
+			authFailed("invalid signature", "invalid signature")
+			return
+		}
+
+		if limits.verified != nil && !limits.verified.allow(ip) {
+			w.logger.Warn("rate limited verified delivery", "ip", ip)
+			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 
