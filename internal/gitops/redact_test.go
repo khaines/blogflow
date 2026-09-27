@@ -5,8 +5,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/cgi" //nolint:gosec // test-only git-http-backend; Go >= 1.6.3 is not affected by httpoxy
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,7 +16,6 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	gitconfig "github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
@@ -119,15 +120,18 @@ func TestScrubRemoteCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originAuth, scrubbed, err := scrubRemoteCredentials(repo)
+	if !hasPersistedCredentials(repo) {
+		t.Fatal("hasPersistedCredentials = false before scrub")
+	}
+	scrubbed, err := scrubRemoteCredentials(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !scrubbed {
 		t.Fatal("expected scrubRemoteCredentials to report a change")
 	}
-	if ba, ok := originAuth.(*githttp.BasicAuth); !ok || ba.Username != "u" || ba.Password != testSecret {
-		t.Fatalf("originAuth = %#v, want the scrubbed origin credentials", originAuth)
+	if hasPersistedCredentials(repo) {
+		t.Fatal("hasPersistedCredentials = true after scrub")
 	}
 	cfg, _ = repo.Config()
 	if got := cfg.Remotes["origin"].URLs[0]; got != "https://example.com/o/r.git" {
@@ -226,50 +230,6 @@ func TestResolveRemote(t *testing.T) {
 	}
 }
 
-// A successful pull must scrub credentials persisted in .git/config by
-// older versions. origin stays a local path so the fetch succeeds; a second
-// remote carries the persisted credential.
-func TestCloneOrPull_PullScrubsPersistedCredentials(t *testing.T) {
-	bare := newBareRepoWithCommit(t)
-	dest := filepath.Join(t.TempDir(), "dst")
-
-	p, err := NewPuller(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
-		t.Fatalf("clone: %v", err)
-	}
-
-	repo, err := git.PlainOpen(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.CreateRemote(&gitconfig.RemoteConfig{
-		Name: "legacy",
-		URLs: []string{"https://u:" + testSecret + "@example.com/o/r.git"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
-		t.Fatalf("pull: %v", err)
-	}
-
-	raw, err := os.ReadFile(filepath.Join(dest, ".git", "config")) //nolint:gosec // test reads its own temp dir
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), testSecret) {
-		t.Fatalf(".git/config still contains the credential:\n%s", raw)
-	}
-	if !strings.Contains(string(raw), "https://example.com/o/r.git") {
-		t.Fatalf(".git/config lost the scrubbed remote URL:\n%s", raw)
-	}
-}
-
-// On pull, credentials embedded in the configured repo URL must reach the
-// fetch as basic auth even though .git/config holds a clean origin URL.
 func TestCloneOrPull_PullFetchUsesURLCredentials(t *testing.T) {
 	bare := newBareRepoWithCommit(t)
 	dest := filepath.Join(t.TempDir(), "dst")
@@ -372,12 +332,162 @@ func TestRedactCredentials_AtInPassword(t *testing.T) {
 	}
 }
 
-// A clone whose origin carries credentials, synced with a clean repo URL and
-// no explicit auth, must keep sending those credentials after the scrub.
-func TestCloneOrPull_PullKeepsScrubbedOriginCredentials(t *testing.T) {
+func TestRedactCredentials_WhitespaceInPassword(t *testing.T) {
+	got := redactCredentials(`Get "https://u:pa ss` + testSecret + `@host/o/r.git/info/refs": 500`)
+	if strings.Contains(got, testSecret) {
+		t.Fatalf("not redacted: %q", got)
+	}
+}
+
+// authGitServer serves the bare repo at bare over smart HTTP (via
+// git-http-backend) and requires basic auth u/testSecret. It returns the
+// repo URL without credentials and a func counting unauthenticated requests.
+func authGitServer(t *testing.T, bare string) (string, func() int) {
+	t.Helper()
+	backend := filepath.Join(gitExecPath(t), "git-http-backend")
+	if _, err := os.Stat(backend); err != nil {
+		t.Skipf("git-http-backend not available: %v", err)
+	}
+	var mu sync.Mutex
+	rejected := 0
+	h := &cgi.Handler{
+		Path: backend,
+		Env:  []string{"GIT_PROJECT_ROOT=" + filepath.Dir(bare), "GIT_HTTP_EXPORT_ALL=1"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "u" || p != testSecret {
+			mu.Lock()
+			rejected++
+			mu.Unlock()
+			w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/" + filepath.Base(bare), func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return rejected
+	}
+}
+
+func gitExecPath(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("git", "--exec-path").Output()
+	if err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func withCreds(u string) string {
+	return strings.Replace(u, "http://", "http://u:"+testSecret+"@", 1)
+}
+
+// A clone whose .git/config holds the only credentials (made by another
+// process or an older version) must keep syncing: they are not scrubbed
+// when nothing else is configured, and the checkout survives repeated pulls.
+func TestCloneOrPull_KeepsOnlyPersistedCredentials(t *testing.T) {
+	repoURL, rejected := authGitServer(t, newBareRepoWithCommit(t))
+	dest := filepath.Join(t.TempDir(), "dst")
+	if _, err := git.PlainClone(dest, false, &git.CloneOptions{URL: withCreds(repoURL)}); err != nil {
+		t.Fatalf("seed clone: %v", err)
+	}
+
+	var logs strings.Builder
+	p, err := NewPuller(nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := p.CloneOrPull(context.Background(), repoURL, "master", dest); err != nil {
+			t.Fatalf("pull %d: %v", i, err)
+		}
+	}
+	if n := rejected(); n != 0 {
+		t.Fatalf("%d unauthenticated requests; persisted credentials were not used", n)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
+		t.Fatalf("checkout lost: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dest, ".git", "config")) //nolint:gosec // test reads its own temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), testSecret) {
+		t.Fatal("the only credentials were scrubbed from .git/config")
+	}
+	if n := strings.Count(logs.String(), "git credentials are stored in .git/config"); n != 1 {
+		t.Fatalf("persisted-credentials warning logged %d times, want 1\n%s", n, logs.String())
+	}
+}
+
+// With credentials configured (here, in the repo URL), credentials persisted
+// in any remote are scrubbed, and pulls keep working.
+func TestCloneOrPull_PullScrubsPersistedCredentials(t *testing.T) {
+	repoURL, rejected := authGitServer(t, newBareRepoWithCommit(t))
+	dest := filepath.Join(t.TempDir(), "dst")
+	if _, err := git.PlainClone(dest, false, &git.CloneOptions{URL: withCreds(repoURL)}); err != nil {
+		t.Fatalf("seed clone: %v", err)
+	}
+
+	p, err := NewPuller(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := p.CloneOrPull(context.Background(), withCreds(repoURL), "master", dest); err != nil {
+			t.Fatalf("pull %d: %v", i, err)
+		}
+	}
+	if n := rejected(); n != 0 {
+		t.Fatalf("%d unauthenticated requests", n)
+	}
+	raw, err := os.ReadFile(filepath.Join(dest, ".git", "config")) //nolint:gosec // test reads its own temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), testSecret) {
+		t.Fatalf(".git/config still contains the credential:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), repoURL) {
+		t.Fatalf(".git/config lost the scrubbed remote URL:\n%s", raw)
+	}
+}
+
+// A scrub failure (e.g. read-only .git/config) must not stop the pull, and
+// is warned about once, not on every pull.
+func TestCloneOrPull_ScrubFailureIsNotFatal(t *testing.T) {
+	orig := scrubRemote
+	scrubRemote = func(*git.Repository) (bool, error) {
+		return false, errors.New("read-only file system")
+	}
+	t.Cleanup(func() { scrubRemote = orig })
+
+	repoURL, _ := authGitServer(t, newBareRepoWithCommit(t))
+	dest := filepath.Join(t.TempDir(), "dst")
+	var logs strings.Builder
+	p, err := NewPuller(nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := p.CloneOrPull(context.Background(), withCreds(repoURL), "master", dest); err != nil {
+			t.Fatalf("sync %d: %v", i, err)
+		}
+	}
+	if n := strings.Count(logs.String(), "could not remove credentials persisted"); n != 1 {
+		t.Fatalf("scrub warning logged %d times, want 1\n%s", n, logs.String())
+	}
+}
+
+// When persisted credentials are kept (no other auth), go-git errors that
+// echo the remote URL must still be redacted.
+func TestCloneOrPull_KeptCredentialsNotInError(t *testing.T) {
 	bare := newBareRepoWithCommit(t)
 	dest := filepath.Join(t.TempDir(), "dst")
-
 	p, err := NewPuller(nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -385,8 +495,6 @@ func TestCloneOrPull_PullKeepsScrubbedOriginCredentials(t *testing.T) {
 	if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
 		t.Fatalf("clone: %v", err)
 	}
-
-	srv, seen := failingGitServer(t)
 	repo, err := git.PlainOpen(dest)
 	if err != nil {
 		t.Fatal(err)
@@ -395,57 +503,17 @@ func TestCloneOrPull_PullKeepsScrubbedOriginCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withCreds := strings.Replace(srv.URL, "http://", "http://x-access-token:"+testSecret+"@", 1) + "/o/r.git"
-	cfg.Remotes["origin"].URLs = []string{withCreds}
+	srv, _ := failingGitServer(t)
+	cfg.Remotes["origin"].URLs = []string{withCreds(srv.URL) + "/o/r.git"}
 	if err := repo.SetConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err = p.CloneOrPull(context.Background(), srv.URL+"/o/r.git", "master", dest)
 	if err == nil {
-		t.Fatal("expected fetch error from failing server")
+		t.Fatal("expected error from failing remote")
 	}
 	if strings.Contains(err.Error(), testSecret) {
 		t.Fatalf("error leaks credential: %v", err)
-	}
-	u, pw, ok := seen()
-	if !ok || u != "x-access-token" || pw != testSecret {
-		t.Fatalf("fetch did not carry origin credentials: ok=%v user=%q", ok, u)
-	}
-}
-
-// A scrub failure (e.g. read-only .git/config) must not stop the pull, and
-// is warned about once, not on every pull.
-func TestCloneOrPull_ScrubFailureIsNotFatal(t *testing.T) {
-	orig := scrubRemote
-	scrubRemote = func(*git.Repository) (transport.AuthMethod, bool, error) {
-		return nil, false, errors.New("read-only file system")
-	}
-	t.Cleanup(func() { scrubRemote = orig })
-
-	bare := newBareRepoWithCommit(t)
-	dest := filepath.Join(t.TempDir(), "dst")
-	var logs strings.Builder
-	p, err := NewPuller(nil, slog.New(slog.NewTextHandler(&logs, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
-		t.Fatalf("clone: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
-			t.Fatalf("pull %d: %v", i, err)
-		}
-	}
-	if n := strings.Count(logs.String(), "could not remove credentials persisted"); n != 1 {
-		t.Fatalf("scrub warning logged %d times, want 1\n%s", n, logs.String())
-	}
-}
-
-func TestRedactCredentials_WhitespaceInPassword(t *testing.T) {
-	got := redactCredentials(`Get "https://u:pa ss` + testSecret + `@host/o/r.git/info/refs": 500`)
-	if strings.Contains(got, testSecret) {
-		t.Fatalf("not redacted: %q", got)
 	}
 }

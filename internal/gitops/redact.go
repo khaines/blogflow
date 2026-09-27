@@ -16,8 +16,9 @@ import (
 // runs to the last '@' before the path; a password containing an unescaped
 // '@' is therefore redacted in full. Whitespace is admitted too, so a
 // password with an unescaped space is not cut short; the match stops at a
-// path '/', a line break or a closing quote.
-var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\r\n"]*@`)
+// path '/', a line break or an unescaped closing quote (a quote escaped as
+// \" by %q formatting does not end it).
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)(?:[^/\r\n"\\]|\\.)*@`)
 
 // redactCredentials removes URL userinfo from arbitrary text.
 func redactCredentials(s string) string {
@@ -67,27 +68,41 @@ func splitHTTPCredentials(raw string) (string, transport.AuthMethod) {
 // config that carries userinfo, removing the credentials. Repositories cloned
 // before credentials were split out of the URL have the token persisted in
 // .git/config; leaving it there would expose it in go-git fetch errors and to
-// anything that can read the file. It reports whether anything was changed,
-// and returns the credentials removed from the origin remote's first URL so
-// a caller with no other auth can keep fetching from it.
-func scrubRemoteCredentials(repo *git.Repository) (originAuth transport.AuthMethod, scrubbed bool, err error) {
+// anything that can read the file. It reports whether anything was changed.
+// Callers must only scrub when other credentials are configured.
+func scrubRemoteCredentials(repo *git.Repository) (bool, error) {
 	cfg, err := repo.Config()
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
-	for name, rc := range cfg.Remotes {
+	scrubbed := false
+	for _, rc := range cfg.Remotes {
 		for i, u := range rc.URLs {
 			if clean, auth := splitHTTPCredentials(u); auth != nil {
 				rc.URLs[i] = clean
 				scrubbed = true
-				if name == git.DefaultRemoteName && i == 0 {
-					originAuth = auth
-				}
 			}
 		}
 	}
 	if !scrubbed {
-		return nil, false, nil
+		return false, nil
 	}
-	return originAuth, true, repo.SetConfig(cfg)
+	return true, repo.SetConfig(cfg)
+}
+
+// hasPersistedCredentials reports whether any http(s) remote URL in the
+// repository config carries userinfo.
+func hasPersistedCredentials(repo *git.Repository) bool {
+	cfg, err := repo.Config()
+	if err != nil {
+		return false
+	}
+	for _, rc := range cfg.Remotes {
+		for _, u := range rc.URLs {
+			if _, auth := splitHTTPCredentials(u); auth != nil {
+				return true
+			}
+		}
+	}
+	return false
 }

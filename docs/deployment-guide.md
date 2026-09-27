@@ -513,12 +513,16 @@ go-git uses this as `x-access-token` basic auth (GitHub convention).
 > out of the URL and into HTTP basic auth, so they never appear in errors,
 > logs, traces or `.git/config`. When `BLOGFLOW_GIT_TOKEN` or an SSH key is
 > also configured, that explicit auth wins and the URL credentials are
-> ignored; a warning is logged once. Clones made by older versions may have
-> the credential saved in `.git/config`; it is removed on the first pull
-> after upgrading if `.git/config` is writable, and kept in memory for that
-> remote's fetches when no other credentials are configured. If it is not (for example a
-> read-only volume), a WARN line is logged once and sync continues; remove
-> the credential by hand.
+> ignored; a warning is logged once. Clones made by older versions (or by
+> another process) may have the credential saved in `.git/config`:
+>
+> - If `BLOGFLOW_GIT_TOKEN`, an SSH key or URL credentials are configured,
+>   it is removed on the next pull. If `.git/config` is not writable (for
+>   example a read-only volume), a WARN line is logged once and sync
+>   continues; remove the credential by hand.
+> - If nothing else is configured, it is the only credential BlogFlow has,
+>   so it is left in place and a WARN line is logged once. Set
+>   `BLOGFLOW_GIT_TOKEN` so it can be removed.
 
 **Option B: SSH deploy key**
 
@@ -572,7 +576,9 @@ defaults to `AuthNone`.
   - **Verified deliveries** — correctly signed deliveries that pass the
     event and branch filters (the ones that would reload content). Past
     this budget they get 429. Pushes to other branches and filtered events
-    do not use it up.
+    do not use it up. A 429 here means that push was not applied; content
+    catches up on the next accepted push, so alert on
+    `verified_budget_exceeded` and raise `rate_limit` if it fires.
 
   Because the budgets are separate, unsigned traffic from the same IP as
   GitHub (for example every caller behind an ingress when

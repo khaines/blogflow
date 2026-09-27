@@ -482,7 +482,7 @@ Error classification:
 | 20 | Direct request for VCS metadata | `Open(".git/config")` | Refused by name before any layer lookup: `fs.ErrPermission` (403 via `http.FileServerFS`), whether or not the path exists |
 | 21 | Symlink into VCS metadata | Content repo commits `static/x -> ../.git/config` | Resolved path contains `.git`: return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat` |
 | 22 | Symlinked directory into VCS metadata | Content repo commits `static/gitdir -> ../.git`; `ReadDir("static/gitdir")` | Return `fs.ErrPermission`; nothing listed |
-| 23 | `.git` in a merged listing | `ReadDir(".")` on a layer that is a git clone | `.git` entry omitted from the result |
+| 23 | `.git` in a directory listing | `ReadDir(".")` on a layer that is a git clone, or `ReadDir` on the directory handle `Open(".")` returns (what `http.FileServerFS` lists) | `.git` entry omitted from the result |
 | 24 | Case variant of `.git` | `Open(".GIT/config")` | Treated as `.git` (case-insensitive name match) — `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir` on every filesystem |
 
 ### 3.3 Integration Test Boundaries
@@ -610,7 +610,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 | `os.DirFS` confinement | Each layer rooted at its base directory | Directory escape |
 | `filepath.EvalSymlinks` on base paths | Constructor resolves symlinks at startup | Symlink-based root escape |
 | Non-interpretation of file content | Overlay returns raw bytes; parsing is the caller's responsibility | Injection via file content |
-| VCS metadata exclusion | Any requested path with a `.git` element (case-insensitive) is refused by name before layer lookup; on disk layers, any symlink-resolved path with a `.git` element is also refused. Both return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir`; `.git` is omitted from merged listings | Publishing `.git/config` (which can hold the remote URL and credentials) through a committed symlink |
+| VCS metadata exclusion | Any requested path with a `.git` element (case-insensitive) is refused by name before layer lookup; on disk layers, any symlink-resolved path with a `.git` element is also refused. Both return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir`; `.git` is omitted from merged listings and from directory handles returned by `Open` on disk layers | Publishing `.git/config` (which can hold the remote URL and credentials) through a committed symlink |
 
 **Size limits**: The overlay FS does not enforce file size limits. Downstream consumers (template parser, markdown parser, config loader) enforce their own limits. The content pipeline rejects markdown files > 10 MB; the config loader rejects YAML files > 1 MB.
 

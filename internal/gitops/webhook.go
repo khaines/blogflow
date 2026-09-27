@@ -114,6 +114,9 @@ func newWebhookLimits(limit int) webhookLimits {
 	return webhookLimits{failures: newRateLimiter(limit), verified: newRateLimiter(limit)}
 }
 
+// maxEchoedRefLen bounds the payload ref echoed back for a skipped branch.
+const maxEchoedRefLen = 256
+
 func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		// The server registers this handler for POST only, so the router
@@ -232,9 +235,13 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 				webhookRequestsTotal.WithLabelValues(outcomeBranchSkipped).Inc()
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
-				rw.Header().Set("X-Blogflow-Branch-Skipped", payload.Ref)
+				ref := payload.Ref
+				if len(ref) > maxEchoedRefLen {
+					ref = ref[:maxEchoedRefLen]
+				}
+				rw.Header().Set("X-Blogflow-Branch-Skipped", ref)
 				rw.WriteHeader(http.StatusAccepted)
-				_, _ = fmt.Fprintf(rw, "%s (no action)", payload.Ref)
+				_, _ = fmt.Fprintf(rw, "%s (no action)", ref)
 				return
 			}
 		}

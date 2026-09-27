@@ -30,8 +30,9 @@ type Puller struct {
 	SparseDirs []string // if non-empty, only these directories are checked out
 	depth      int      // git clone/fetch depth; 1 = shallowest
 
-	embeddedCredsWarn sync.Once // warn once about ignored URL credentials
-	scrubWarn         sync.Once // warn once about an unwritable .git/config
+	embeddedCredsWarn  sync.Once // warn once about ignored URL credentials
+	scrubWarn          sync.Once // warn once about an unwritable .git/config
+	persistedCredsWarn sync.Once // warn once about credentials kept in .git/config
 }
 
 // PullerOption configures optional Puller behaviour.
@@ -330,11 +331,21 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		return false, fmt.Errorf("gitops: head %s: %w", destPath, err)
 	}
 
-	// Clones made by older versions may have credentials persisted in the
-	// origin URL; scrub them so go-git never echoes them back in errors.
+	// Clones made by older versions (or by another process) may have
+	// credentials persisted in the remote URL. Scrub them only when other
+	// credentials are configured: otherwise they are the only way to fetch,
+	// and removing them would break every later pull (and, via the re-clone
+	// fallback, delete the checkout). go-git errors are redacted either way.
 	_, auth := p.resolveRemote(repoURL)
-	originAuth, scrubbed, err := scrubRemote(repo)
-	if err != nil {
+	if auth == nil {
+		if hasPersistedCredentials(repo) {
+			p.persistedCredsWarn.Do(func() {
+				p.logger.Warn("git credentials are stored in .git/config and no other git auth is configured; "+
+					"set BLOGFLOW_GIT_TOKEN (or embed them in the repo URL) so they can be removed from disk",
+					"dest", destPath)
+			})
+		}
+	} else if scrubbed, err := scrubRemote(repo); err != nil {
 		// Not fatal: fetch below uses auth resolved from repoURL, and any
 		// resulting error is redacted. Failing here would stop content sync
 		// for repos whose .git/config is not writable (e.g. read-only volume).
@@ -346,12 +357,6 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		})
 	} else if scrubbed {
 		p.logger.Info("removed credentials persisted in .git/config remote URL", "dest", destPath)
-	}
-	// Before the scrub, go-git would have sent origin's persisted credentials
-	// itself. Keep sending them when nothing else is configured, so a clone
-	// made by another process (or an older version) keeps syncing.
-	if auth == nil && originAuth != nil {
-		auth = originAuth
 	}
 
 	// Use FetchContext + hard reset instead of PullContext so we can set
