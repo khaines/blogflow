@@ -610,7 +610,7 @@ sync:
     allowed_events:                  # []string — accepted GitHub event types
       - "push"
     branch_filter: "main"            # string — only sync pushes to this branch
-    rate_limit: 10                   # int    — per client IP per minute (1–100): N rejected + N verified
+    rate_limit: 10                   # int    — per client IP per minute (1–100): N rejected + N verified deliveries
 
 # ─── Feed ─────────────────────────────────────────────────────
 feed:

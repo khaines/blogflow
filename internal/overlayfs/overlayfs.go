@@ -288,6 +288,9 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 				o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
 				o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
 			}
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				return hideGitInDir(f), nil
+			}
 			return f, nil
 		}
 		if !isNotExist(err) {
@@ -917,6 +920,40 @@ func checkSymlinkSafe(root, name string) error {
 		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	}
 	return nil
+}
+
+// hideGitInDir wraps an opened directory so its ReadDir omits .git, as
+// OverlayFS.ReadDir does. Callers such as http.FileServerFS list a directory
+// through the handle Open returns, not through ReadDir. Regular files are
+// returned unchanged so they keep io.Seeker and friends.
+func hideGitInDir(f fs.File) fs.File {
+	d, ok := f.(fs.ReadDirFile)
+	if !ok {
+		return f
+	}
+	if info, err := f.Stat(); err != nil || !info.IsDir() {
+		return f
+	}
+	return gitHidingDir{d}
+}
+
+type gitHidingDir struct{ fs.ReadDirFile }
+
+func (d gitHidingDir) ReadDir(n int) ([]fs.DirEntry, error) {
+	for {
+		entries, err := d.ReadDirFile.ReadDir(n)
+		kept := entries[:0]
+		for _, e := range entries {
+			if !strings.EqualFold(e.Name(), ".git") {
+				kept = append(kept, e)
+			}
+		}
+		// With n > 0 an empty result must carry an error; read on if the
+		// only entries in this batch were .git.
+		if n <= 0 || len(kept) > 0 || err != nil {
+			return kept, err
+		}
+	}
 }
 
 // hasGitComponent reports whether any element of the slash-separated path is

@@ -287,3 +287,21 @@ func TestClientIP_TrustedProxy_XRealIPIgnoredWhenXFFPresent(t *testing.T) {
 		t.Errorf("ClientIP = %q; client-supplied X-Real-IP must not override XFF", got)
 	}
 }
+
+func TestClientIP_EmptyXFFFallsBackToXRealIP(t *testing.T) {
+	t.Parallel()
+
+	res, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, xff := range []string{"", " , "} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "10.0.0.1:1234"
+		req.Header.Set("X-Forwarded-For", xff)
+		req.Header.Set("X-Real-IP", "203.0.113.9")
+		if got := res.ClientIP(req); got != "203.0.113.9" {
+			t.Errorf("XFF %q: ClientIP = %q, want 203.0.113.9", xff, got)
+		}
+	}
+}

@@ -54,8 +54,9 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 // ends the walk, because nothing to its left can be attributed to a trusted
 // proxy. If every hop reached is trusted, the left-most one is returned.
 //
-// X-Real-IP is consulted only when no X-Forwarded-For header is present, and
-// only if it is a valid IP. Otherwise RemoteAddr is returned.
+// X-Real-IP is consulted only when X-Forwarded-For is absent or has no
+// non-empty hop, and only if it is a valid IP. Otherwise RemoteAddr is
+// returned.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	remoteIP := extractIP(r.RemoteAddr)
 	if !c.isTrusted(remoteIP) {
@@ -65,11 +66,13 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	if xffLines := r.Header.Values("X-Forwarded-For"); len(xffLines) > 0 {
 		hops := strings.Split(strings.Join(xffLines, ","), ",")
 		leftmost := ""
+		sawHop := false
 		for i := len(hops) - 1; i >= 0; i-- {
 			raw := strings.TrimSpace(hops[i])
 			if raw == "" {
 				continue
 			}
+			sawHop = true
 			ip, ok := normalizeHop(raw)
 			if !ok {
 				break
@@ -82,7 +85,11 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 		if leftmost != "" {
 			return leftmost
 		}
-		return remoteIP
+		if sawHop {
+			return remoteIP
+		}
+		// An empty X-Forwarded-For carries nothing; fall through so a proxy
+		// that sets only X-Real-IP still identifies the client.
 	}
 
 	if ip, ok := normalizeHop(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ok {

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +94,29 @@ func TestOverlayFS_RefusesGitDirectoryViaSymlink(t *testing.T) {
 	for _, e := range root {
 		if e.Name() == ".git" {
 			t.Error("ReadDir(.) lists .git")
+		}
+	}
+
+	// A directory handle from Open (what http.FileServerFS lists) hides
+	// .git too.
+	f, err := ofs.Open(".")
+	if err != nil {
+		t.Fatalf("Open(.): %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	d, ok := f.(fs.ReadDirFile)
+	if !ok {
+		t.Fatalf("Open(.) returned %T, want fs.ReadDirFile", f)
+	}
+	for {
+		batch, err := d.ReadDir(1)
+		for _, e := range batch {
+			if strings.EqualFold(e.Name(), ".git") {
+				t.Error("directory handle from Open lists .git")
+			}
+		}
+		if err != nil {
+			break
 		}
 	}
 

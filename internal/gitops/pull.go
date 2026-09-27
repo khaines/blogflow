@@ -156,6 +156,10 @@ func validateSparseDirs(dirs []string) ([]string, error) {
 	return cleaned, nil
 }
 
+// scrubRemote is scrubRemoteCredentials; tests replace it to exercise the
+// non-fatal failure path.
+var scrubRemote = scrubRemoteCredentials
+
 // SanitizeURL strips embedded credentials from a URL for safe logging.
 // A "scheme://" string whose userinfo cannot be located reliably is replaced
 // by a placeholder, so no part of it is echoed: see ambiguousSchemeURL. Other
@@ -329,7 +333,8 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 	// Clones made by older versions may have credentials persisted in the
 	// origin URL; scrub them so go-git never echoes them back in errors.
 	_, auth := p.resolveRemote(repoURL)
-	if scrubbed, err := scrubRemoteCredentials(repo); err != nil {
+	originAuth, scrubbed, err := scrubRemote(repo)
+	if err != nil {
 		// Not fatal: fetch below uses auth resolved from repoURL, and any
 		// resulting error is redacted. Failing here would stop content sync
 		// for repos whose .git/config is not writable (e.g. read-only volume).
@@ -341,6 +346,12 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		})
 	} else if scrubbed {
 		p.logger.Info("removed credentials persisted in .git/config remote URL", "dest", destPath)
+	}
+	// Before the scrub, go-git would have sent origin's persisted credentials
+	// itself. Keep sending them when nothing else is configured, so a clone
+	// made by another process (or an older version) keeps syncing.
+	if auth == nil && originAuth != nil {
+		auth = originAuth
 	}
 
 	// Use FetchContext + hard reset instead of PullContext so we can set

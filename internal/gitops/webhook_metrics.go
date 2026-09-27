@@ -13,7 +13,6 @@ const (
 	outcomeBodyReadError    = "body_read_error"
 	outcomeFailureBudget    = "failure_budget_exceeded"
 	outcomeVerifiedBudget   = "verified_budget_exceeded"
-	outcomeMethodNotAllowed = "method_not_allowed"
 	outcomeEventRejected    = "event_rejected"
 	outcomeInvalidPayload   = "invalid_payload"
 	outcomeBranchSkipped    = "branch_skipped"
@@ -24,7 +23,7 @@ const (
 var webhookOutcomes = []string{
 	outcomeOK, outcomeForbiddenIP, outcomeMissingSignature, outcomeInvalidSignature,
 	outcomeBodyTooLarge, outcomeBodyReadError, outcomeFailureBudget, outcomeVerifiedBudget,
-	outcomeMethodNotAllowed, outcomeEventRejected, outcomeInvalidPayload,
+	outcomeEventRejected, outcomeInvalidPayload,
 	outcomeBranchSkipped, outcomeReloadFailed,
 }
 

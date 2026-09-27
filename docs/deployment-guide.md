@@ -133,7 +133,6 @@ No persistent volumes are needed — you are editing files directly on your host
 
 ---
 
-
 ## Pattern 2: Kubernetes — git-sync Sidecar
 
 ### Architecture
@@ -447,7 +446,7 @@ sync:
     branch_filter: "main"
     allowed_events:
       - push
-    rate_limit: 10            # per client IP per minute: N rejected + N verified requests
+    rate_limit: 10            # per client IP per minute: N rejected + N verified deliveries
 
 cache:
   enabled: true
@@ -516,7 +515,8 @@ go-git uses this as `x-access-token` basic auth (GitHub convention).
 > also configured, that explicit auth wins and the URL credentials are
 > ignored; a warning is logged once. Clones made by older versions may have
 > the credential saved in `.git/config`; it is removed on the first pull
-> after upgrading if `.git/config` is writable. If it is not (for example a
+> after upgrading if `.git/config` is writable, and kept in memory for that
+> remote's fetches when no other credentials are configured. If it is not (for example a
 > read-only volume), a WARN line is logged once and sync continues; remove
 > the credential by hand.
 
@@ -565,18 +565,21 @@ defaults to `AuthNone`.
   minute:
   - **Rejections** — source IPs outside `allowed_ips`, missing or invalid
     signatures, oversized bodies and body read errors. Within the budget
-    they get 403/401/413/400 and a WARN log
-    line. Past it they get 429 with no log line, so junk traffic cannot
-    flood the logs.
-  - **Verified deliveries** — past this budget, correctly signed requests
-    get 429.
+    they get 403/401/413/400 and a WARN log line. Past it they get 429
+    without the WARN line. This caps the extra log lines per source IP; the
+    access log still records every request, and traffic spread over many
+    source IPs gets up to `rate_limit` WARN lines from each.
+  - **Verified deliveries** — correctly signed deliveries that pass the
+    event and branch filters (the ones that would reload content). Past
+    this budget they get 429. Pushes to other branches and filtered events
+    do not use it up.
 
   Because the budgets are separate, unsigned traffic from the same IP as
   GitHub (for example every caller behind an ingress when
   `trusted_proxy_cidrs` is not set) cannot block real deliveries.
-- Every webhook request is counted in
+- Every POST to the webhook path is counted in
   `blogflow_webhook_requests_total{outcome=...}` (`ok`,
-  `method_not_allowed`, `forbidden_ip`, `missing_signature`,
+  `forbidden_ip`, `missing_signature`,
   `invalid_signature`, `body_too_large`, `body_read_error`,
   `failure_budget_exceeded`, `verified_budget_exceeded`, `event_rejected`,
   `invalid_payload`, `branch_skipped`, `reload_failed`).
@@ -975,8 +978,8 @@ When the peer is trusted, the client IP is resolved like this:
    walk; the left-most trusted hop reached so far is used, or the peer
    address if there is none.
 5. If every hop is trusted, the left-most one is used.
-6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header,
-   and only if it is a valid IP.
+6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header
+   (or it has no non-empty hop), and only if it is a valid IP.
 
 When the peer is not trusted, the connection's remote address is always
 used and forwarded headers are ignored.

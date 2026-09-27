@@ -106,7 +106,7 @@ See [`examples/config/site.yaml`](examples/config/site.yaml) for a fully annotat
 | `BLOGFLOW_SYNC_STRATEGY` | Sync strategy: `watch`, `webhook`, `sidecar`, `poll` |
 | `BLOGFLOW_WEBHOOK_SECRET` | Webhook HMAC secret (≥ 32 bytes — **never in YAML**) |
 | `BLOGFLOW_WEBHOOK_SECRET_FILE` | Path to secret file (`_FILE` convention) |
-| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook per-IP budgets (1–100/min each for rejected and verified requests) |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Webhook per-IP budgets (1–100/min each for rejected requests and verified deliveries) |
 | `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` |
 | `BLOGFLOW_SERVER_TLS_TERMINATED` | Enable HSTS header (`true` when behind TLS proxy) |
 

@@ -106,8 +106,8 @@ func (w *WebhookStrategy) Name() string { return "webhook" }
 // failures budget, and the verified budget can only be consumed by callers
 // that hold the secret.
 type webhookLimits struct {
-	failures *rateLimiter // charged on missing or invalid signature
-	verified *rateLimiter // charged on signature-verified delivery
+	failures *rateLimiter // charged on every unauthenticated rejection (disallowed IP, bad signature, oversized or unreadable body)
+	verified *rateLimiter // charged on signature-verified deliveries that pass the event and branch filters
 }
 
 func newWebhookLimits(limit int) webhookLimits {
@@ -116,8 +116,10 @@ func newWebhookLimits(limit int) webhookLimits {
 
 func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
+		// The server registers this handler for POST only, so the router
+		// answers other methods (counted in the HTTP request metrics); this
+		// check covers direct use of the handler.
 		if r.Method != http.MethodPost {
-			webhookRequestsTotal.WithLabelValues(outcomeMethodNotAllowed).Inc()
 			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -193,13 +195,6 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 			return
 		}
 
-		if limits.verified != nil && !limits.verified.allow(ip) {
-			webhookRequestsTotal.WithLabelValues(outcomeVerifiedBudget).Inc()
-			w.logger.Warn("rate limited verified delivery", "ip", ip)
-			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-
 		// AllowedEvents filtering (after signature verification).
 		if len(w.config.AllowedEvents) > 0 {
 			event := r.Header.Get("X-GitHub-Event")
@@ -242,6 +237,16 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 				_, _ = fmt.Fprintf(rw, "%s (no action)", payload.Ref)
 				return
 			}
+		}
+
+		// Charge the verified budget only for deliveries that would reload,
+		// so pushes to other branches or filtered events cannot use it up
+		// and crowd out the delivery that matters.
+		if limits.verified != nil && !limits.verified.allow(ip) {
+			webhookRequestsTotal.WithLabelValues(outcomeVerifiedBudget).Inc()
+			w.logger.Warn("rate limited verified delivery", "ip", ip)
+			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
+			return
 		}
 
 		// Trigger content reload.
