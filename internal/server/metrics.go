@@ -81,9 +81,24 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 		status := strconv.Itoa(wrapped.statusCode)
 		statusBucket := statusBucketLabel(wrapped.statusCode)
 
-		httpRequestsTotal.WithLabelValues(r.Method, pattern, status).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, pattern, statusBucket).Observe(duration)
+		method := methodLabel(r.Method)
+		httpRequestsTotal.WithLabelValues(method, pattern, status).Inc()
+		httpRequestDuration.WithLabelValues(method, pattern, statusBucket).Observe(duration)
 	})
+}
+
+// methodLabel maps an HTTP method to a fixed, low-cardinality label value.
+// net/http accepts any token as a method, so using r.Method directly would let
+// a client create an unbounded number of series (one per unique method).
+func methodLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions,
+		http.MethodConnect, http.MethodTrace:
+		return method
+	default:
+		return "OTHER"
+	}
 }
 
 // statusBucketLabel maps an HTTP status code to a low-cardinality bucket
@@ -101,4 +116,18 @@ func statusBucketLabel(code int) string {
 	default:
 		return "other"
 	}
+}
+
+// maxLoggedMethodLen bounds the request method written to logs. net/http
+// only accepts token characters in a method, so no escaping is needed, but a
+// method can be up to the header size limit.
+const maxLoggedMethodLen = 16
+
+// logMethod returns the request method for log lines: verbatim, so unusual
+// methods remain visible to operators, but truncated to a fixed length.
+func logMethod(method string) string {
+	if len(method) > maxLoggedMethodLen {
+		return method[:maxLoggedMethodLen] + "..."
+	}
+	return method
 }

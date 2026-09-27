@@ -17,6 +17,7 @@ description: "How to deploy BlogFlow: local dev, K8s sidecar, K8s webhook, Docke
 - [Pattern 2: Kubernetes — git-sync Sidecar](#pattern-2-kubernetes--git-sync-sidecar)
 - [Pattern 3: Kubernetes — Webhook + go-git Pull](#pattern-3-kubernetes--webhook--go-git-pull)
 - [Pattern 4: Docker Production (Webhook)](#pattern-4-docker-production-webhook)
+- [Client IP resolution](#client-ip-resolution)
 - [Health & Readiness Endpoints](#health--readiness-endpoints)
 - [Observability](#observability)
 - [Helm Chart Installation](#helm-chart-installation)
@@ -430,6 +431,13 @@ site:
 server:
   tls_terminated: true
   hsts_max_age: 63072000
+  # Your ingress controller's pod addresses, so allowed_ips and per-IP
+  # webhook budgets see the real client (see Client IP resolution). If this
+  # has to be a pod range, pair it with the NetworkPolicy below so only the
+  # ingress controller can reach BlogFlow; otherwise any pod could set
+  # X-Forwarded-For.
+  # trusted_proxy_cidrs:
+  #   - 10.244.0.0/16
 
 sync:
   strategy: "webhook"
@@ -438,7 +446,7 @@ sync:
     branch_filter: "main"
     allowed_events:
       - push
-    rate_limit: 10            # max webhook requests per minute per IP
+    rate_limit: 10            # per client IP per minute: N rejected + N verified deliveries
 
 cache:
   enabled: true
@@ -499,6 +507,23 @@ BLOGFLOW_GIT_TOKEN=ghp_YourTokenHere
 
 go-git uses this as `x-access-token` basic auth (GitHub convention).
 
+> **Credentials in the repo URL:** prefer `BLOGFLOW_GIT_TOKEN` over
+> embedding credentials in `BLOGFLOW_SYNC_REPO`
+> (`https://user:token@host/...`). If you do embed them, BlogFlow moves them
+> out of the URL and into HTTP basic auth, so they never appear in errors,
+> logs, traces or `.git/config`. When `BLOGFLOW_GIT_TOKEN` or an SSH key is
+> also configured, that explicit auth wins and the URL credentials are
+> ignored; a warning is logged once. Clones made by older versions (or by
+> another process) may have the credential saved in `.git/config`:
+>
+> - If `BLOGFLOW_GIT_TOKEN`, an SSH key or URL credentials are configured,
+>   it is removed on the next pull. If `.git/config` is not writable (for
+>   example a read-only volume), a WARN line is logged once and sync
+>   continues; remove the credential by hand.
+> - If nothing else is configured, it is the only credential BlogFlow has,
+>   so it is left in place and a WARN line is logged once. Set
+>   `BLOGFLOW_GIT_TOKEN` so it can be removed.
+
 **Option B: SSH deploy key**
 
 ```bash
@@ -536,10 +561,42 @@ defaults to `AuthNone`.
 ### Security notes
 
 - The webhook endpoint validates HMAC-SHA256 signatures on every request.
-  Requests with missing or invalid signatures are rejected with 401.
+  Requests with a missing or malformed `X-Hub-Signature-256` header are
+  rejected before the body is read. Requests with an invalid signature are
+  rejected after it is read.
 - Branch filtering prevents non-target branches from triggering reloads.
-- Rate limiting (default: 10 requests/minute/IP) prevents abuse.
+- `rate_limit` (default 10) sets two separate per-client-IP budgets per
+  minute:
+  - **Rejections** — source IPs outside `allowed_ips`, missing or invalid
+    signatures, oversized bodies and body read errors. Within the budget
+    they get 403/401/413/400 and a WARN log line. Past it they get 429
+    without the WARN line. This caps the extra log lines per source IP; the
+    access log still records every request, and traffic spread over many
+    source IPs gets up to `rate_limit` WARN lines from each.
+  - **Verified deliveries** — correctly signed deliveries that pass the
+    event and branch filters (the ones that would reload content). Past
+    this budget they get 429. Pushes to other branches and filtered events
+    do not use it up. A 429 here means that push was not applied; content
+    catches up on the next accepted push, so alert on
+    `verified_budget_exceeded` and raise `rate_limit` if it fires.
+
+  Because the budgets are separate, unsigned traffic from the same IP as
+  GitHub (for example every caller behind an ingress when
+  `trusted_proxy_cidrs` is not set) cannot block real deliveries.
+- Every POST to the webhook path is counted in
+  `blogflow_webhook_requests_total{outcome=...}` (`ok`,
+  `forbidden_ip`, `missing_signature`,
+  `invalid_signature`, `body_too_large`, `body_read_error`,
+  `failure_budget_exceeded`, `verified_budget_exceeded`, `event_rejected`,
+  `invalid_payload`, `branch_skipped`, `reload_failed`).
+  Alert on `failure_budget_exceeded` to see sustained forgery attempts that
+  are no longer logged. Once a source is over its budget, its rejections
+  (including `forbidden_ip`) are counted as `failure_budget_exceeded`
+  instead, so `forbidden_ip` stops rising while that source floods.
 - Request body size is capped at 1 MB by default.
+- Behind a reverse proxy, set `server.trusted_proxy_cidrs` so per-IP
+  budgets and `allowed_ips` see the real client address (see
+  [Client IP resolution](#client-ip-resolution)).
 - The webhook secret must be set via `BLOGFLOW_WEBHOOK_SECRET` environment
   variable — never in `site.yaml` (BlogFlow rejects YAML containing secrets).
 - Consider restricting webhook ingress to [GitHub's webhook IP
@@ -767,6 +824,11 @@ site:
 server:
   tls_terminated: true
   hsts_max_age: 63072000
+  # Only the reverse proxy's own address (see Reverse proxy below), so
+  # allowed_ips and per-IP webhook budgets see the real client. Do not trust
+  # a whole Docker range: see Client IP resolution.
+  trusted_proxy_cidrs:
+    - 172.30.0.10/32
 
 sync:
   strategy: "webhook"
@@ -794,10 +856,19 @@ BLOGFLOW_GIT_TOKEN=ghp_YourTokenHere
 ### Reverse proxy
 
 Place a reverse proxy (nginx, Caddy, Traefik) in front of BlogFlow for TLS
-termination. Example with Caddy added to the compose file:
+termination. Example with Caddy added to the compose file. Caddy gets a
+fixed address on a fixed-subnet network, and that one address is what
+`trusted_proxy_cidrs` trusts:
 
 ```yaml
 services:
+  blogflow:
+    # Remove the "8080:8080" ports entry once Caddy fronts BlogFlow. A
+    # published port is reached through Docker's gateway address, and
+    # anything that can reach it could send its own X-Forwarded-For.
+    networks:
+      - web
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -809,11 +880,24 @@ services:
       - caddy-config:/config
     depends_on:
       - blogflow
+    networks:
+      web:
+        ipv4_address: 172.30.0.10   # matches trusted_proxy_cidrs
+
+networks:
+  web:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   caddy-data:
   caddy-config:
 ```
+
+Caddy's `reverse_proxy` replaces any client-supplied `X-Forwarded-For` with
+the real peer address unless you configure `trusted_proxies` in Caddy, so
+BlogFlow sees the true client.
 
 ```
 # Caddyfile
@@ -874,6 +958,50 @@ environment:
   GitHub's webhook ranges).
 - Pin the image by SHA256 digest in production (see
   [Container Security Guide](engineering/container-security.md#image-pinning)).
+
+---
+
+## Client IP resolution
+
+BlogFlow uses the client IP for access logs, webhook `allowed_ips` and
+per-IP webhook budgets. Forwarded headers are only trusted when the
+connection comes from an address in `server.trusted_proxy_cidrs`:
+
+```yaml
+server:
+  trusted_proxy_cidrs:
+    - 10.0.0.0/8          # your ingress / load balancer range
+```
+
+When the peer is trusted, the client IP is resolved like this:
+
+1. All `X-Forwarded-For` header lines are joined in order and walked from
+   right to left.
+2. Each hop is normalised: whitespace, a trailing `:port`, IPv6 brackets and
+   IPv6 zones are removed. Empty hops are skipped.
+3. The first hop that is **not** in `trusted_proxy_cidrs` is the client IP.
+4. A hop that is still not an IP address (for example `unknown`) ends the
+   walk; the left-most trusted hop reached so far is used, or the peer
+   address if there is none.
+5. If every hop is trusted, the left-most one is used.
+6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header
+   (or it has no non-empty hop), and only if it is a valid IP.
+
+When the peer is not trusted, the connection's remote address is always
+used and forwarded headers are ignored.
+
+Every proxy you list in `trusted_proxy_cidrs` must append the address it
+received the connection from to `X-Forwarded-For` (or overwrite the header).
+Setting only `X-Real-IP` is not enough: BlogFlow prefers `X-Forwarded-For`,
+so a client-supplied one passed through unchanged would decide the client IP.
+With nginx, use:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Trust only the proxies' own addresses, not a whole network that other
+workloads or a published host port can reach.
 
 ---
 
@@ -1004,6 +1132,7 @@ Prometheus metrics are always available. No extra configuration is needed.
 | RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
 | Content analytics | Views per content item: `blogflow_content_views_total{type, slug}` |
 | Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
+| Webhook outcomes | `blogflow_webhook_requests_total{outcome}` — every webhook request by result (see [Pattern 3](#pattern-3-kubernetes--webhook--go-git-pull) security notes) |
 | Go runtime | Goroutines, memory, GC pause duration, open file descriptors |
 | Grafana dashboard | [Pre-built JSON](../examples/grafana/) — import and go |
 
@@ -1249,7 +1378,7 @@ and feed options, see the inline comments in the config examples above.
 | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | HTTP idle timeout | `120s` | All patterns |
 | `BLOGFLOW_SITE_BASE_URL` | Canonical site URL | `http://localhost:8080` | All patterns |
 | `BLOGFLOW_CACHE_ENABLED` | Enable/disable render cache | `true` | All patterns |
-| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Max webhook requests/min/IP | `10` | Webhook patterns (3, 4) |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Per-IP webhook budgets per minute (rejected and verified, counted separately) | `10` | Webhook patterns (3, 4) |
 | `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` | `atom` | All patterns |
 | `OTEL_TRACES_EXPORTER` | Enable OTel tracing (set to `otlp`) | *(disabled)* | All patterns |
 | `OTEL_METRICS_EXPORTER` | Enable OTel metrics bridge (set to `otlp`) | *(disabled)* | All patterns |

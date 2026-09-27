@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -28,6 +29,10 @@ type Puller struct {
 	logger     *slog.Logger
 	SparseDirs []string // if non-empty, only these directories are checked out
 	depth      int      // git clone/fetch depth; 1 = shallowest
+
+	embeddedCredsWarn  sync.Once // warn once about ignored URL credentials
+	scrubWarn          sync.Once // warn once about an unwritable .git/config
+	persistedCredsWarn sync.Once // warn once about credentials kept in .git/config
 }
 
 // PullerOption configures optional Puller behaviour.
@@ -95,6 +100,12 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 		attribute.String("gitops.branch", branch),
 	)
 
+	if urlErr := checkRepoURL(repoURL); urlErr != nil {
+		span.SetStatus(codes.Error, urlErr.Error())
+		span.RecordError(urlErr)
+		return false, urlErr
+	}
+
 	if len(p.SparseDirs) > 0 {
 		cleaned, valErr := validateSparseDirs(p.SparseDirs)
 		if valErr != nil {
@@ -108,6 +119,7 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 	if _, err := os.Stat(filepath.Join(destPath, ".git")); err == nil {
 		span.SetAttributes(attribute.String("gitops.operation", "pull"))
 		changed, pullErr := p.pull(ctx, repoURL, branch, destPath)
+		pullErr = redactError(pullErr)
 		if pullErr != nil {
 			span.SetStatus(codes.Error, pullErr.Error())
 			span.RecordError(pullErr)
@@ -116,7 +128,7 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 	}
 
 	span.SetAttributes(attribute.String("gitops.operation", "clone"))
-	cloneErr := p.clone(ctx, repoURL, branch, destPath)
+	cloneErr := redactError(p.clone(ctx, repoURL, branch, destPath))
 	if cloneErr != nil {
 		span.SetStatus(codes.Error, cloneErr.Error())
 		span.RecordError(cloneErr)
@@ -145,20 +157,109 @@ func validateSparseDirs(dirs []string) ([]string, error) {
 	return cleaned, nil
 }
 
+// scrubRemote is scrubRemoteCredentials; tests replace it to exercise the
+// non-fatal failure path.
+var scrubRemote = scrubRemoteCredentials
+
 // SanitizeURL strips embedded credentials from a URL for safe logging.
+// A "scheme://" string whose userinfo cannot be located reliably is replaced
+// by a placeholder, so no part of it is echoed: see ambiguousSchemeURL. Other
+// unparseable strings (such as scp-style "git@host:org/repo") are passed
+// through redactCredentials.
 func SanitizeURL(raw string) string {
+	if scheme, ok := ambiguousSchemeURL(raw); ok {
+		return scheme + "://" + unparseableURLPlaceholder
+	}
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return redactCredentials(raw)
+	}
+	if u.User == nil {
 		return raw
 	}
 	u.User = nil
 	return u.String()
 }
 
+const unparseableURLPlaceholder = "[unparseable URL redacted]"
+
+// validScheme reports whether s is a URL scheme per RFC 3986 section 3.1.
+func validScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ambiguousSchemeURL reports whether raw is a "scheme://" URL that either
+// does not parse or has an "@" after its authority. Both happen when a
+// credential holds an unescaped "/", "?", "#", "@", "%" or space:
+// "https://u:12/SECRET@host" parses as host "u:12" and
+// "https://u:p@ss/SECRET@host" as host "ss", each with the secret in the
+// path. The credential cannot be located, so the URL must not be echoed or
+// used. It also returns the scheme. Surrounding whitespace is ignored.
+func ambiguousSchemeURL(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	scheme, rest, ok := strings.Cut(raw, "://")
+	if !ok || !validScheme(scheme) {
+		return "", false
+	}
+	if _, err := url.Parse(raw); err != nil {
+		return scheme, true
+	}
+	// url.Parse ends the authority at the first "/", "?" or "#", and a
+	// real userinfo "@" can only be inside it.
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
+		return scheme, true
+	}
+	return "", false
+}
+
+// errUnparseableRepoURL is returned instead of go-git's parse error, which
+// would echo the raw URL and any credentials in it.
+var errUnparseableRepoURL = errors.New("gitops: repo URL is malformed (for example an invalid host or port, " +
+	"credentials that are not percent-encoded, or an \"@\" outside the credentials; encode it as %40)")
+
+// checkRepoURL rejects ambiguous "scheme://" URLs before go-git sees them.
+// scp-style SSH URLs have no scheme and are left to go-git.
+func checkRepoURL(raw string) error {
+	if _, ok := ambiguousSchemeURL(raw); ok {
+		return errUnparseableRepoURL
+	}
+	return nil
+}
+
+// resolveRemote returns the URL and auth to hand to go-git. Credentials
+// embedded in an http(s) URL are moved into BasicAuth so go-git never sees
+// them in the URL. Explicitly configured auth (BLOGFLOW_GIT_TOKEN, SSH key)
+// takes precedence over embedded credentials.
+func (p *Puller) resolveRemote(repoURL string) (string, transport.AuthMethod) {
+	cleanURL, urlAuth := splitHTTPCredentials(repoURL)
+	if urlAuth != nil && p.auth != nil {
+		p.embeddedCredsWarn.Do(func() {
+			p.logger.Warn("ignoring credentials embedded in repo URL; explicit git auth is configured",
+				"url", cleanURL)
+		})
+	}
+	if p.auth != nil || urlAuth == nil {
+		return cleanURL, p.auth
+	}
+	return cleanURL, urlAuth
+}
+
 func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (retErr error) {
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.clone")
 	defer func() {
+		retErr = redactError(retErr)
 		if retErr != nil {
 			span.SetStatus(codes.Error, retErr.Error())
 			span.RecordError(retErr)
@@ -171,9 +272,10 @@ func (p *Puller) clone(ctx context.Context, repoURL, branch, destPath string) (r
 
 	sparse := len(p.SparseDirs) > 0
 
+	cloneURL, auth := p.resolveRemote(repoURL)
 	opts := &git.CloneOptions{
-		URL:           repoURL,
-		Auth:          p.auth,
+		URL:           cloneURL,
+		Auth:          auth,
 		ReferenceName: plumbing.NewBranchReferenceName(branch),
 		SingleBranch:  true,
 		Depth:         p.depth,
@@ -208,6 +310,7 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 	tracer := otel.Tracer("github.com/khaines/blogflow/gitops")
 	ctx, span := tracer.Start(ctx, "gitops.pull")
 	defer func() {
+		retErr = redactError(retErr)
 		if retErr != nil {
 			span.SetStatus(codes.Error, retErr.Error())
 			span.RecordError(retErr)
@@ -228,10 +331,38 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		return false, fmt.Errorf("gitops: head %s: %w", destPath, err)
 	}
 
+	// Clones made by older versions (or by another process) may have
+	// credentials persisted in the remote URL. Scrub them only when other
+	// credentials are configured: otherwise they are the only way to fetch,
+	// and removing them would break every later pull (and, via the re-clone
+	// fallback, delete the checkout). go-git errors are redacted either way.
+	_, auth := p.resolveRemote(repoURL)
+	if auth == nil {
+		if hasPersistedCredentials(repo) {
+			p.persistedCredsWarn.Do(func() {
+				p.logger.Warn("git credentials are stored in .git/config and no other git auth is configured; "+
+					"set BLOGFLOW_GIT_TOKEN (or embed them in the repo URL) so they can be removed from disk",
+					"dest", destPath)
+			})
+		}
+	} else if scrubbed, err := scrubRemote(repo); err != nil {
+		// Not fatal: fetch below uses auth resolved from repoURL, and any
+		// resulting error is redacted. Failing here would stop content sync
+		// for repos whose .git/config is not writable (e.g. read-only volume).
+		// Warn once: this runs on every pull and the cause (a read-only
+		// .git/config) does not go away between pulls.
+		p.scrubWarn.Do(func() {
+			p.logger.Warn("could not remove credentials persisted in .git/config",
+				"dest", destPath, "error", redactError(err))
+		})
+	} else if scrubbed {
+		p.logger.Info("removed credentials persisted in .git/config remote URL", "dest", destPath)
+	}
+
 	// Use FetchContext + hard reset instead of PullContext so we can set
 	// Tags: NoTags — PullOptions does not expose a Tags field.
 	fetchErr := repo.FetchContext(ctx, &git.FetchOptions{
-		Auth:  p.auth,
+		Auth:  auth,
 		Depth: p.depth,
 		Tags:  git.NoTags,
 		Force: true,
@@ -247,7 +378,7 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		// Shallow clone + fetch is a known go-git limitation.
 		// Fall back to delete and re-clone.
 		p.logger.Warn("pull failed, falling back to re-clone",
-			"dest", destPath, "error", fetchErr)
+			"dest", destPath, "error", redactError(fetchErr))
 		if removeErr := os.RemoveAll(destPath); removeErr != nil {
 			return false, fmt.Errorf("gitops: failed to clear for re-clone %s: %w", destPath, removeErr)
 		}

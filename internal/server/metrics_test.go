@@ -318,3 +318,59 @@ func matchLabels(pairs []*dto.LabelPair, want map[string]string) bool {
 	}
 	return true
 }
+
+func TestMetricsMiddlewareCollapsesUnknownMethods(t *testing.T) {
+	t.Parallel()
+
+	labels := map[string]string{"method": "OTHER", "path": "unmatched", "status": "200"}
+	before := counterValue(t, "blogflow_http_requests_total", labels)
+
+	handler := MetricsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	methods := []string{"XCARD1", "XCARD2", strings.Repeat("A", 4096)}
+	for _, m := range methods {
+		req := httptest.NewRequest(http.MethodGet, "/unknown-method", nil)
+		req.Method = m
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	if diff := counterValue(t, "blogflow_http_requests_total", labels) - before; diff != float64(len(methods)) {
+		t.Fatalf("expected OTHER counter to increase by %d, got %f", len(methods), diff)
+	}
+	for _, m := range methods {
+		if v := counterValue(t, "blogflow_http_requests_total", map[string]string{
+			"method": m, "path": "unmatched", "status": "200",
+		}); v != 0 {
+			t.Fatalf("unexpected series for raw method %.16q", m)
+		}
+	}
+}
+
+func TestMethodLabel(t *testing.T) {
+	t.Parallel()
+
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"} {
+		if got := methodLabel(m); got != m {
+			t.Errorf("methodLabel(%q) = %q, want %q", m, got, m)
+		}
+	}
+	for _, m := range []string{"", "get", "PROPFIND", "X\x00"} {
+		if got := methodLabel(m); got != "OTHER" {
+			t.Errorf("methodLabel(%q) = %q, want OTHER", m, got)
+		}
+	}
+}
+
+func TestLogMethod(t *testing.T) {
+	t.Parallel()
+
+	if got := logMethod("PROPFIND"); got != "PROPFIND" {
+		t.Errorf("logMethod(PROPFIND) = %q, want verbatim", got)
+	}
+	long := strings.Repeat("A", 4096)
+	if got := logMethod(long); len(got) != maxLoggedMethodLen+3 || !strings.HasPrefix(got, "AAAA") {
+		t.Errorf("logMethod(long) = %q, want truncated to %d bytes plus ellipsis", got, maxLoggedMethodLen)
+	}
+}

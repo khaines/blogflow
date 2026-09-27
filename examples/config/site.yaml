@@ -106,7 +106,7 @@ sync:
     # secret: (set via BLOGFLOW_WEBHOOK_SECRET env var, never here!)
     #   Must be >= 32 bytes. Used for HMAC-SHA256 signature validation.
     branch_filter: "main"     # Only process pushes to this branch
-    rate_limit: 10            # Max webhook requests per minute (1–100)
+    rate_limit: 10            # Per client IP per minute (1–100): N rejected + N verified deliveries
 
 # ---------------------------------------------------------------------------
 # Feed — RSS/Atom feed generation

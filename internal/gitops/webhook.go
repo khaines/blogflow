@@ -72,8 +72,7 @@ func NewWebhookStrategy(cfg config.WebhookConfig, reloader ContentReloader, logg
 	}
 	w.ipResolver = resolver
 
-	rl := newRateLimiter(cfg.RateLimit)
-	w.handler = w.buildHandler(rl)
+	w.handler = w.buildHandler(newWebhookLimits(cfg.RateLimit))
 
 	return w, nil
 }
@@ -97,8 +96,32 @@ func (w *WebhookStrategy) Stop(ctx context.Context) error {
 // Name returns the strategy name.
 func (w *WebhookStrategy) Name() string { return "webhook" }
 
-func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
+// webhookLimits keeps separate per-client-IP budgets for failed
+// authentication and for verified deliveries.
+//
+// Charging unauthenticated requests against the same bucket as genuine
+// deliveries let anyone who shares an IP with the sender (e.g. every caller
+// behind an ingress when trusted_proxy_cidrs is unset) starve real webhook
+// deliveries with junk POSTs. Now failed signatures only consume the
+// failures budget, and the verified budget can only be consumed by callers
+// that hold the secret.
+type webhookLimits struct {
+	failures *rateLimiter // charged on every unauthenticated rejection (disallowed IP, bad signature, oversized or unreadable body)
+	verified *rateLimiter // charged on signature-verified deliveries that pass the event and branch filters
+}
+
+func newWebhookLimits(limit int) webhookLimits {
+	return webhookLimits{failures: newRateLimiter(limit), verified: newRateLimiter(limit)}
+}
+
+// maxEchoedRefLen bounds the payload ref echoed back for a skipped branch.
+const maxEchoedRefLen = 256
+
+func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
+		// The server registers this handler for POST only, so the router
+		// answers other methods (counted in the HTTP request metrics); this
+		// check covers direct use of the handler.
 		if r.Method != http.MethodPost {
 			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -107,19 +130,46 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		// Resolve client IP for allowlist and rate-limit lookups.
 		ip := w.resolveIP(r)
 
-		// Validate IP against allowlist BEFORE rate limiting.
-		if len(w.config.AllowedIPs) > 0 {
-			if !ipInCIDRs(ip, w.config.AllowedIPs) {
-				w.logger.Warn("source IP not in allowed_ips", "ip", ip)
-				http.Error(rw, "source IP not in allowed_ips", http.StatusForbidden)
+		// reject charges an unauthenticated rejection to the client IP.
+		// Within the failures budget it logs and responds with status;
+		// beyond it, it responds 429 without logging so junk traffic cannot
+		// flood the logs. The outcome is always counted in
+		// blogflow_webhook_requests_total so operators keep a signal.
+		//
+		// Rejections never block a correctly signed delivery: the verified
+		// budget is separate, so callers sharing an IP with the real sender
+		// cannot starve it. Requests with no well-formed signature header are
+		// rejected before the body is read; a well-formed but wrong signature
+		// costs one bounded body read (MaxBytesReader) plus an HMAC, which is
+		// no more than receiving the bytes.
+		reject := func(outcome string, status int, msg string, logArgs ...any) {
+			if limits.failures != nil && !limits.failures.allow(ip) {
+				webhookRequestsTotal.WithLabelValues(outcomeFailureBudget).Inc()
+				http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
+			webhookRequestsTotal.WithLabelValues(outcome).Inc()
+			w.logger.Warn(msg, append([]any{"ip", ip}, logArgs...)...)
+			http.Error(rw, msg, status)
 		}
 
-		// Rate-limit by remote IP (after allowlist validation).
-		if rl != nil && !rl.allow(ip) {
-			w.logger.Warn("rate limited", "ip", ip)
-			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
+		// Validate IP against allowlist before reading anything else. The
+		// rejection goes through reject so a disallowed source cannot flood
+		// the logs.
+		if len(w.config.AllowedIPs) > 0 && !ipInCIDRs(ip, w.config.AllowedIPs) {
+			reject(outcomeForbiddenIP, http.StatusForbidden, "source IP not in allowed_ips")
+			return
+		}
+
+		// Validate the signature header's shape BEFORE reading the body, so
+		// trivially unauthenticated requests cost no body read.
+		sigHeader := r.Header.Get("X-Hub-Signature-256")
+		if sigHeader == "" {
+			reject(outcomeMissingSignature, http.StatusUnauthorized, "missing signature")
+			return
+		}
+		if !signatureWellFormed(sigHeader) {
+			reject(outcomeInvalidSignature, http.StatusUnauthorized, "invalid signature")
 			return
 		}
 
@@ -134,27 +184,17 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		if err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				w.logger.Warn("body too large", "limit", limit, "ip", ip)
-				http.Error(rw, "request body too large", http.StatusRequestEntityTooLarge)
+				reject(outcomeBodyTooLarge, http.StatusRequestEntityTooLarge, "request body too large", "limit", limit)
 				return
 			}
-			w.logger.Warn("body read error", "error", err)
-			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			reject(outcomeBodyReadError, http.StatusBadRequest, "failed to read body", "error", err)
 			return
 		}
 
 		// Validate HMAC-SHA256 signature BEFORE any event/branch filtering
 		// to prevent unauthenticated callers from probing allowed event types.
-		sigHeader := r.Header.Get("X-Hub-Signature-256")
-		if sigHeader == "" {
-			w.logger.Warn("missing signature header")
-			http.Error(rw, "missing signature", http.StatusUnauthorized)
-			return
-		}
-
 		if !verifySignature([]byte(w.config.Secret), body, sigHeader) {
-			w.logger.Warn("invalid signature")
-			http.Error(rw, "invalid signature", http.StatusUnauthorized)
+			reject(outcomeInvalidSignature, http.StatusUnauthorized, "invalid signature")
 			return
 		}
 
@@ -162,12 +202,14 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 		if len(w.config.AllowedEvents) > 0 {
 			event := r.Header.Get("X-GitHub-Event")
 			if event == "" {
+				webhookRequestsTotal.WithLabelValues(outcomeEventRejected).Inc()
 				w.logger.Warn("missing event header with active event filter",
 					"allowed", w.config.AllowedEvents)
 				http.Error(rw, "missing event header", http.StatusForbidden)
 				return
 			}
 			if !slices.Contains(w.config.AllowedEvents, event) {
+				webhookRequestsTotal.WithLabelValues(outcomeEventRejected).Inc()
 				w.logger.Warn("event type not allowed",
 					"event", event, "allowed", w.config.AllowedEvents)
 				http.Error(rw, "event type not allowed", http.StatusForbidden)
@@ -182,6 +224,7 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 			}
 
 			if err := json.Unmarshal(body, &payload); err != nil {
+				webhookRequestsTotal.WithLabelValues(outcomeInvalidPayload).Inc()
 				w.logger.Warn("invalid JSON payload", "error", err)
 				http.Error(rw, "invalid payload", http.StatusBadRequest)
 				return
@@ -189,22 +232,39 @@ func (w *WebhookStrategy) buildHandler(rl *rateLimiter) http.HandlerFunc {
 
 			expectedRef := "refs/heads/" + w.config.BranchFilter
 			if payload.Ref != expectedRef {
+				webhookRequestsTotal.WithLabelValues(outcomeBranchSkipped).Inc()
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
-				rw.Header().Set("X-Blogflow-Branch-Skipped", payload.Ref)
+				ref := payload.Ref
+				if len(ref) > maxEchoedRefLen {
+					ref = ref[:maxEchoedRefLen]
+				}
+				rw.Header().Set("X-Blogflow-Branch-Skipped", ref)
 				rw.WriteHeader(http.StatusAccepted)
-				_, _ = fmt.Fprintf(rw, "%s (no action)", payload.Ref)
+				_, _ = fmt.Fprintf(rw, "%s (no action)", ref)
 				return
 			}
 		}
 
+		// Charge the verified budget only for deliveries that would reload,
+		// so pushes to other branches or filtered events cannot use it up
+		// and crowd out the delivery that matters.
+		if limits.verified != nil && !limits.verified.allow(ip) {
+			webhookRequestsTotal.WithLabelValues(outcomeVerifiedBudget).Inc()
+			w.logger.Warn("rate limited verified delivery", "ip", ip)
+			http.Error(rw, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
 		// Trigger content reload.
 		if err := w.reloader(); err != nil {
+			webhookRequestsTotal.WithLabelValues(outcomeReloadFailed).Inc()
 			w.logger.Error("content reload failed", "error", err)
 			http.Error(rw, "reload failed", http.StatusInternalServerError)
 			return
 		}
 
+		webhookRequestsTotal.WithLabelValues(outcomeOK).Inc()
 		w.logger.Info("content reloaded via webhook")
 		rw.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(rw, "ok")
@@ -237,6 +297,18 @@ func ipInCIDRs(ip string, allowedIPs []string) bool {
 		}
 	}
 	return false
+}
+
+// signatureWellFormed reports whether sigHeader has the shape of a GitHub
+// HMAC-SHA256 signature ("sha256=" followed by 64 hex digits). It is a cheap
+// pre-check run before the body is read; verifySignature does the real check.
+func signatureWellFormed(sigHeader string) bool {
+	sig, found := strings.CutPrefix(sigHeader, "sha256=")
+	if !found || len(sig) != 2*sha256.Size {
+		return false
+	}
+	_, err := hex.DecodeString(sig)
+	return err == nil
 }
 
 // verifySignature validates an HMAC-SHA256 signature with constant-time comparison.

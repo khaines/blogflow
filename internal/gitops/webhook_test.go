@@ -246,7 +246,7 @@ func TestWebhookHandler_BodyTooLarge(t *testing.T) {
 	// Payload larger than default 1 MB limit.
 	largeBody := strings.NewReader(strings.Repeat("x", 1<<20+1))
 	req := httptest.NewRequest(http.MethodPost, "/hook", largeBody)
-	req.Header.Set("X-Hub-Signature-256", "sha256=bogus")
+	req.Header.Set("X-Hub-Signature-256", wellFormedBogusSig) // passes the pre-read shape check
 
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
@@ -271,7 +271,7 @@ func TestWebhookHandler_BodyTooLarge_CustomLimit(t *testing.T) {
 	// Payload exceeds custom 256-byte limit.
 	largeBody := strings.NewReader(strings.Repeat("x", 512))
 	req := httptest.NewRequest(http.MethodPost, "/hook", largeBody)
-	req.Header.Set("X-Hub-Signature-256", "sha256=bogus")
+	req.Header.Set("X-Hub-Signature-256", wellFormedBogusSig) // passes the pre-read shape check
 
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, req)
@@ -419,4 +419,163 @@ func TestWebhookHandler_XForwardedFor(t *testing.T) {
 	if rec3.Code != http.StatusOK {
 		t.Fatalf("different XFF IP: expected 200, got %d", rec3.Code)
 	}
+}
+
+// Unsigned or badly signed requests from the same client IP as the real
+// sender (e.g. everyone behind one ingress) must not exhaust the budget for
+// signature-verified deliveries.
+func TestWebhookHandler_UnauthenticatedCannotStarveVerified(t *testing.T) {
+	secret := []byte("test-secret-min-32-bytes-long!!!!")
+	called := 0
+	reloader := func() error { called++; return nil }
+
+	ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+		Path:         "/api/webhook",
+		Secret:       string(secret),
+		BranchFilter: "main",
+		RateLimit:    2,
+	}, reloader, webhookLogger(), testResWL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := ws.Handler()
+	payload := []byte(`{"ref":"refs/heads/main"}`)
+
+	send := func(sig string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/webhook", bytes.NewReader(payload))
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		req.RemoteAddr = "10.0.0.1:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Attacker burns through and past the failure budget.
+	for i := 0; i < 5; i++ {
+		send("sha256=deadbeef")
+		send("")
+	}
+	if code := send("sha256=deadbeef"); code != http.StatusTooManyRequests {
+		t.Fatalf("attacker after budget: expected 429, got %d", code)
+	}
+
+	// A genuine delivery from the same IP is still accepted.
+	if code := send(signPayload(secret, payload)); code != http.StatusOK {
+		t.Fatalf("verified delivery after junk: expected 200, got %d", code)
+	}
+	if called != 1 {
+		t.Fatalf("expected 1 reload, got %d", called)
+	}
+}
+
+// wellFormedBogusSig has the shape of a GitHub signature but will never
+// verify; it gets past the pre-read shape check to exercise body handling.
+var wellFormedBogusSig = "sha256=" + strings.Repeat("0", 64)
+
+// Requests without a well-formed signature are rejected before the body is
+// read, and every rejection past the per-IP failures budget is a silent 429,
+// including oversized bodies.
+func TestWebhookHandler_RejectionsShareFailureBudget(t *testing.T) {
+	secret := []byte("test-secret-min-32-bytes-long!!!!")
+	ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+		Path:        "/api/webhook",
+		Secret:      string(secret),
+		RateLimit:   2,
+		MaxBodySize: 64,
+	}, func() error { return nil }, webhookLogger(), testResWL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := ws.Handler()
+
+	send := func(sig, body string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/webhook", strings.NewReader(body))
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		req.RemoteAddr = "10.0.0.7:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	oversized := strings.Repeat("x", 128)
+	if code := send(wellFormedBogusSig, oversized); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("first oversized: got %d, want 413", code)
+	}
+	if code := send("sha256=bogus", "{}"); code != http.StatusUnauthorized {
+		t.Fatalf("malformed signature: got %d, want 401", code)
+	}
+	// Budget of 2 is now spent; further rejections of any kind are 429.
+	for _, tc := range []struct{ sig, body string }{
+		{wellFormedBogusSig, oversized},
+		{"", "{}"},
+		{wellFormedBogusSig, "{}"},
+	} {
+		if code := send(tc.sig, tc.body); code != http.StatusTooManyRequests {
+			t.Fatalf("over budget (sig=%q): got %d, want 429", tc.sig, code)
+		}
+	}
+
+	// A correctly signed delivery from the same IP still succeeds.
+	payload := []byte(`{"ref":"refs/heads/main"}`)
+	if code := send(signPayload(secret, payload), string(payload)); code != http.StatusOK {
+		t.Fatalf("verified delivery: got %d, want 200", code)
+	}
+}
+
+// A request without a well-formed signature header must be rejected without
+// reading the body.
+func TestWebhookHandler_MalformedSignatureSkipsBodyRead(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"missing":      "",
+		"bogus":        "sha256=bogus",
+		"wrong prefix": "sha1=" + strings.Repeat("0", 64),
+		"63 hex":       "sha256=" + strings.Repeat("0", 63),
+		"65 hex":       "sha256=" + strings.Repeat("0", 65),
+		"non-hex":      "sha256=" + strings.Repeat("g", 64),
+	}
+	for name, sig := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+				Path:   "/api/webhook",
+				Secret: "test-secret-min-32-bytes-long!!!!",
+			}, func() error { return nil }, webhookLogger(), testResWL)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			body := &countingReader{r: strings.NewReader(strings.Repeat("x", 1024))}
+			req := httptest.NewRequest(http.MethodPost, "/api/webhook", body)
+			if sig != "" {
+				req.Header.Set("X-Hub-Signature-256", sig)
+			}
+			rec := httptest.NewRecorder()
+			ws.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("got %d, want 401", rec.Code)
+			}
+			if body.n != 0 {
+				t.Fatalf("body was read (%d bytes) for signature %q", body.n, sig)
+			}
+		})
+	}
+}
+
+type countingReader struct {
+	r *strings.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
 }

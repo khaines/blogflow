@@ -479,6 +479,11 @@ Error classification:
 | 17 | File replaced during read | File is overwritten between `Open` and `Read` | OS-level behavior — file handle sees content at open time (POSIX semantics) |
 | 18 | Symlink in user layer pointing outside root | Content layer has symlink → /etc/passwd | Return fs.ErrInvalid, log WARN with path and target |
 | 19 | Stat then Open during concurrent layer swap | Stat resolves layer 2, swap occurs, Open resolves layer 4 | OpenFile() returns consistent handle+info from same layer |
+| 20 | Direct request for VCS metadata | `Open(".git/config")` | Refused by name before any layer lookup: `fs.ErrPermission` (403 via `http.FileServerFS`), whether or not the path exists |
+| 21 | Symlink into VCS metadata | Content repo commits `static/x -> ../.git/config` | Resolved path contains `.git`: return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat` |
+| 22 | Symlinked directory into VCS metadata | Content repo commits `static/gitdir -> ../.git`; `ReadDir("static/gitdir")` | Return `fs.ErrPermission`; nothing listed |
+| 23 | `.git` in a directory listing | `ReadDir(".")` on a layer that is a git clone, or `ReadDir` on the directory handle `Open(".")` returns (what `http.FileServerFS` lists) | `.git` entry omitted from the result |
+| 24 | Case variant of `.git` | `Open(".GIT/config")` | Treated as `.git` (case-insensitive name match) — `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir` on every filesystem |
 
 ### 3.3 Integration Test Boundaries
 
@@ -605,6 +610,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 | `os.DirFS` confinement | Each layer rooted at its base directory | Directory escape |
 | `filepath.EvalSymlinks` on base paths | Constructor resolves symlinks at startup | Symlink-based root escape |
 | Non-interpretation of file content | Overlay returns raw bytes; parsing is the caller's responsibility | Injection via file content |
+| VCS metadata exclusion | Any requested path with a `.git` element (case-insensitive) is refused by name before layer lookup; on disk layers, any symlink-resolved path with a `.git` element is also refused. Both return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir`; `.git` is omitted from merged listings and from directory handles returned by `Open` on disk layers | Publishing `.git/config` (which can hold the remote URL and credentials) through a committed symlink |
 
 **Size limits**: The overlay FS does not enforce file size limits. Downstream consumers (template parser, markdown parser, config loader) enforce their own limits. The content pipeline rejects markdown files > 10 MB; the config loader rejects YAML files > 1 MB.
 
@@ -619,6 +625,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 **Symlink handling:**
 - At construction time, `NewFromPaths` calls `filepath.EvalSymlinks` on each base path. If `/data/content` is a symlink to `/data/content-abc123` (common with git-sync), the resolved path is used.
 - Symlinks *within* a layer directory are followed by the OS, but `os.DirFS` confines them to the subtree. A symlink from `/data/content/evil` → `/etc/passwd` would be rejected.
+- Content and theme layers are git clones, so the layer root contains `.git/`. Staying inside the root is not enough: a committed symlink such as `static/x -> ../.git/config` stays inside the root yet would publish the repository config. Every disk layer therefore refuses any path that is, or resolves to, something under `.git` (`fs.ErrPermission`, not `fs.ErrInvalid`, so callers can tell a policy refusal from an invalid path). This is git-specific policy in a generic abstraction; it is placed here because the overlay is the one choke point every consumer (`http.FileServerFS`, template loader, content scanner) goes through.
 
 **TOCTOU mitigation**: Callers should prefer `Open()`-then-`Stat()` on the returned file handle (atomic, single layer resolution) over `Stat()`-then-`Open()` (two-phase, may resolve from different layers during concurrent invalidation). The API provides `OpenFile(name string) (fs.File, fs.FileInfo, error)` as a convenience that returns both atomically.
 
@@ -670,7 +677,7 @@ graph LR
 | Compromised git-sync sidecar | Symlink swap mechanism | Replace content root, inject arbitrary files |
 | Path traversal attacker | Any `Open`/`ReadFile`/`Stat` call with crafted path | Read files outside overlay boundary (e.g., `/etc/passwd`, env vars) |
 | Denial-of-service | Thousands of requests for nonexistent paths | Exhaust filesystem I/O with stat storms |
-| User-authored symlink in content/theme git repo | Content/theme layer files (symlinks) | Escape overlay root to read credentials, secrets, or system files |
+| User-authored symlink in content/theme git repo | Content/theme layer files (symlinks) | Escape overlay root to read credentials, secrets, or system files; or point *within* the root at `.git/config` to publish the remote URL and any credentials in it |
 | Operator routing misconfiguration | HTTP server serves non-public file types from overlay | Expose .pem/.key/.env files from content layer via direct URL |
 
 ### 6.3 STRIDE Analysis
@@ -680,7 +687,7 @@ graph LR
 | **S**poofing | ❌ | Overlay FS has no identity/auth — not applicable | N/A |
 | **T**ampering | ✅ | Attacker modifies files in a disk layer to alter rendered output (e.g., inject `<script>` in a template) | Templates from user-controlled layers (theme, content) are treated as semi-trusted input. `html/template` auto-escaping protects data values injected INTO templates but does NOT protect against a malicious template itself. Actual mitigations: (a) operator controls which theme repo is mounted, (b) git commit signing recommended for theme repos (REQ-OFS-009), (c) template function allowlist — only safe functions registered (no functions returning `template.HTML`, `template.JS`, or `template.URL` types), (d) monitoring for unexpected template changes. |
 | **R**epudiation | ✅ | Attacker modifies content and denies responsibility | Git history provides audit trail. Overlay FS logs layer resolution at DEBUG level. |
-| **I**nformation Disclosure | ✅ | Path traversal escapes overlay root to read sensitive files (`/etc/passwd`, secrets mount) | `fs.ValidPath()` + `os.DirFS` confinement + `filepath.EvalSymlinks` at construction. Templates never served raw — only rendered output. |
+| **I**nformation Disclosure | ✅ | Path traversal escapes overlay root to read sensitive files (`/etc/passwd`, secrets mount); in-root symlink to `.git/config` publishes the git remote URL | `fs.ValidPath()` + `os.DirFS` confinement + `filepath.EvalSymlinks` at construction. VCS metadata exclusion (§5.3) refuses any path resolving under `.git`. Templates never served raw — only rendered output. |
 | **D**enial of Service | ✅ | Flood of requests for nonexistent paths causes stat storm across all 4 layers | Negative cache prevents repeated misses. Rendered HTML cache absorbs repeated hits. Rate limiting at HTTP layer. |
 | **E**levation of Privilege | ✅ | Attacker places a file in a higher-priority layer to shadow a safe default (e.g., override `base.html` to remove CSP headers) | Layer priority is explicit and documented. **Namespace partitioning**: the config loader reads ONLY from the config and defaults layers (bypassing theme and content layers). This prevents content repo authors from shadowing operator config. Template and content resolution uses all layers. Operators control which directories are mounted. Monitoring alerts on unexpected theme/config changes. |
 
@@ -693,6 +700,7 @@ graph LR
 | Layer shadowing (EoP) | Documented layer priority; operator controls mounts | **Medium** — if attacker gains write to theme volume, they can shadow defaults. Mitigated by read-only mounts where possible and monitoring. |
 | DoS via stat storm | Negative cache; rendered HTML cache; HTTP rate limiting | **Low** — negative cache bounds stat calls to one per unique path per cache lifetime |
 | Symlink escape | `os.DirFS` confinement + `filepath.EvalSymlinks` | **Medium** — Pre-1.22 builds lack protection; defense-in-depth `lstat` check added for all user-controlled layers. |
+| In-root symlink to `.git` | VCS metadata exclusion on every disk layer (§5.3) | **Low** — requested names are refused before any lookup. The symlink-resolution check runs separately from the OS open (after it for `Open`/`ReadFile`/`Stat`, before it for `ReadDir`), so a TOCTOU window remains until layers move to `os.OpenRoot` (tracked in #321). |
 | git-sync compromise | Out of scope for overlay FS; mitigated by K8s RBAC and pod security | **Accepted** — if the sidecar is compromised, it can write arbitrary files to the volume. Overlay FS cannot prevent this; defense is at the cluster level. |
 
 ---

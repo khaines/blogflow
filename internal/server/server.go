@@ -349,7 +349,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			loggedPath = r.URL.Path
 		}
 		s.logger.Info("request",
-			"method", r.Method,
+			"method", logMethod(r.Method),
 			"path", loggedPath,
 			"status", wrapped.statusCode,
 			"duration", time.Since(start),
@@ -391,7 +391,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 				s.logger.Error("panic recovered",
 					"panic_type", fmt.Sprintf("%T", rec),
 					"panic", panicStr,
-					"method", r.Method,
+					"method", logMethod(r.Method),
 					"path", r.URL.Path,
 					"stack", string(debug.Stack()),
 				)

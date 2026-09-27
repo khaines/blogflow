@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -41,34 +42,82 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 
 // ClientIP returns the best-effort real client IP for the request.
 //
-// If RemoteAddr is from a trusted proxy CIDR, X-Forwarded-For (right-most
-// untrusted entry) or X-Real-IP is used. Otherwise RemoteAddr is returned.
+// If RemoteAddr is from a trusted proxy CIDR, the X-Forwarded-For chain is
+// walked from the right and the first untrusted hop is returned. All
+// X-Forwarded-For header lines are joined first, because some proxies add a
+// new header line instead of extending the existing one; reading only the
+// first line would return a value the client supplied.
+//
+// Each hop is normalised before use: surrounding whitespace, a trailing
+// ":port", IPv6 brackets and an IPv6 zone are removed. Empty hops are
+// skipped. A non-empty hop that is still not an IP address (e.g. "unknown")
+// ends the walk, because nothing to its left can be attributed to a trusted
+// proxy. If every hop reached is trusted, the left-most one is returned.
+//
+// X-Real-IP is consulted only when X-Forwarded-For is absent or has no
+// non-empty hop, and only if it is a valid IP. Otherwise RemoteAddr is
+// returned.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 	remoteIP := extractIP(r.RemoteAddr)
 	if !c.isTrusted(remoteIP) {
 		return remoteIP
 	}
 
-	// Prefer X-Forwarded-For: walk from right to left, skip trusted proxies.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		for i := len(ips) - 1; i >= 0; i-- {
-			ip := strings.TrimSpace(ips[i])
-			if ip == "" {
+	if xffLines := r.Header.Values("X-Forwarded-For"); len(xffLines) > 0 {
+		hops := strings.Split(strings.Join(xffLines, ","), ",")
+		leftmost := ""
+		sawHop := false
+		for i := len(hops) - 1; i >= 0; i-- {
+			raw := strings.TrimSpace(hops[i])
+			if raw == "" {
 				continue
+			}
+			sawHop = true
+			ip, ok := normalizeHop(raw)
+			if !ok {
+				break
 			}
 			if !c.isTrusted(ip) {
 				return ip
 			}
+			leftmost = ip
 		}
-		// All entries are trusted — fall through to X-Real-IP / RemoteAddr.
+		if leftmost != "" {
+			return leftmost
+		}
+		if sawHop {
+			return remoteIP
+		}
+		// An empty X-Forwarded-For carries nothing; fall through so a proxy
+		// that sets only X-Real-IP still identifies the client.
 	}
 
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
+	if ip, ok := normalizeHop(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ok {
+		return ip
 	}
 
 	return remoteIP
+}
+
+// normalizeHop parses a forwarded-for hop that may carry a port, IPv6
+// brackets or an IPv6 zone, and returns the bare canonical IP.
+func normalizeHop(hop string) (string, bool) {
+	if hop == "" {
+		return "", false
+	}
+	if addr, err := netip.ParseAddr(hop); err == nil {
+		return addr.WithZone("").Unmap().String(), true
+	}
+	if ap, err := netip.ParseAddrPort(hop); err == nil {
+		return ap.Addr().WithZone("").Unmap().String(), true
+	}
+	// "[v6]" without a port.
+	if len(hop) > 2 && hop[0] == '[' && hop[len(hop)-1] == ']' {
+		if addr, err := netip.ParseAddr(hop[1 : len(hop)-1]); err == nil {
+			return addr.WithZone("").Unmap().String(), true
+		}
+	}
+	return "", false
 }
 
 // isTrusted reports whether ip falls within any configured trusted CIDR.

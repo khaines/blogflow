@@ -238,6 +238,11 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 		}
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
 
 	var start time.Time
 	if o.metrics != nil {
@@ -283,6 +288,9 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 				o.metrics.resolveDuration.WithLabelValues("open").Observe(time.Since(start).Seconds())
 				o.metrics.layerHitTotal.WithLabelValues(o.layerName(i)).Inc()
 			}
+			if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+				return hideGitInDir(f), nil
+			}
 			return f, nil
 		}
 		if !isNotExist(err) {
@@ -305,6 +313,11 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
 		}
 		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrInvalid}
+	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrPermission}
 	}
 
 	var start time.Time
@@ -385,6 +398,11 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrPermission}
+	}
 
 	var start time.Time
 	if o.metrics != nil {
@@ -400,6 +418,13 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	found := false
 
 	for i := len(layers) - 1; i >= 0; i-- {
+		// Same policy as Open: disk layers must not list a directory that
+		// escapes the layer root or lies inside .git.
+		if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+			if err := checkSymlinkSafe(o.layerMeta[i].rootPath, name); err != nil {
+				return nil, err
+			}
+		}
 		entries, err := fs.ReadDir(layers[i], name)
 		if err != nil {
 			if isNotExist(err) {
@@ -409,6 +434,9 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		found = true
 		for _, e := range entries {
+			if strings.EqualFold(e.Name(), ".git") {
+				continue // never advertise VCS metadata in listings
+			}
 			merged[e.Name()] = e // higher-priority layers overwrite
 		}
 	}
@@ -443,6 +471,11 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
 		}
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrPermission}
 	}
 
 	var start time.Time
@@ -786,6 +819,9 @@ func (o *OverlayFS) resolveInfo(name string) (*Resolution, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrInvalid}
 	}
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrPermission}
+	}
 
 	o.mu.RLock()
 	layers := make([]fs.FS, len(o.layers))
@@ -855,9 +891,17 @@ func readAll(f fs.File) ([]byte, error) {
 
 // checkSymlinkSafe verifies the opened path hasn't escaped the layer root
 // via symlink. This is defense-in-depth for platforms without openat2/RESOLVE_BENEATH.
+//
+// It also refuses any path that is, or resolves to, something inside a .git
+// directory. Content layers are git clones, and .git/config can hold the
+// remote URL; a symlink committed to the content repo (e.g.
+// static/x -> ../.git/config) must not be able to publish it.
 func checkSymlinkSafe(root, name string) error {
 	if root == "" {
 		return nil // non-disk layer, skip check
+	}
+	if hasGitComponent(name) {
+		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	}
 	fullPath := filepath.Join(root, filepath.FromSlash(name))
 	resolved, err := filepath.EvalSymlinks(fullPath)
@@ -872,7 +916,55 @@ func checkSymlinkSafe(root, name string) error {
 	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) && resolved != root {
 		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
+	if rel, relErr := filepath.Rel(root, resolved); relErr == nil && hasGitComponent(filepath.ToSlash(rel)) {
+		return &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
 	return nil
+}
+
+// hideGitInDir wraps an opened directory so its ReadDir omits .git, as
+// OverlayFS.ReadDir does. Callers such as http.FileServerFS list a directory
+// through the handle Open returns, not through ReadDir. Regular files are
+// returned unchanged so they keep io.Seeker and friends.
+func hideGitInDir(f fs.File) fs.File {
+	d, ok := f.(fs.ReadDirFile)
+	if !ok {
+		return f
+	}
+	if info, err := f.Stat(); err != nil || !info.IsDir() {
+		return f
+	}
+	return gitHidingDir{d}
+}
+
+type gitHidingDir struct{ fs.ReadDirFile }
+
+func (d gitHidingDir) ReadDir(n int) ([]fs.DirEntry, error) {
+	for {
+		entries, err := d.ReadDirFile.ReadDir(n)
+		kept := entries[:0]
+		for _, e := range entries {
+			if !strings.EqualFold(e.Name(), ".git") {
+				kept = append(kept, e)
+			}
+		}
+		// With n > 0 an empty result must carry an error; read on if the
+		// only entries in this batch were .git.
+		if n <= 0 || len(kept) > 0 || err != nil {
+			return kept, err
+		}
+	}
+}
+
+// hasGitComponent reports whether any element of the slash-separated path is
+// ".git" (case-insensitive, for case-insensitive filesystems).
+func hasGitComponent(name string) bool {
+	for _, elem := range strings.Split(name, "/") {
+		if strings.EqualFold(elem, ".git") {
+			return true
+		}
+	}
+	return false
 }
 
 // goVersionAtLeast checks if the runtime Go version is at least major.minor.
