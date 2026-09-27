@@ -31,6 +31,7 @@ type Puller struct {
 	depth      int      // git clone/fetch depth; 1 = shallowest
 
 	embeddedCredsWarn sync.Once // warn once about ignored URL credentials
+	scrubWarn         sync.Once // warn once about an unwritable .git/config
 }
 
 // PullerOption configures optional Puller behaviour.
@@ -98,6 +99,12 @@ func (p *Puller) CloneOrPull(ctx context.Context, repoURL, branch, destPath stri
 		attribute.String("gitops.branch", branch),
 	)
 
+	if urlErr := checkRepoURL(repoURL); urlErr != nil {
+		span.SetStatus(codes.Error, urlErr.Error())
+		span.RecordError(urlErr)
+		return false, urlErr
+	}
+
 	if len(p.SparseDirs) > 0 {
 		cleaned, valErr := validateSparseDirs(p.SparseDirs)
 		if valErr != nil {
@@ -150,11 +157,16 @@ func validateSparseDirs(dirs []string) ([]string, error) {
 }
 
 // SanitizeURL strips embedded credentials from a URL for safe logging.
-// Strings that do not parse as URLs are passed through redactCredentials so a
-// malformed URL (e.g. an unescaped "%" in a token) never leaks verbatim.
+// A "scheme://" string that does not parse is replaced by a placeholder: an
+// unescaped "/", "%" or space in a token makes the userinfo boundary
+// ambiguous, so no part of it is echoed. Other unparseable strings (such as
+// scp-style "git@host:org/repo") are passed through redactCredentials.
 func SanitizeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
+		if scheme, _, ok := strings.Cut(raw, "://"); ok && validScheme(scheme) {
+			return scheme + "://" + unparseableURLPlaceholder
+		}
 		return redactCredentials(raw)
 	}
 	if u.User == nil {
@@ -162,6 +174,39 @@ func SanitizeURL(raw string) string {
 	}
 	u.User = nil
 	return u.String()
+}
+
+const unparseableURLPlaceholder = "[unparseable URL redacted]"
+
+// validScheme reports whether s is a URL scheme per RFC 3986 section 3.1.
+func validScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// errUnparseableRepoURL is returned instead of go-git's parse error, which
+// would echo the raw URL and any credentials in it.
+var errUnparseableRepoURL = errors.New("gitops: repo URL does not parse; check that credentials in it are percent-encoded")
+
+// checkRepoURL rejects "scheme://" URLs that do not parse, before go-git
+// sees them. scp-style SSH URLs have no scheme and are left to go-git.
+func checkRepoURL(raw string) error {
+	if scheme, _, ok := strings.Cut(raw, "://"); ok && validScheme(scheme) {
+		if _, err := url.Parse(raw); err != nil {
+			return errUnparseableRepoURL
+		}
+	}
+	return nil
 }
 
 // resolveRemote returns the URL and auth to hand to go-git. Credentials
@@ -265,8 +310,12 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 		// Not fatal: fetch below uses auth resolved from repoURL, and any
 		// resulting error is redacted. Failing here would stop content sync
 		// for repos whose .git/config is not writable (e.g. read-only volume).
-		p.logger.Warn("could not remove credentials persisted in .git/config",
-			"dest", destPath, "error", redactError(err))
+		// Warn once: this runs on every pull and the cause (a read-only
+		// .git/config) does not go away between pulls.
+		p.scrubWarn.Do(func() {
+			p.logger.Warn("could not remove credentials persisted in .git/config",
+				"dest", destPath, "error", redactError(err))
+		})
 	} else if scrubbed {
 		p.logger.Info("removed credentials persisted in .git/config remote URL", "dest", destPath)
 	}

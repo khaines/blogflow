@@ -479,11 +479,11 @@ Error classification:
 | 17 | File replaced during read | File is overwritten between `Open` and `Read` | OS-level behavior — file handle sees content at open time (POSIX semantics) |
 | 18 | Symlink in user layer pointing outside root | Content layer has symlink → /etc/passwd | Return fs.ErrInvalid, log WARN with path and target |
 | 19 | Stat then Open during concurrent layer swap | Stat resolves layer 2, swap occurs, Open resolves layer 4 | OpenFile() returns consistent handle+info from same layer |
-| 20 | Direct request for VCS metadata | `Open(".git/config")` on a disk layer | Return `fs.ErrPermission` (403 via `http.FileServerFS`) |
+| 20 | Direct request for VCS metadata | `Open(".git/config")` | Refused by name before any layer lookup: `fs.ErrPermission` (403 via `http.FileServerFS`), whether or not the path exists |
 | 21 | Symlink into VCS metadata | Content repo commits `static/x -> ../.git/config` | Resolved path contains `.git`: return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat` |
 | 22 | Symlinked directory into VCS metadata | Content repo commits `static/gitdir -> ../.git`; `ReadDir("static/gitdir")` | Return `fs.ErrPermission`; nothing listed |
 | 23 | `.git` in a merged listing | `ReadDir(".")` on a layer that is a git clone | `.git` entry omitted from the result |
-| 24 | Case variant of `.git` | `Open(".GIT/config")` | Treated as `.git` (case-insensitive) — `fs.ErrPermission` |
+| 24 | Case variant of `.git` | `Open(".GIT/config")` | Treated as `.git` (case-insensitive name match) — `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir` on every filesystem |
 
 ### 3.3 Integration Test Boundaries
 
@@ -610,7 +610,7 @@ No data handled by the overlay FS is classified as confidential or restricted. C
 | `os.DirFS` confinement | Each layer rooted at its base directory | Directory escape |
 | `filepath.EvalSymlinks` on base paths | Constructor resolves symlinks at startup | Symlink-based root escape |
 | Non-interpretation of file content | Overlay returns raw bytes; parsing is the caller's responsibility | Injection via file content |
-| VCS metadata exclusion | On disk layers, any requested or symlink-resolved path with a `.git` element (case-insensitive) returns `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir`; `.git` is omitted from merged listings | Publishing `.git/config` (which can hold the remote URL and credentials) through a committed symlink |
+| VCS metadata exclusion | Any requested path with a `.git` element (case-insensitive) is refused by name before layer lookup; on disk layers, any symlink-resolved path with a `.git` element is also refused. Both return `fs.ErrPermission` from `Open`/`ReadFile`/`Stat`/`ReadDir`; `.git` is omitted from merged listings | Publishing `.git/config` (which can hold the remote URL and credentials) through a committed symlink |
 
 **Size limits**: The overlay FS does not enforce file size limits. Downstream consumers (template parser, markdown parser, config loader) enforce their own limits. The content pipeline rejects markdown files > 10 MB; the config loader rejects YAML files > 1 MB.
 
@@ -700,7 +700,7 @@ graph LR
 | Layer shadowing (EoP) | Documented layer priority; operator controls mounts | **Medium** — if attacker gains write to theme volume, they can shadow defaults. Mitigated by read-only mounts where possible and monitoring. |
 | DoS via stat storm | Negative cache; rendered HTML cache; HTTP rate limiting | **Low** — negative cache bounds stat calls to one per unique path per cache lifetime |
 | Symlink escape | `os.DirFS` confinement + `filepath.EvalSymlinks` | **Medium** — Pre-1.22 builds lack protection; defense-in-depth `lstat` check added for all user-controlled layers. |
-| In-root symlink to `.git` | VCS metadata exclusion on every disk layer (§5.3) | **Low** — the check runs after the OS opens the path, so a TOCTOU window remains until layers move to `os.OpenRoot` (tracked in #321). |
+| In-root symlink to `.git` | VCS metadata exclusion on every disk layer (§5.3) | **Low** — requested names are refused before any lookup. The symlink-resolution check runs separately from the OS open (after it for `Open`/`ReadFile`/`Stat`, before it for `ReadDir`), so a TOCTOU window remains until layers move to `os.OpenRoot` (tracked in #321). |
 | git-sync compromise | Out of scope for overlay FS; mitigated by K8s RBAC and pod security | **Accepted** — if the sidecar is compromised, it can write arbitrary files to the volume. Overlay FS cannot prevent this; defense is at the cluster level. |
 
 ---

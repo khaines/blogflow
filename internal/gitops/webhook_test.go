@@ -526,29 +526,46 @@ func TestWebhookHandler_RejectionsShareFailureBudget(t *testing.T) {
 	}
 }
 
-// A request with no signature header must be rejected without reading the
-// body.
-func TestWebhookHandler_MissingSignatureSkipsBodyRead(t *testing.T) {
+// A request without a well-formed signature header must be rejected without
+// reading the body.
+func TestWebhookHandler_MalformedSignatureSkipsBodyRead(t *testing.T) {
 	t.Parallel()
 
-	ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
-		Path:   "/api/webhook",
-		Secret: "test-secret-min-32-bytes-long!!!!",
-	}, func() error { return nil }, webhookLogger(), testResWL)
-	if err != nil {
-		t.Fatal(err)
+	cases := map[string]string{
+		"missing":      "",
+		"bogus":        "sha256=bogus",
+		"wrong prefix": "sha1=" + strings.Repeat("0", 64),
+		"63 hex":       "sha256=" + strings.Repeat("0", 63),
+		"65 hex":       "sha256=" + strings.Repeat("0", 65),
+		"non-hex":      "sha256=" + strings.Repeat("g", 64),
 	}
+	for name, sig := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	body := &countingReader{r: strings.NewReader(strings.Repeat("x", 1024))}
-	req := httptest.NewRequest(http.MethodPost, "/api/webhook", body)
-	rec := httptest.NewRecorder()
-	ws.Handler().ServeHTTP(rec, req)
+			ws, err := gitops.NewWebhookStrategy(config.WebhookConfig{
+				Path:   "/api/webhook",
+				Secret: "test-secret-min-32-bytes-long!!!!",
+			}, func() error { return nil }, webhookLogger(), testResWL)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", rec.Code)
-	}
-	if body.n != 0 {
-		t.Fatalf("body was read (%d bytes) for a request with no signature", body.n)
+			body := &countingReader{r: strings.NewReader(strings.Repeat("x", 1024))}
+			req := httptest.NewRequest(http.MethodPost, "/api/webhook", body)
+			if sig != "" {
+				req.Header.Set("X-Hub-Signature-256", sig)
+			}
+			rec := httptest.NewRecorder()
+			ws.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("got %d, want 401", rec.Code)
+			}
+			if body.n != 0 {
+				t.Fatalf("body was read (%d bytes) for signature %q", body.n, sig)
+			}
+		})
 	}
 }
 

@@ -238,6 +238,11 @@ func (o *OverlayFS) Open(name string) (fs.File, error) {
 		}
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
 
 	var start time.Time
 	if o.metrics != nil {
@@ -305,6 +310,11 @@ func (o *OverlayFS) ReadFile(name string) ([]byte, error) {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
 		}
 		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrInvalid}
+	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fs.ErrPermission}
 	}
 
 	var start time.Time
@@ -385,6 +395,11 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrPermission}
+	}
 
 	var start time.Time
 	if o.metrics != nil {
@@ -453,6 +468,11 @@ func (o *OverlayFS) Stat(name string) (fs.FileInfo, error) {
 			o.metrics.pathRejected.WithLabelValues(classifyInvalidPath(name)).Inc()
 		}
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+	// Refuse VCS metadata by name before any layer lookup, so every
+	// operation answers ErrPermission whatever the layer's case sensitivity.
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrPermission}
 	}
 
 	var start time.Time

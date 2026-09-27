@@ -52,11 +52,25 @@ func TestOverlayFS_RefusesGitDirectoryViaSymlink(t *testing.T) {
 		} else if !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("Open(%q) error = %v; want fs.ErrPermission", name, err)
 		}
-		if _, err := fs.ReadFile(ofs, name); err == nil {
-			t.Errorf("ReadFile(%q) succeeded; want refusal", name)
+		if _, err := fs.ReadFile(ofs, name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("ReadFile(%q) error = %v; want fs.ErrPermission", name, err)
 		}
-		if _, err := fs.Stat(ofs, name); err == nil {
-			t.Errorf("Stat(%q) succeeded; want refusal", name)
+		if _, err := fs.Stat(ofs, name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("Stat(%q) error = %v; want fs.ErrPermission", name, err)
+		}
+	}
+
+	// Paths naming .git are refused by name, before any layer lookup, so
+	// the answer does not depend on case sensitivity or on existence.
+	for _, name := range []string{".GIT/config", ".git/missing", "posts/.Git/HEAD"} {
+		if _, err := ofs.Open(name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("Open(%q) error = %v; want fs.ErrPermission", name, err)
+		}
+		if _, err := fs.ReadFile(ofs, name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("ReadFile(%q) error = %v; want fs.ErrPermission", name, err)
+		}
+		if _, err := fs.Stat(ofs, name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("Stat(%q) error = %v; want fs.ErrPermission", name, err)
 		}
 	}
 

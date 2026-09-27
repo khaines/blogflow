@@ -17,6 +17,7 @@ description: "How to deploy BlogFlow: local dev, K8s sidecar, K8s webhook, Docke
 - [Pattern 2: Kubernetes — git-sync Sidecar](#pattern-2-kubernetes--git-sync-sidecar)
 - [Pattern 3: Kubernetes — Webhook + go-git Pull](#pattern-3-kubernetes--webhook--go-git-pull)
 - [Pattern 4: Docker Production (Webhook)](#pattern-4-docker-production-webhook)
+- [Client IP resolution](#client-ip-resolution)
 - [Health & Readiness Endpoints](#health--readiness-endpoints)
 - [Observability](#observability)
 - [Helm Chart Installation](#helm-chart-installation)
@@ -132,35 +133,6 @@ No persistent volumes are needed — you are editing files directly on your host
 
 ---
 
-
-### Client IP resolution
-
-BlogFlow uses the client IP for access logs, webhook `allowed_ips` and
-per-IP webhook budgets. Forwarded headers are only trusted when the
-connection comes from an address in `server.trusted_proxy_cidrs`:
-
-```yaml
-server:
-  trusted_proxy_cidrs:
-    - 10.0.0.0/8          # your ingress / load balancer range
-```
-
-When the peer is trusted, the client IP is resolved like this:
-
-1. All `X-Forwarded-For` header lines are joined in order and walked from
-   right to left.
-2. Each hop is normalised: whitespace, a trailing `:port`, IPv6 brackets and
-   IPv6 zones are removed. Empty hops are skipped.
-3. The first hop that is **not** in `trusted_proxy_cidrs` is the client IP.
-4. A hop that is still not an IP address (for example `unknown`) ends the
-   walk; the left-most trusted hop reached so far is used, or the peer
-   address if there is none.
-5. If every hop is trusted, the left-most one is used.
-6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header,
-   and only if it is a valid IP.
-
-When the peer is not trusted, the connection's remote address is always
-used and forwarded headers are ignored.
 
 ## Pattern 2: Kubernetes — git-sync Sidecar
 
@@ -537,7 +509,9 @@ go-git uses this as `x-access-token` basic auth (GitHub convention).
 > also configured, that explicit auth wins and the URL credentials are
 > ignored; a warning is logged once. Clones made by older versions may have
 > the credential saved in `.git/config`; it is removed on the first pull
-> after upgrading.
+> after upgrading if `.git/config` is writable. If it is not (for example a
+> read-only volume), a WARN line is logged once and sync continues; remove
+> the credential by hand.
 
 **Option B: SSH deploy key**
 
@@ -582,8 +556,9 @@ defaults to `AuthNone`.
 - Branch filtering prevents non-target branches from triggering reloads.
 - `rate_limit` (default 10) sets two separate per-client-IP budgets per
   minute:
-  - **Rejections** — missing or invalid signatures, oversized bodies and
-    body read errors. Within the budget they get 401/413/400 and a WARN log
+  - **Rejections** — source IPs outside `allowed_ips`, missing or invalid
+    signatures, oversized bodies and body read errors. Within the budget
+    they get 403/401/413/400 and a WARN log
     line. Past it they get 429 with no log line, so junk traffic cannot
     flood the logs.
   - **Verified deliveries** — past this budget, correctly signed requests
@@ -593,9 +568,11 @@ defaults to `AuthNone`.
   GitHub (for example every caller behind an ingress when
   `trusted_proxy_cidrs` is not set) cannot block real deliveries.
 - Every webhook request is counted in
-  `blogflow_webhook_requests_total{outcome=...}` (`ok`, `forbidden_ip`,
-  `missing_signature`, `invalid_signature`, `body_too_large`,
-  `body_read_error`, `failure_budget_exceeded`, `verified_budget_exceeded`).
+  `blogflow_webhook_requests_total{outcome=...}` (`ok`,
+  `method_not_allowed`, `forbidden_ip`, `missing_signature`,
+  `invalid_signature`, `body_too_large`, `body_read_error`,
+  `failure_budget_exceeded`, `verified_budget_exceeded`, `event_rejected`,
+  `invalid_payload`, `branch_skipped`, `reload_failed`).
   Alert on `failure_budget_exceeded` to see sustained forgery attempts that
   are no longer logged.
 - Request body size is capped at 1 MB by default.
@@ -829,6 +806,10 @@ site:
 server:
   tls_terminated: true
   hsts_max_age: 63072000
+  # Your reverse proxy's network, so allowed_ips and per-IP webhook budgets
+  # see the real client (see Client IP resolution).
+  trusted_proxy_cidrs:
+    - 172.16.0.0/12
 
 sync:
   strategy: "webhook"
@@ -936,6 +917,37 @@ environment:
   GitHub's webhook ranges).
 - Pin the image by SHA256 digest in production (see
   [Container Security Guide](engineering/container-security.md#image-pinning)).
+
+---
+
+## Client IP resolution
+
+BlogFlow uses the client IP for access logs, webhook `allowed_ips` and
+per-IP webhook budgets. Forwarded headers are only trusted when the
+connection comes from an address in `server.trusted_proxy_cidrs`:
+
+```yaml
+server:
+  trusted_proxy_cidrs:
+    - 10.0.0.0/8          # your ingress / load balancer range
+```
+
+When the peer is trusted, the client IP is resolved like this:
+
+1. All `X-Forwarded-For` header lines are joined in order and walked from
+   right to left.
+2. Each hop is normalised: whitespace, a trailing `:port`, IPv6 brackets and
+   IPv6 zones are removed. Empty hops are skipped.
+3. The first hop that is **not** in `trusted_proxy_cidrs` is the client IP.
+4. A hop that is still not an IP address (for example `unknown`) ends the
+   walk; the left-most trusted hop reached so far is used, or the peer
+   address if there is none.
+5. If every hop is trusted, the left-most one is used.
+6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header,
+   and only if it is a valid IP.
+
+When the peer is not trusted, the connection's remote address is always
+used and forwarded headers are ignored.
 
 ---
 
@@ -1066,6 +1078,7 @@ Prometheus metrics are always available. No extra configuration is needed.
 | RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
 | Content analytics | Views per content item: `blogflow_content_views_total{type, slug}` |
 | Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
+| Webhook outcomes | `blogflow_webhook_requests_total{outcome}` — every webhook request by result (see [Pattern 3 security notes](#security-notes-2)) |
 | Go runtime | Goroutines, memory, GC pause duration, open file descriptors |
 | Grafana dashboard | [Pre-built JSON](../examples/grafana/) — import and go |
 

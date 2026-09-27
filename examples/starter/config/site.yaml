@@ -70,7 +70,7 @@ sync:
   # webhook:
   #   path: "/api/webhook"
   #   branch_filter: "main"
-  #   rate_limit: 10          # Max webhook requests per minute
+  #   rate_limit: 10          # Per client IP per minute: N rejected + N verified requests
   #   secret: (use BLOGFLOW_WEBHOOK_SECRET env var — never put secrets here)
 
 # ---------------------------------------------------------------------------

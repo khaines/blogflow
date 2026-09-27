@@ -20,16 +20,19 @@ import (
 const testSecret = "SUPERSECRET-token-123"
 
 // failingGitServer returns 500 for every request and records the basic-auth
-// credentials it saw.
+// credentials of the first request it saw.
 func failingGitServer(t *testing.T) (*httptest.Server, func() (string, string, bool)) {
 	t.Helper()
 	var mu sync.Mutex
 	var user, pass string
-	var sawAuth bool
+	var sawAuth, sawRequest bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		if u, p, ok := r.BasicAuth(); ok {
-			user, pass, sawAuth = u, p, true
+		// Record only the first request: a failed pull falls back to a
+		// re-clone, which must not mask a fetch that sent no auth.
+		if !sawRequest {
+			sawRequest = true
+			user, pass, sawAuth = r.BasicAuth()
 		}
 		mu.Unlock()
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -261,14 +264,79 @@ func TestCloneOrPull_PullScrubsPersistedCredentials(t *testing.T) {
 	}
 }
 
+// On pull, credentials embedded in the configured repo URL must reach the
+// fetch as basic auth even though .git/config holds a clean origin URL.
+func TestCloneOrPull_PullFetchUsesURLCredentials(t *testing.T) {
+	bare := newBareRepoWithCommit(t)
+	dest := filepath.Join(t.TempDir(), "dst")
+
+	p, err := NewPuller(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CloneOrPull(context.Background(), bare, "master", dest); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+
+	srv, seen := failingGitServer(t)
+	repo, err := git.PlainOpen(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Remotes["origin"].URLs = []string{srv.URL + "/o/r.git"}
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	repoURL := strings.Replace(srv.URL, "http://", "http://x-access-token:"+testSecret+"@", 1) + "/o/r.git"
+	_, err = p.CloneOrPull(context.Background(), repoURL, "master", dest)
+	if err == nil {
+		t.Fatal("expected fetch error from failing server")
+	}
+	if strings.Contains(err.Error(), testSecret) {
+		t.Fatalf("error leaks credential: %v", err)
+	}
+	u, pw, ok := seen()
+	if !ok || u != "x-access-token" || pw != testSecret {
+		t.Fatalf("fetch did not carry URL credentials as basic auth: ok=%v user=%q", ok, u)
+	}
+}
+
+// A scheme URL that does not parse must be rejected before go-git, whose
+// parse error would echo it.
+func TestCloneOrPull_UnparseableURLNotEchoed(t *testing.T) {
+	p, err := NewPuller(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{
+		"https://u:pa/ss" + testSecret + "@github.com/o/r.git",
+		"https://u:pa ss" + testSecret + "@github.com/o/r.git",
+	} {
+		_, err := p.CloneOrPull(context.Background(), in, "main", filepath.Join(t.TempDir(), "dst"))
+		if !errors.Is(err, errUnparseableRepoURL) {
+			t.Errorf("CloneOrPull(%q) err = %v, want errUnparseableRepoURL", in, err)
+		}
+	}
+}
+
 func TestSanitizeURL_UnparseableIsRedacted(t *testing.T) {
 	for _, in := range []string{
 		"https://u:bad%zz" + testSecret + "@github.com/o/r.git",
 		"https://u:p@ss%zz" + testSecret + "@github.com/o/r.git",
+		"https://u:pa/ss" + testSecret + "@github.com/o/r.git",
+		"https://u:pa ss" + testSecret + "@github.com/o/r.git",
 	} {
 		if got := SanitizeURL(in); strings.Contains(got, testSecret) {
 			t.Errorf("SanitizeURL(%q) leaked credential: %q", in, got)
 		}
+	}
+	if got, want := SanitizeURL("git@github.com:o/r.git"), "git@github.com:o/r.git"; got != want {
+		t.Errorf("scp-style URL changed: got %q, want %q", got, want)
 	}
 }
 

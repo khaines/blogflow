@@ -117,22 +117,13 @@ func newWebhookLimits(limit int) webhookLimits {
 func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
+			webhookRequestsTotal.WithLabelValues(outcomeMethodNotAllowed).Inc()
 			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
 		// Resolve client IP for allowlist and rate-limit lookups.
 		ip := w.resolveIP(r)
-
-		// Validate IP against allowlist BEFORE rate limiting.
-		if len(w.config.AllowedIPs) > 0 {
-			if !ipInCIDRs(ip, w.config.AllowedIPs) {
-				webhookRequestsTotal.WithLabelValues(outcomeForbiddenIP).Inc()
-				w.logger.Warn("source IP not in allowed_ips", "ip", ip)
-				http.Error(rw, "source IP not in allowed_ips", http.StatusForbidden)
-				return
-			}
-		}
 
 		// reject charges an unauthenticated rejection to the client IP.
 		// Within the failures budget it logs and responds with status;
@@ -155,6 +146,14 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 			webhookRequestsTotal.WithLabelValues(outcome).Inc()
 			w.logger.Warn(msg, append([]any{"ip", ip}, logArgs...)...)
 			http.Error(rw, msg, status)
+		}
+
+		// Validate IP against allowlist before reading anything else. The
+		// rejection goes through reject so a disallowed source cannot flood
+		// the logs.
+		if len(w.config.AllowedIPs) > 0 && !ipInCIDRs(ip, w.config.AllowedIPs) {
+			reject(outcomeForbiddenIP, http.StatusForbidden, "source IP not in allowed_ips")
+			return
 		}
 
 		// Validate the signature header's shape BEFORE reading the body, so
@@ -205,12 +204,14 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 		if len(w.config.AllowedEvents) > 0 {
 			event := r.Header.Get("X-GitHub-Event")
 			if event == "" {
+				webhookRequestsTotal.WithLabelValues(outcomeEventRejected).Inc()
 				w.logger.Warn("missing event header with active event filter",
 					"allowed", w.config.AllowedEvents)
 				http.Error(rw, "missing event header", http.StatusForbidden)
 				return
 			}
 			if !slices.Contains(w.config.AllowedEvents, event) {
+				webhookRequestsTotal.WithLabelValues(outcomeEventRejected).Inc()
 				w.logger.Warn("event type not allowed",
 					"event", event, "allowed", w.config.AllowedEvents)
 				http.Error(rw, "event type not allowed", http.StatusForbidden)
@@ -225,6 +226,7 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 			}
 
 			if err := json.Unmarshal(body, &payload); err != nil {
+				webhookRequestsTotal.WithLabelValues(outcomeInvalidPayload).Inc()
 				w.logger.Warn("invalid JSON payload", "error", err)
 				http.Error(rw, "invalid payload", http.StatusBadRequest)
 				return
@@ -232,6 +234,7 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 
 			expectedRef := "refs/heads/" + w.config.BranchFilter
 			if payload.Ref != expectedRef {
+				webhookRequestsTotal.WithLabelValues(outcomeBranchSkipped).Inc()
 				w.logger.Debug("ignoring push to non-matching branch",
 					"ref", payload.Ref, "filter", w.config.BranchFilter)
 				rw.Header().Set("X-Blogflow-Branch-Skipped", payload.Ref)
@@ -243,6 +246,7 @@ func (w *WebhookStrategy) buildHandler(limits webhookLimits) http.HandlerFunc {
 
 		// Trigger content reload.
 		if err := w.reloader(); err != nil {
+			webhookRequestsTotal.WithLabelValues(outcomeReloadFailed).Inc()
 			w.logger.Error("content reload failed", "error", err)
 			http.Error(rw, "reload failed", http.StatusInternalServerError)
 			return
