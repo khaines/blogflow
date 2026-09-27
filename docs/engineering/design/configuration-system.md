@@ -250,7 +250,7 @@ type ServerConfig struct {
     IdleTimeout       time.Duration `yaml:"idle_timeout"       validate:"required,min=1s,max=600s"`
     TLSTerminated     bool          `yaml:"tls_terminated"     validate:"omitempty"`                   // true when behind a TLS-terminating LB/proxy
     HSTSMaxAge        int           `yaml:"hsts_max_age"       validate:"omitempty,min=0,max=63072000"` // 0 disables HSTS; max 63072000 = 2 years
-    TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs" validate:"omitempty,dive,ip_or_cidr"`  // source-of-trust for X-Forwarded-For
+    TrustedProxyCIDRs []string      `yaml:"trusted_proxy_cidrs" validate:"omitempty,dive,ip_or_cidr"`  // source-of-trust for X-Forwarded-For / X-Real-IP; resolution rules in deployment-guide.md "Client IP resolution"
 }
 
 type CacheConfig struct {
@@ -270,7 +270,7 @@ type WebhookConfig struct {
     AllowedEvents []string `yaml:"allowed_events" validate:"required_if=Strategy webhook,dive,oneof=push ping"`
     BranchFilter  string   `yaml:"branch_filter"  validate:"required_if=Strategy webhook,max=250"`
     AllowedIPs    []string `yaml:"allowed_ips"` // empty = no filtering; non-empty = only listed IPs pass
-    RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // requests per minute
+    RateLimit     int      `yaml:"rate_limit"     validate:"required_if=Strategy webhook,min=1,max=100"` // per client IP per minute; two separate budgets: rejected requests and verified deliveries
     MaxBodySize   int64    `yaml:"max_body_size"` // max POST body in bytes; 0 = default
 }
 

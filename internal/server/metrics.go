@@ -117,3 +117,17 @@ func statusBucketLabel(code int) string {
 		return "other"
 	}
 }
+
+// maxLoggedMethodLen bounds the request method written to logs. net/http
+// only accepts token characters in a method, so no escaping is needed, but a
+// method can be up to the header size limit.
+const maxLoggedMethodLen = 16
+
+// logMethod returns the request method for log lines: verbatim, so unusual
+// methods remain visible to operators, but truncated to a fixed length.
+func logMethod(method string) string {
+	if len(method) > maxLoggedMethodLen {
+		return method[:maxLoggedMethodLen] + "..."
+	}
+	return method
+}

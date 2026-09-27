@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -28,6 +29,8 @@ type Puller struct {
 	logger     *slog.Logger
 	SparseDirs []string // if non-empty, only these directories are checked out
 	depth      int      // git clone/fetch depth; 1 = shallowest
+
+	embeddedCredsWarn sync.Once // warn once about ignored URL credentials
 }
 
 // PullerOption configures optional Puller behaviour.
@@ -168,8 +171,10 @@ func SanitizeURL(raw string) string {
 func (p *Puller) resolveRemote(repoURL string) (string, transport.AuthMethod) {
 	cleanURL, urlAuth := splitHTTPCredentials(repoURL)
 	if urlAuth != nil && p.auth != nil {
-		p.logger.Warn("ignoring credentials embedded in repo URL; explicit git auth is configured",
-			"url", cleanURL)
+		p.embeddedCredsWarn.Do(func() {
+			p.logger.Warn("ignoring credentials embedded in repo URL; explicit git auth is configured",
+				"url", cleanURL)
+		})
 	}
 	if p.auth != nil || urlAuth == nil {
 		return cleanURL, p.auth
@@ -256,8 +261,14 @@ func (p *Puller) pull(ctx context.Context, repoURL, branch, destPath string) (_ 
 	// Clones made by older versions may have credentials persisted in the
 	// origin URL; scrub them so go-git never echoes them back in errors.
 	_, auth := p.resolveRemote(repoURL)
-	if err := scrubRemoteCredentials(repo); err != nil {
-		return false, fmt.Errorf("gitops: scrub remote credentials %s: %w", destPath, err)
+	if scrubbed, err := scrubRemoteCredentials(repo); err != nil {
+		// Not fatal: fetch below uses auth resolved from repoURL, and any
+		// resulting error is redacted. Failing here would stop content sync
+		// for repos whose .git/config is not writable (e.g. read-only volume).
+		p.logger.Warn("could not remove credentials persisted in .git/config",
+			"dest", destPath, "error", redactError(err))
+	} else if scrubbed {
+		p.logger.Info("removed credentials persisted in .git/config remote URL", "dest", destPath)
 	}
 
 	// Use FetchContext + hard reset instead of PullContext so we can set

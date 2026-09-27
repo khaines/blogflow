@@ -132,6 +132,36 @@ No persistent volumes are needed — you are editing files directly on your host
 
 ---
 
+
+### Client IP resolution
+
+BlogFlow uses the client IP for access logs, webhook `allowed_ips` and
+per-IP webhook budgets. Forwarded headers are only trusted when the
+connection comes from an address in `server.trusted_proxy_cidrs`:
+
+```yaml
+server:
+  trusted_proxy_cidrs:
+    - 10.0.0.0/8          # your ingress / load balancer range
+```
+
+When the peer is trusted, the client IP is resolved like this:
+
+1. All `X-Forwarded-For` header lines are joined in order and walked from
+   right to left.
+2. Each hop is normalised: whitespace, a trailing `:port`, IPv6 brackets and
+   IPv6 zones are removed. Empty hops are skipped.
+3. The first hop that is **not** in `trusted_proxy_cidrs` is the client IP.
+4. A hop that is still not an IP address (for example `unknown`) ends the
+   walk; the left-most trusted hop reached so far is used, or the peer
+   address if there is none.
+5. If every hop is trusted, the left-most one is used.
+6. `X-Real-IP` is only used when there is **no** `X-Forwarded-For` header,
+   and only if it is a valid IP.
+
+When the peer is not trusted, the connection's remote address is always
+used and forwarded headers are ignored.
+
 ## Pattern 2: Kubernetes — git-sync Sidecar
 
 ### Architecture
@@ -438,7 +468,7 @@ sync:
     branch_filter: "main"
     allowed_events:
       - push
-    rate_limit: 10            # max webhook requests per minute per IP
+    rate_limit: 10            # per client IP per minute: N rejected + N verified requests
 
 cache:
   enabled: true
@@ -499,6 +529,16 @@ BLOGFLOW_GIT_TOKEN=ghp_YourTokenHere
 
 go-git uses this as `x-access-token` basic auth (GitHub convention).
 
+> **Credentials in the repo URL:** prefer `BLOGFLOW_GIT_TOKEN` over
+> embedding credentials in `BLOGFLOW_SYNC_REPO`
+> (`https://user:token@host/...`). If you do embed them, BlogFlow moves them
+> out of the URL and into HTTP basic auth, so they never appear in errors,
+> logs, traces or `.git/config`. When `BLOGFLOW_GIT_TOKEN` or an SSH key is
+> also configured, that explicit auth wins and the URL credentials are
+> ignored; a warning is logged once. Clones made by older versions may have
+> the credential saved in `.git/config`; it is removed on the first pull
+> after upgrading.
+
 **Option B: SSH deploy key**
 
 ```bash
@@ -536,10 +576,32 @@ defaults to `AuthNone`.
 ### Security notes
 
 - The webhook endpoint validates HMAC-SHA256 signatures on every request.
-  Requests with missing or invalid signatures are rejected with 401.
+  Requests with a missing or malformed `X-Hub-Signature-256` header are
+  rejected before the body is read. Requests with an invalid signature are
+  rejected after it is read.
 - Branch filtering prevents non-target branches from triggering reloads.
-- Rate limiting (default: 10 requests/minute/IP) prevents abuse.
+- `rate_limit` (default 10) sets two separate per-client-IP budgets per
+  minute:
+  - **Rejections** — missing or invalid signatures, oversized bodies and
+    body read errors. Within the budget they get 401/413/400 and a WARN log
+    line. Past it they get 429 with no log line, so junk traffic cannot
+    flood the logs.
+  - **Verified deliveries** — past this budget, correctly signed requests
+    get 429.
+
+  Because the budgets are separate, unsigned traffic from the same IP as
+  GitHub (for example every caller behind an ingress when
+  `trusted_proxy_cidrs` is not set) cannot block real deliveries.
+- Every webhook request is counted in
+  `blogflow_webhook_requests_total{outcome=...}` (`ok`, `forbidden_ip`,
+  `missing_signature`, `invalid_signature`, `body_too_large`,
+  `body_read_error`, `failure_budget_exceeded`, `verified_budget_exceeded`).
+  Alert on `failure_budget_exceeded` to see sustained forgery attempts that
+  are no longer logged.
 - Request body size is capped at 1 MB by default.
+- Behind a reverse proxy, set `server.trusted_proxy_cidrs` so per-IP
+  budgets and `allowed_ips` see the real client address (see
+  [Client IP resolution](#client-ip-resolution)).
 - The webhook secret must be set via `BLOGFLOW_WEBHOOK_SECRET` environment
   variable — never in `site.yaml` (BlogFlow rejects YAML containing secrets).
 - Consider restricting webhook ingress to [GitHub's webhook IP
@@ -1249,7 +1311,7 @@ and feed options, see the inline comments in the config examples above.
 | `BLOGFLOW_SERVER_IDLE_TIMEOUT` | HTTP idle timeout | `120s` | All patterns |
 | `BLOGFLOW_SITE_BASE_URL` | Canonical site URL | `http://localhost:8080` | All patterns |
 | `BLOGFLOW_CACHE_ENABLED` | Enable/disable render cache | `true` | All patterns |
-| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Max webhook requests/min/IP | `10` | Webhook patterns (3, 4) |
+| `BLOGFLOW_SYNC_WEBHOOK_RATE_LIMIT` | Per-IP webhook budgets per minute (rejected and verified, counted separately) | `10` | Webhook patterns (3, 4) |
 | `BLOGFLOW_FEED_TYPE` | Feed format: `atom` or `rss` | `atom` | All patterns |
 | `OTEL_TRACES_EXPORTER` | Enable OTel tracing (set to `otlp`) | *(disabled)* | All patterns |
 | `OTEL_METRICS_EXPORTER` | Enable OTel metrics bridge (set to `otlp`) | *(disabled)* | All patterns |

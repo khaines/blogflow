@@ -12,7 +12,10 @@ import (
 
 // userinfoPattern matches the userinfo section of a URL embedded anywhere in
 // free text, e.g. "https://user:token@host/…" inside a go-git error message.
-var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
+// The class is greedy and admits '@' so that, like url.Parse, the userinfo
+// runs to the last '@' before the path; a password containing an unescaped
+// '@' is therefore redacted in full.
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s]*@`)
 
 // redactCredentials removes URL userinfo from arbitrary text.
 func redactCredentials(s string) string {
@@ -62,11 +65,11 @@ func splitHTTPCredentials(raw string) (string, transport.AuthMethod) {
 // config that carries userinfo, removing the credentials. Repositories cloned
 // before credentials were split out of the URL have the token persisted in
 // .git/config; leaving it there would expose it in go-git fetch errors and to
-// anything that can read the file.
-func scrubRemoteCredentials(repo *git.Repository) error {
+// anything that can read the file. It reports whether anything was changed.
+func scrubRemoteCredentials(repo *git.Repository) (bool, error) {
 	cfg, err := repo.Config()
 	if err != nil {
-		return err
+		return false, err
 	}
 	dirty := false
 	for _, rc := range cfg.Remotes {
@@ -78,7 +81,7 @@ func scrubRemoteCredentials(repo *git.Repository) error {
 		}
 	}
 	if !dirty {
-		return nil
+		return false, nil
 	}
-	return repo.SetConfig(cfg)
+	return true, repo.SetConfig(cfg)
 }

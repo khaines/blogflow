@@ -207,21 +207,68 @@ func TestClientIP_TrustedProxy_RejectsNonIPValues(t *testing.T) {
 		name   string
 		header string
 		value  string
+		want   string
 	}{
-		{"xff garbage", "X-Forwarded-For", "not-an-ip"},
-		{"xff garbage after trusted", "X-Forwarded-For", "not-an-ip, 10.0.0.9"},
-		{"x-real-ip garbage", "X-Real-IP", "not-an-ip"},
+		{"xff garbage", "X-Forwarded-For", "not-an-ip", "10.0.0.5"},
+		{"xff garbage left of trusted", "X-Forwarded-For", "not-an-ip, 10.0.0.9", "10.0.0.9"},
+		{"xff garbage right of client", "X-Forwarded-For", "203.0.113.9, unknown", "10.0.0.5"},
+		{"x-real-ip garbage", "X-Real-IP", "not-an-ip", "10.0.0.5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = "10.0.0.5:1234"
 			req.Header.Set(tt.header, tt.value)
-			got := resolver.ClientIP(req)
-			if got == "not-an-ip" {
-				t.Fatalf("ClientIP returned unvalidated header value %q", got)
+			if got := resolver.ClientIP(req); got != tt.want {
+				t.Fatalf("ClientIP = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClientIP_TrustedProxy_NormalizesHops(t *testing.T) {
+	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"ipv4 with port", "203.0.113.9:4711", "203.0.113.9"},
+		{"bracketed ipv6 with port", "[2001:db8::1]:4711", "2001:db8::1"},
+		{"bracketed ipv6", "[2001:db8::1]", "2001:db8::1"},
+		{"ipv6 zone", "fe80::1%eth0", "fe80::1"},
+		{"ipv4-mapped ipv6", "::ffff:203.0.113.9", "203.0.113.9"},
+		{"trailing comma", "203.0.113.9,", "203.0.113.9"},
+		{"trailing comma and space", "203.0.113.9, ", "203.0.113.9"},
+		{"empty middle element", "203.0.113.9, , 10.0.0.2", "203.0.113.9"},
+		{"trusted hop with port", "203.0.113.9, 10.0.0.2:80", "203.0.113.9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = "10.0.0.5:1234"
+			req.Header.Set("X-Forwarded-For", tt.value)
+			if got := resolver.ClientIP(req); got != tt.want {
+				t.Fatalf("ClientIP(XFF=%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientIP_TrustedProxy_XRealIPWithPort(t *testing.T) {
+	resolver, err := NewClientIPResolver([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Real-IP", "203.0.113.9:4711")
+	if got := resolver.ClientIP(req); got != "203.0.113.9" {
+		t.Fatalf("ClientIP = %q, want 203.0.113.9", got)
 	}
 }
 

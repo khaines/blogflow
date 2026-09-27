@@ -400,6 +400,13 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	found := false
 
 	for i := len(layers) - 1; i >= 0; i-- {
+		// Same policy as Open: disk layers must not list a directory that
+		// escapes the layer root or lies inside .git.
+		if i < len(o.layerMeta) && o.layerMeta[i].isDisk {
+			if err := checkSymlinkSafe(o.layerMeta[i].rootPath, name); err != nil {
+				return nil, err
+			}
+		}
 		entries, err := fs.ReadDir(layers[i], name)
 		if err != nil {
 			if isNotExist(err) {
@@ -409,6 +416,9 @@ func (o *OverlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		found = true
 		for _, e := range entries {
+			if strings.EqualFold(e.Name(), ".git") {
+				continue // never advertise VCS metadata in listings
+			}
 			merged[e.Name()] = e // higher-priority layers overwrite
 		}
 	}

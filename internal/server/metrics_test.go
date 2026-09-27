@@ -362,3 +362,15 @@ func TestMethodLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestLogMethod(t *testing.T) {
+	t.Parallel()
+
+	if got := logMethod("PROPFIND"); got != "PROPFIND" {
+		t.Errorf("logMethod(PROPFIND) = %q, want verbatim", got)
+	}
+	long := strings.Repeat("A", 4096)
+	if got := logMethod(long); len(got) != maxLoggedMethodLen+3 || !strings.HasPrefix(got, "AAAA") {
+		t.Errorf("logMethod(long) = %q, want truncated to %d bytes plus ellipsis", got, maxLoggedMethodLen)
+	}
+}
