@@ -195,18 +195,24 @@ func validScheme(s string) bool {
 }
 
 // ambiguousSchemeURL reports whether raw is a "scheme://" URL that either
-// does not parse or parses without userinfo although an "@" follows the
-// "://". Both happen when a credential holds an unescaped "/", "?", "#",
-// "%" or space: "https://u:12/SECRET@host" parses as host "u:12" with the
-// secret in the path. In either case the credential cannot be located, so
-// the URL must not be echoed or used. It also returns the scheme.
+// does not parse or has an "@" after its authority. Both happen when a
+// credential holds an unescaped "/", "?", "#", "@", "%" or space:
+// "https://u:12/SECRET@host" parses as host "u:12" and
+// "https://u:p@ss/SECRET@host" as host "ss", each with the secret in the
+// path. The credential cannot be located, so the URL must not be echoed or
+// used. It also returns the scheme. Surrounding whitespace is ignored.
 func ambiguousSchemeURL(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
 	scheme, rest, ok := strings.Cut(raw, "://")
 	if !ok || !validScheme(scheme) {
 		return "", false
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.User == nil && strings.Contains(rest, "@")) {
+	if _, err := url.Parse(raw); err != nil {
+		return scheme, true
+	}
+	// url.Parse ends the authority at the first "/", "?" or "#", and a
+	// real userinfo "@" can only be inside it.
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 && strings.Contains(rest[end:], "@") {
 		return scheme, true
 	}
 	return "", false
@@ -215,7 +221,7 @@ func ambiguousSchemeURL(raw string) (string, bool) {
 // errUnparseableRepoURL is returned instead of go-git's parse error, which
 // would echo the raw URL and any credentials in it.
 var errUnparseableRepoURL = errors.New("gitops: repo URL is malformed (for example an invalid host or port, " +
-	"or credentials that are not percent-encoded)")
+	"credentials that are not percent-encoded, or an \"@\" outside the credentials; encode it as %40)")
 
 // checkRepoURL rejects ambiguous "scheme://" URLs before go-git sees them.
 // scp-style SSH URLs have no scheme and are left to go-git.

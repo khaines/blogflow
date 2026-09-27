@@ -332,6 +332,12 @@ var ambiguousCredentialURLs = []string{
 	"https://ghp_ab/" + testSecret + "@github.com/o/r.git",
 	"https://u:12?" + testSecret + "@github.com/o/r.git",
 	"https://u:12#" + testSecret + "@github.com/o/r.git",
+	"https://u:p@ss/" + testSecret + "@github.com/o/r.git",
+	"https://u:p@ss?" + testSecret + "@github.com/o/r.git",
+	"https://u:p@ss#" + testSecret + "@github.com/o/r.git",
+	"https://u:p@ss://" + testSecret + "@github.com/o/r.git",
+	"https://u:p@ss:/" + testSecret + "@github.com/o/r.git",
+	" https://u:1234/" + testSecret + "@github.com/o/r.git",
 }
 
 func TestSanitizeURL_UnparseableIsRedacted(t *testing.T) {

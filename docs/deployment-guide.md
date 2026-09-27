@@ -433,7 +433,10 @@ server:
   tls_terminated: true
   hsts_max_age: 63072000
   # Your ingress controller's pod addresses, so allowed_ips and per-IP
-  # webhook budgets see the real client (see Client IP resolution).
+  # webhook budgets see the real client (see Client IP resolution). If this
+  # has to be a pod range, pair it with the NetworkPolicy below so only the
+  # ingress controller can reach BlogFlow; otherwise any pod could set
+  # X-Forwarded-For.
   # trusted_proxy_cidrs:
   #   - 10.244.0.0/16
 
