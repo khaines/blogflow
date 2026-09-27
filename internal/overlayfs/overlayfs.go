@@ -816,6 +816,9 @@ func (o *OverlayFS) resolveInfo(name string) (*Resolution, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrInvalid}
 	}
+	if hasGitComponent(name) {
+		return nil, &fs.PathError{Op: "resolve", Path: name, Err: fs.ErrPermission}
+	}
 
 	o.mu.RLock()
 	layers := make([]fs.FS, len(o.layers))

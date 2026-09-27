@@ -157,16 +157,16 @@ func validateSparseDirs(dirs []string) ([]string, error) {
 }
 
 // SanitizeURL strips embedded credentials from a URL for safe logging.
-// A "scheme://" string that does not parse is replaced by a placeholder: an
-// unescaped "/", "%" or space in a token makes the userinfo boundary
-// ambiguous, so no part of it is echoed. Other unparseable strings (such as
-// scp-style "git@host:org/repo") are passed through redactCredentials.
+// A "scheme://" string whose userinfo cannot be located reliably is replaced
+// by a placeholder, so no part of it is echoed: see ambiguousSchemeURL. Other
+// unparseable strings (such as scp-style "git@host:org/repo") are passed
+// through redactCredentials.
 func SanitizeURL(raw string) string {
+	if scheme, ok := ambiguousSchemeURL(raw); ok {
+		return scheme + "://" + unparseableURLPlaceholder
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		if scheme, _, ok := strings.Cut(raw, "://"); ok && validScheme(scheme) {
-			return scheme + "://" + unparseableURLPlaceholder
-		}
 		return redactCredentials(raw)
 	}
 	if u.User == nil {
@@ -194,17 +194,34 @@ func validScheme(s string) bool {
 	return true
 }
 
+// ambiguousSchemeURL reports whether raw is a "scheme://" URL that either
+// does not parse or parses without userinfo although an "@" follows the
+// "://". Both happen when a credential holds an unescaped "/", "?", "#",
+// "%" or space: "https://u:12/SECRET@host" parses as host "u:12" with the
+// secret in the path. In either case the credential cannot be located, so
+// the URL must not be echoed or used. It also returns the scheme.
+func ambiguousSchemeURL(raw string) (string, bool) {
+	scheme, rest, ok := strings.Cut(raw, "://")
+	if !ok || !validScheme(scheme) {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.User == nil && strings.Contains(rest, "@")) {
+		return scheme, true
+	}
+	return "", false
+}
+
 // errUnparseableRepoURL is returned instead of go-git's parse error, which
 // would echo the raw URL and any credentials in it.
-var errUnparseableRepoURL = errors.New("gitops: repo URL does not parse; check that credentials in it are percent-encoded")
+var errUnparseableRepoURL = errors.New("gitops: repo URL is malformed (for example an invalid host or port, " +
+	"or credentials that are not percent-encoded)")
 
-// checkRepoURL rejects "scheme://" URLs that do not parse, before go-git
-// sees them. scp-style SSH URLs have no scheme and are left to go-git.
+// checkRepoURL rejects ambiguous "scheme://" URLs before go-git sees them.
+// scp-style SSH URLs have no scheme and are left to go-git.
 func checkRepoURL(raw string) error {
-	if scheme, _, ok := strings.Cut(raw, "://"); ok && validScheme(scheme) {
-		if _, err := url.Parse(raw); err != nil {
-			return errUnparseableRepoURL
-		}
+	if _, ok := ambiguousSchemeURL(raw); ok {
+		return errUnparseableRepoURL
 	}
 	return nil
 }

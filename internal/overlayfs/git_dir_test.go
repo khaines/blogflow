@@ -72,6 +72,9 @@ func TestOverlayFS_RefusesGitDirectoryViaSymlink(t *testing.T) {
 		if _, err := fs.Stat(ofs, name); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("Stat(%q) error = %v; want fs.ErrPermission", name, err)
 		}
+		if _, err := ofs.Resolve(name); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("Resolve(%q) error = %v; want fs.ErrPermission", name, err)
+		}
 	}
 
 	for _, dir := range []string{".git", "static/gitdir"} {

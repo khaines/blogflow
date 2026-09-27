@@ -313,10 +313,7 @@ func TestCloneOrPull_UnparseableURLNotEchoed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, in := range []string{
-		"https://u:pa/ss" + testSecret + "@github.com/o/r.git",
-		"https://u:pa ss" + testSecret + "@github.com/o/r.git",
-	} {
+	for _, in := range ambiguousCredentialURLs {
 		_, err := p.CloneOrPull(context.Background(), in, "main", filepath.Join(t.TempDir(), "dst"))
 		if !errors.Is(err, errUnparseableRepoURL) {
 			t.Errorf("CloneOrPull(%q) err = %v, want errUnparseableRepoURL", in, err)
@@ -324,16 +321,30 @@ func TestCloneOrPull_UnparseableURLNotEchoed(t *testing.T) {
 	}
 }
 
+// ambiguousCredentialURLs hold a credential with an unescaped delimiter.
+// Some fail to parse; others parse with the secret in the path, query or
+// fragment and no userinfo.
+var ambiguousCredentialURLs = []string{
+	"https://u:pa/ss" + testSecret + "@github.com/o/r.git",
+	"https://u:pa ss" + testSecret + "@github.com/o/r.git",
+	"https://u:/" + testSecret + "@github.com/o/r.git",
+	"https://u:1234/" + testSecret + "@github.com/o/r.git",
+	"https://ghp_ab/" + testSecret + "@github.com/o/r.git",
+	"https://u:12?" + testSecret + "@github.com/o/r.git",
+	"https://u:12#" + testSecret + "@github.com/o/r.git",
+}
+
 func TestSanitizeURL_UnparseableIsRedacted(t *testing.T) {
-	for _, in := range []string{
+	for _, in := range append([]string{
 		"https://u:bad%zz" + testSecret + "@github.com/o/r.git",
 		"https://u:p@ss%zz" + testSecret + "@github.com/o/r.git",
-		"https://u:pa/ss" + testSecret + "@github.com/o/r.git",
-		"https://u:pa ss" + testSecret + "@github.com/o/r.git",
-	} {
+	}, ambiguousCredentialURLs...) {
 		if got := SanitizeURL(in); strings.Contains(got, testSecret) {
 			t.Errorf("SanitizeURL(%q) leaked credential: %q", in, got)
 		}
+	}
+	if got, want := SanitizeURL("https://u:"+testSecret+"@github.com/o/r.git"), "https://github.com/o/r.git"; got != want {
+		t.Errorf("SanitizeURL(userinfo URL) = %q, want %q", got, want)
 	}
 	if got, want := SanitizeURL("git@github.com:o/r.git"), "git@github.com:o/r.git"; got != want {
 		t.Errorf("scp-style URL changed: got %q, want %q", got, want)

@@ -432,6 +432,10 @@ site:
 server:
   tls_terminated: true
   hsts_max_age: 63072000
+  # Your ingress controller's pod addresses, so allowed_ips and per-IP
+  # webhook budgets see the real client (see Client IP resolution).
+  # trusted_proxy_cidrs:
+  #   - 10.244.0.0/16
 
 sync:
   strategy: "webhook"
@@ -574,7 +578,9 @@ defaults to `AuthNone`.
   `failure_budget_exceeded`, `verified_budget_exceeded`, `event_rejected`,
   `invalid_payload`, `branch_skipped`, `reload_failed`).
   Alert on `failure_budget_exceeded` to see sustained forgery attempts that
-  are no longer logged.
+  are no longer logged. Once a source is over its budget, its rejections
+  (including `forbidden_ip`) are counted as `failure_budget_exceeded`
+  instead, so `forbidden_ip` stops rising while that source floods.
 - Request body size is capped at 1 MB by default.
 - Behind a reverse proxy, set `server.trusted_proxy_cidrs` so per-IP
   budgets and `allowed_ips` see the real client address (see
@@ -806,10 +812,11 @@ site:
 server:
   tls_terminated: true
   hsts_max_age: 63072000
-  # Your reverse proxy's network, so allowed_ips and per-IP webhook budgets
-  # see the real client (see Client IP resolution).
+  # Only the reverse proxy's own address (see Reverse proxy below), so
+  # allowed_ips and per-IP webhook budgets see the real client. Do not trust
+  # a whole Docker range: see Client IP resolution.
   trusted_proxy_cidrs:
-    - 172.16.0.0/12
+    - 172.30.0.10/32
 
 sync:
   strategy: "webhook"
@@ -837,10 +844,19 @@ BLOGFLOW_GIT_TOKEN=ghp_YourTokenHere
 ### Reverse proxy
 
 Place a reverse proxy (nginx, Caddy, Traefik) in front of BlogFlow for TLS
-termination. Example with Caddy added to the compose file:
+termination. Example with Caddy added to the compose file. Caddy gets a
+fixed address on a fixed-subnet network, and that one address is what
+`trusted_proxy_cidrs` trusts:
 
 ```yaml
 services:
+  blogflow:
+    # Remove the "8080:8080" ports entry once Caddy fronts BlogFlow. A
+    # published port is reached through Docker's gateway address, and
+    # anything that can reach it could send its own X-Forwarded-For.
+    networks:
+      - web
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -852,11 +868,24 @@ services:
       - caddy-config:/config
     depends_on:
       - blogflow
+    networks:
+      web:
+        ipv4_address: 172.30.0.10   # matches trusted_proxy_cidrs
+
+networks:
+  web:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   caddy-data:
   caddy-config:
 ```
+
+Caddy's `reverse_proxy` replaces any client-supplied `X-Forwarded-For` with
+the real peer address unless you configure `trusted_proxies` in Caddy, so
+BlogFlow sees the true client.
 
 ```
 # Caddyfile
@@ -948,6 +977,19 @@ When the peer is trusted, the client IP is resolved like this:
 
 When the peer is not trusted, the connection's remote address is always
 used and forwarded headers are ignored.
+
+Every proxy you list in `trusted_proxy_cidrs` must append the address it
+received the connection from to `X-Forwarded-For` (or overwrite the header).
+Setting only `X-Real-IP` is not enough: BlogFlow prefers `X-Forwarded-For`,
+so a client-supplied one passed through unchanged would decide the client IP.
+With nginx, use:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Trust only the proxies' own addresses, not a whole network that other
+workloads or a published host port can reach.
 
 ---
 
@@ -1078,7 +1120,7 @@ Prometheus metrics are always available. No extra configuration is needed.
 | RED metrics | Request rate, error rate, and duration (p50/p95/p99) per path |
 | Content analytics | Views per content item: `blogflow_content_views_total{type, slug}` |
 | Overlay FS metrics | Layer hit rate, cache hit ratio, resolve duration, negative-cache size |
-| Webhook outcomes | `blogflow_webhook_requests_total{outcome}` — every webhook request by result (see [Pattern 3 security notes](#security-notes-2)) |
+| Webhook outcomes | `blogflow_webhook_requests_total{outcome}` — every webhook request by result (see [Pattern 3](#pattern-3-kubernetes--webhook--go-git-pull) security notes) |
 | Go runtime | Goroutines, memory, GC pause duration, open file descriptors |
 | Grafana dashboard | [Pre-built JSON](../examples/grafana/) — import and go |
 

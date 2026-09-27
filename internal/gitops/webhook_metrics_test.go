@@ -81,7 +81,10 @@ func TestWebhookRequestsTotal_CountsEveryExit(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			before := testutil.ToFloat64(webhookRequestsTotal.WithLabelValues(tc.outcome))
+			before := map[string]float64{}
+			for _, o := range webhookOutcomes {
+				before[o] = testutil.ToFloat64(webhookRequestsTotal.WithLabelValues(o))
+			}
 
 			method := tc.method
 			if method == "" {
@@ -100,8 +103,15 @@ func TestWebhookRequestsTotal_CountsEveryExit(t *testing.T) {
 			if rec.Code != tc.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.wantCode)
 			}
-			if d := testutil.ToFloat64(webhookRequestsTotal.WithLabelValues(tc.outcome)) - before; d != 1 {
-				t.Errorf("%s delta = %v, want 1", tc.outcome, d)
+			// Exactly one outcome moves, by exactly one.
+			for _, o := range webhookOutcomes {
+				want := 0.0
+				if o == tc.outcome {
+					want = 1
+				}
+				if d := testutil.ToFloat64(webhookRequestsTotal.WithLabelValues(o)) - before[o]; d != want {
+					t.Errorf("%s delta = %v, want %v", o, d, want)
+				}
 			}
 		})
 	}
