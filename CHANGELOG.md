@@ -2,6 +2,7 @@
 
 ## main / unreleased
 
+* [BUGFIX] deps: bump `google.golang.org/grpc` to v1.84.0 to fix CVE-2026-84445 (HIGH, gRPC-Go DoS via malformed RPC requests), which failed the Publish workflow's Trivy image scan. #332
 * [CHANGE] Go: move to Go 1.27 (`go 1.27.1` in go.mod, Go 1.27 in CI and the `golang:1.27-bookworm` build image). #297
 
 ## 0.5.0 / 2026-07-30
