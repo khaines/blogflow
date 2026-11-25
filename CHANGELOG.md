@@ -2,8 +2,30 @@
 
 ## main / unreleased
 
-* [BUGFIX] deps: bump `google.golang.org/grpc` to v1.84.0 to fix CVE-2026-84445 (HIGH, gRPC-Go DoS via malformed RPC requests), which failed the Publish workflow's Trivy image scan. #332
-* [CHANGE] Go: move to Go 1.27 (`go 1.27.1` in go.mod, Go 1.27 in CI and the `golang:1.27-bookworm` build image). #297
+## 0.5.1 / 2026-10-31
+
+Security and maintenance release. Everyone running v0.5.0 should upgrade: it was built before the fixes below, including 13 reachable Go standard-library vulnerabilities and gRPC CVE-2026-84445.
+
+### Security
+
+* [BUGFIX] Go: require Go 1.27.3 (`go 1.27.3` in go.mod). Go 1.27.1 left 13 reachable standard-library vulnerabilities flagged by `govulncheck`, including HTTP/2 and HTTP/1 server crash, desync and memory/CPU exhaustion bugs in `net/http` (GO-2026-6603, -6605, -6609 to -6613, -6617), two `html/template` escaping bugs (GO-2026-6599, -6600), a `net/textproto` memory-limit bypass (GO-2026-6608), `crypto/tls` ECH validation (GO-2026-6607) and `crypto/x509` distrust of compromised intermediates (GO-2026-6809). CI, Publish and Release now read the Go version from go.mod, and the builder image is pinned to `golang:1.27.3-bookworm` by digest. #341
+* [BUGFIX] Server: map the HTTP method metric label to a fixed set (non-standard methods become `OTHER`) and truncate methods in logs, so arbitrary request methods can no longer create unbounded Prometheus series. #309
+* [BUGFIX] gitops: credentials embedded in the repo URL are passed to go-git as auth instead of in the URL, scrubbed from existing `.git/config` remotes, and redacted from errors, logs and trace spans (unparseable URLs are redacted entirely). #309
+* [BUGFIX] overlayfs: never serve paths containing a `.git` component, so a content-repo symlink cannot publish `.git/config`. #309
+* [BUGFIX] Server: client-IP resolution joins every `X-Forwarded-For` header line before walking right to left and only accepts values that parse as IP addresses, closing allowlist and rate-limit bypasses behind trusted proxies. #309
+* [ENHANCEMENT] Webhook: separate per-client-IP budgets for failed (unauthenticated) and signature-verified deliveries, so junk requests behind a shared proxy can no longer rate-limit real deliveries; adds the `blogflow_webhook_requests_total{outcome}` metric. #309
+
+### Changes
+
+* [CHANGE] Metrics: `blogflow_http_requests_total` and the request-duration histogram now report non-standard HTTP methods as `method="OTHER"`. #309
+* [CHANGE] Go: move to Go 1.27 (Go 1.27 in CI and the `golang:1.27-bookworm` build image), since raised to Go 1.27.3 by #341. #297 #308
+* [ENHANCEMENT] CI: add a `govulncheck` job to pull-request CI, required before the Docker build. #341
+
+### Dependencies
+
+* [BUGFIX] Deps: bump `google.golang.org/grpc` to v1.84.0 to fix CVE-2026-84445 (HIGH, gRPC-Go DoS via malformed RPC requests), which failed the Publish workflow's Trivy image scan. #332
+* [CHANGE] Deps: bump `github.com/go-git/go-git/v5` to 5.19.3, the OpenTelemetry group, the golang-x group, `prometheus/client_golang`, `prometheus/client_model`, `yuin/goldmark` to 1.8.6, and the distroless runtime image digest. #289 #290 #292 #293 #294 #296 #299 #302 #303 #304 #333 #334 #335 #336 #337
+* [CHANGE] CI: bump `github/codeql-action` to 4.39.1 and pin `golangci-lint` to v2.14.0. #291 #295 #306 #307 #331 #340
 
 ## 0.5.0 / 2026-07-30
 
